@@ -19,23 +19,23 @@ kubectl apply -k k8s/overlays/dev
 Install Harbor for local image hosting (see `k8s/harbor/README.md`), then build and push images:
 
 ```sh
-docker build -f docker/Dockerfile --build-arg BIN=c2-operator -t harbor.c2.local:32080/c2/c2-operator:dev .
-docker build -f docker/Dockerfile --build-arg BIN=c2-api -t harbor.c2.local:32080/c2/c2-api:dev .
-docker build -f docker/Dockerfile --build-arg BIN=c2-gateway -t harbor.c2.local:32080/c2/c2-gateway:dev .
-docker build -f docker/Dockerfile --build-arg BIN=c2-web -t harbor.c2.local:32080/c2/c2-web:dev .
-docker build -f docker/Dockerfile --build-arg BIN=c2-mcp -t harbor.c2.local:32080/c2/c2-mcp:dev .
-docker build -f docker/Dockerfile --build-arg BIN=c2-worker -t harbor.c2.local:32080/c2/c2-worker:dev .
+docker build -f docker/Dockerfile --build-arg BIN=c2-operator -t harbor.c2.local/c2/c2-operator:dev .
+docker build -f docker/Dockerfile --build-arg BIN=c2-api -t harbor.c2.local/c2/c2-api:dev .
+docker build -f docker/Dockerfile --build-arg BIN=c2-gateway -t harbor.c2.local/c2/c2-gateway:dev .
+docker build -f docker/Dockerfile --build-arg BIN=c2-web -t harbor.c2.local/c2/c2-web:dev .
+docker build -f docker/Dockerfile --build-arg BIN=c2-mcp -t harbor.c2.local/c2/c2-mcp:dev .
+docker build -f docker/Dockerfile --build-arg BIN=c2-worker -t harbor.c2.local/c2/c2-worker:dev .
 
-docker push harbor.c2.local:32080/c2/c2-operator:dev
-docker push harbor.c2.local:32080/c2/c2-api:dev
-docker push harbor.c2.local:32080/c2/c2-gateway:dev
-docker push harbor.c2.local:32080/c2/c2-web:dev
-docker push harbor.c2.local:32080/c2/c2-mcp:dev
-docker push harbor.c2.local:32080/c2/c2-worker:dev
+docker push harbor.c2.local/c2/c2-operator:dev
+docker push harbor.c2.local/c2/c2-api:dev
+docker push harbor.c2.local/c2/c2-gateway:dev
+docker push harbor.c2.local/c2/c2-web:dev
+docker push harbor.c2.local/c2/c2-mcp:dev
+docker push harbor.c2.local/c2/c2-worker:dev
 ```
 
 The dev overlay expects a Harbor project named `c2` and uses
-`harbor.c2.local:32080/c2` as the image registry prefix.
+`harbor.c2.local/c2` as the image registry prefix.
 
 Ingress hosts for dev overlay:
 
@@ -62,11 +62,14 @@ Create the Harbor registry pull secret and SurrealDB secret before applying over
 
 ```sh
 kubectl -n c2-system create secret docker-registry harbor-registry \
-  --docker-server=harbor.c2.local:32080 \
+  --docker-server=harbor.c2.local \
   --docker-username=admin \
   --docker-password=CHANGE_ME \
   --docker-email=admin@c2.local
 ```
+
+If you use the self-signed Harbor TLS cert, make sure Docker trusts it or mark
+`harbor.c2.local` as an insecure registry before pushing/pulling images.
 
 Create the SurrealDB secret:
 

@@ -8,7 +8,7 @@ spec:
   image:
     tag: "dev"
     pullPolicy: Always
-    registry: "harbor.c2.local:32080/c2"
+    registry: "harbor.c2.local/c2"
   runtime:
     environment: "dev"
   services:

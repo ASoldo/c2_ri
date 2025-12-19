@@ -1,17 +1,19 @@
 expose:
-  type: nodePort
+  type: ingress
   tls:
-    enabled: false
-  nodePort:
-    ports:
-      http:
-        port: 80
-        nodePort: 32080
-      https:
-        port: 443
-        nodePort: 32443
+    enabled: true
+    certSource: secret
+    secret:
+      secretName: harbor-tls
+  ingress:
+    className: nginx
+    hosts:
+      core: harbor.c2.local
+    annotations:
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      nginx.ingress.kubernetes.io/proxy-body-size: "0"
 
-externalURL: http://harbor.c2.local:32080
+externalURL: https://harbor.c2.local
 harborAdminPassword: change-me
 
 persistence:
