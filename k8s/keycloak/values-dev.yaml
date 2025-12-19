@@ -1,0 +1,37 @@
+image:
+  repository: keycloak/keycloak
+  tag: latest
+  pullPolicy: IfNotPresent
+
+admin:
+  user: admin
+  password: change-me
+
+args:
+  - start-dev
+
+ingress:
+  enabled: true
+  className: nginx
+  hostname: keycloak.c2.local
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/app-root: /realms/c2/account
+
+env:
+  proxyHeaders: xforwarded
+  hostnameStrict: "false"
+  httpEnabled: "true"
+  healthEnabled: "true"
+  metricsEnabled: "false"
+
+postgresql:
+  enabled: true
+  image:
+    repository: bitnami/postgresql
+    tag: latest
+    pullPolicy: IfNotPresent
+  auth:
+    username: keycloak
+    password: change-me
+    database: keycloak
