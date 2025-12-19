@@ -16,7 +16,18 @@ kubectl apply -k k8s/overlays/dev
 
 ## Minikube Notes
 
-Install Harbor for local image hosting (see `k8s/harbor/README.md`), then build and push images:
+Install Harbor for local image hosting (see `k8s/harbor/README.md`), then authenticate and push images.
+
+Authenticate to Harbor:
+
+```sh
+docker login harbor.c2.local
+```
+
+If Docker reports a TLS error, trust the Harbor cert or mark the registry as
+insecure (see `k8s/harbor/README.md`).
+
+Build and push images:
 
 ```sh
 docker build -f docker/Dockerfile --build-arg BIN=c2-operator -t harbor.c2.local/c2/c2-operator:dev .
