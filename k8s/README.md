@@ -55,13 +55,14 @@ Ingress hosts for dev overlay:
 - `prometheus.c2.local`
 - `harbor.c2.local`
 - `keycloak.c2.local`
+- `argocd.c2.local`
 
 Map these to the minikube IP in `/etc/hosts`.
 
 Example:
 
 ```text
-192.168.49.2 c2.local grafana.c2.local prometheus.c2.local harbor.c2.local keycloak.c2.local
+192.168.49.2 c2.local grafana.c2.local prometheus.c2.local harbor.c2.local keycloak.c2.local argocd.c2.local
 ```
 
 Keycloak runs in a dedicated `keycloak` namespace. Install it using
@@ -69,7 +70,9 @@ Keycloak runs in a dedicated `keycloak` namespace. Install it using
 
 ## Secrets
 
-Create the Harbor registry pull secret and SurrealDB secret before applying overlays:
+Create the Harbor registry pull secret and SurrealDB secret before applying overlays.
+All C2 workloads should pull images via the service account imagePullSecrets, not
+per-pod credentials:
 
 ```sh
 kubectl -n c2-system create secret docker-registry harbor-registry \

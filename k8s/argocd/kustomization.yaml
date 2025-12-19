@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: argocd
+
+resources:
+  - namespace.yaml
+  - https://raw.githubusercontent.com/argoproj/argo-cd/v2.12.6/manifests/install.yaml
+  - argocd-ingress.yaml
+
+patchesStrategicMerge:
+  - argocd-cm.yaml
+  - argocd-rbac-cm.yaml
+  - argocd-cmd-params-cm.yaml
+
+secretGenerator:
+  - name: argocd-secret
+    behavior: merge
+    envs:
+      - secret.env
+
+generatorOptions:
+  disableNameSuffixHash: true

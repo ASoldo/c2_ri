@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-rbac-cm
+data:
+  policy.default: role:readonly
+  scopes: '[groups]'
+  policy.csv: |
+    g, /c2-super-admins, role:admin
+    g, /c2-devsecops, role:admin
+    g, /c2-developers, role:c2-developer
+    g, /c2-clients-readonly, role:readonly
+    g, /c2-field-operators, role:readonly
+    p, role:c2-developer, applications, get, */*, allow
+    p, role:c2-developer, applications, sync, c2/*, allow
+    p, role:c2-developer, applications, update, c2/*, allow
+    p, role:c2-developer, repositories, get, *, allow
+    p, role:c2-developer, clusters, get, *, allow

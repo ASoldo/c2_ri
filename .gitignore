@@ -17,3 +17,6 @@ ai_notes/
 
 # Helm dependencies
 k8s/charts/**/charts/
+
+# Argo CD local secrets
+k8s/argocd/secret.env
