@@ -59,6 +59,9 @@ kubectl apply -k k8s/overlays/dev
 ```
 
 See `k8s/README.md` for minikube and image loading steps.
+For minikube Harbor registry setup, see `k8s/harbor/README.md`.
+
+Keycloak for LDAP-backed auth can be installed with Helm; see `k8s/keycloak/README.md`.
 
 ## ArgoCD
 

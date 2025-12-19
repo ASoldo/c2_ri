@@ -25,6 +25,7 @@ IDs are stable and used to track design, implementation, and changelog entries.
 | SEC-003 | Token claims, session controls, expiry enforcement | Ops | P0 | c2-api, c2-gateway | c2-identity | Planned |
 | SEC-004 | Data classification enforcement for records | Command, Ops | P0 | c2-api, c2-worker | c2-core | Planned |
 | SEC-005 | Immutable audit log pipeline | Compliance | P1 | c2-worker | c2-storage, c2-messaging | Planned |
+| SEC-006 | SSO and LDAP federation (Keycloak) | Ops | P0 | c2-api, c2-gateway | c2-identity | In progress |
 
 ## Command and Mission Management
 
@@ -90,6 +91,7 @@ IDs are stable and used to track design, implementation, and changelog entries.
 | OPS-005 | API smoke and regression test harness | Ops | P1 | c2-api | c2-config | In progress |
 | OPS-007 | Prometheus and Grafana observability stack | Ops | P0 | All | c2-observability | In progress |
 | OPS-008 | GitOps deployment overlays with ArgoCD and Kustomize | Ops | P0 | All | k8s | In progress |
+| OPS-009 | Harbor registry integration for on-prem image distribution | Ops | P0 | All | k8s | In progress |
 | OPS-006 | Kubernetes operator and CRD deployment controller | Ops | P0 | c2-operator | c2-operator | In progress |
 
 ## Interoperability and Integration

@@ -4,6 +4,7 @@ kind: Kustomization
 resources:
   - ../../base
   - ingress.yaml
+  - surrealdb.yaml
 
 patchesStrategicMerge:
   - c2cluster-patch.yaml

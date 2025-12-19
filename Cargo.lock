@@ -1054,6 +1054,7 @@ version = "0.1.0"
 dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
+ "rustls",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1124,6 +1125,8 @@ dependencies = [
  "c2-storage",
  "serde",
  "surrealdb",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -1155,6 +1158,8 @@ version = "0.1.0"
 dependencies = [
  "c2-config",
  "c2-observability",
+ "c2-storage-surreal",
+ "tokio",
 ]
 
 [[package]]

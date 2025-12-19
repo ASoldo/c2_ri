@@ -3,6 +3,8 @@ kind: ServiceAccount
 metadata:
   name: c2-operator
   namespace: c2-system
+imagePullSecrets:
+  - name: harbor-registry
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

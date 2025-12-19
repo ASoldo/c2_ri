@@ -13,6 +13,8 @@ use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
 use surrealdb::sql::{Id, Thing};
 use surrealdb::Surreal;
+use tokio::time::{sleep, Duration};
+use tracing::warn;
 use uuid::Uuid;
 
 const TABLE_MISSION: &str = "mission";
@@ -28,6 +30,9 @@ pub struct SurrealConfig {
     pub database: String,
     pub username: String,
     pub password: String,
+    pub connect_retry_initial_ms: u64,
+    pub connect_retry_max_ms: u64,
+    pub connect_retry_max_attempts: u32,
 }
 
 impl SurrealConfig {
@@ -38,6 +43,9 @@ impl SurrealConfig {
             database: env_var("C2_SURREAL_DATABASE", "operations".to_string()),
             username: env_var("C2_SURREAL_USERNAME", "root".to_string()),
             password: env_var("C2_SURREAL_PASSWORD", "root".to_string()),
+            connect_retry_initial_ms: env_var_u64("C2_SURREAL_CONNECT_RETRY_INITIAL_MS", 500),
+            connect_retry_max_ms: env_var_u64("C2_SURREAL_CONNECT_RETRY_MAX_MS", 5000),
+            connect_retry_max_attempts: env_var_u32("C2_SURREAL_CONNECT_RETRY_MAX_ATTEMPTS", 0),
         }
     }
 }
@@ -159,6 +167,34 @@ impl SurrealStore {
             .map_err(map_err)?;
         apply_schema(&db).await?;
         Ok(Self { db })
+    }
+
+    pub async fn connect_with_retry(config: &SurrealConfig) -> Result<Self, StorageError> {
+        let mut attempt: u32 = 0;
+        let mut delay_ms = config.connect_retry_initial_ms.max(1);
+        let max_delay = config.connect_retry_max_ms.max(delay_ms);
+
+        loop {
+            match Self::connect(config).await {
+                Ok(store) => return Ok(store),
+                Err(err) => {
+                    attempt = attempt.saturating_add(1);
+                    if config.connect_retry_max_attempts > 0
+                        && attempt >= config.connect_retry_max_attempts
+                    {
+                        return Err(err);
+                    }
+                    warn!(
+                        attempt,
+                        delay_ms,
+                        error = %err,
+                        "SurrealDB connection failed, retrying"
+                    );
+                    sleep(Duration::from_millis(delay_ms)).await;
+                    delay_ms = delay_ms.saturating_mul(2).min(max_delay);
+                }
+            }
+        }
     }
 }
 
@@ -435,6 +471,20 @@ impl TaskRepository for SurrealStore {
 
 fn env_var(key: &str, default: String) -> String {
     env::var(key).unwrap_or(default)
+}
+
+fn env_var_u64(key: &str, default: u64) -> u64 {
+    env::var(key)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_var_u32(key: &str, default: u32) -> u32 {
+    env::var(key)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
 }
 
 fn map_err(err: impl std::fmt::Display) -> StorageError {

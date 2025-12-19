@@ -6,6 +6,8 @@ ARG BIN
 
 WORKDIR /app
 
+RUN mkdir -p /app/bin
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
@@ -20,9 +22,10 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY services ./services
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
-    cargo build --release -p ${BIN}
+RUN --mount=type=cache,id=c2-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=c2-cargo-target-bookworm,target=/app/target \
+    cargo build --release -p ${BIN} \
+    && cp /app/target/release/${BIN} /app/bin/${BIN}
 
 FROM debian:bookworm-slim AS runtime
 ARG BIN
@@ -40,7 +43,7 @@ RUN useradd -r -u 10001 -g root -s /sbin/nologin c2 \
 
 WORKDIR /app
 
-COPY --from=builder /app/target/release/${BIN} /app/bin/app
+COPY --from=builder /app/bin/${BIN} /app/bin/app
 COPY --from=builder /app/services/c2-web/templates /app/templates
 
 ENV C2_DATA_DIR=/var/lib/c2

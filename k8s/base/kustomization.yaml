@@ -6,6 +6,7 @@ namespace: c2-system
 resources:
   - namespace.yaml
   - crd/c2clusters.yaml
+  - default-serviceaccount.yaml
   - operator.yaml
   - c2cluster.yaml
   - observability/prometheus.yaml

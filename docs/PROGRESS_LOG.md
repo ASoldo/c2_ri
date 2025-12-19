@@ -53,12 +53,17 @@ Highlights
 - Wired Prometheus exporter and Grafana/Prometheus deployment manifests
 - Added Kustomize overlays and ArgoCD application templates for GitOps deployment
 - Aligned ArgoCD repo URL and consolidated observability manifests under k8s/
+- Added dev overlay SurrealDB manifest for minikube testing
+- Added Harbor registry setup and dev overlay registry wiring
+- Added Keycloak helm values and LDAP setup guidance
 
 Feature IDs Touched
 - FND-008
 - OPS-006
 - OPS-007
 - OPS-008
+- OPS-009
+- SEC-006
 
 Risks and Blockers
 - Operator defaults still need probe wiring and TLS secret management

@@ -1,0 +1,27 @@
+expose:
+  type: nodePort
+  tls:
+    enabled: false
+  nodePort:
+    ports:
+      http:
+        port: 80
+        nodePort: 32080
+      https:
+        port: 443
+        nodePort: 32443
+
+externalURL: http://harbor.c2.local:32080
+harborAdminPassword: change-me
+
+persistence:
+  enabled: true
+  persistentVolumeClaim:
+    registry:
+      size: 20Gi
+    jobservice:
+      size: 5Gi
+    database:
+      size: 5Gi
+    redis:
+      size: 5Gi

@@ -1,0 +1,12 @@
+apiVersion: v2
+name: keycloak
+description: Keycloak (upstream) deployment for C2
+version: 0.1.0
+appVersion: "latest"
+type: application
+
+dependencies:
+  - name: postgresql
+    version: 18.1.15
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled

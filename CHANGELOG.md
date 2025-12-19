@@ -33,9 +33,12 @@ Added
 - OPS-006 Kubernetes operator with CRD, controller, and deployment manifests
 - OPS-007 Prometheus metrics exporter and Grafana/Prometheus manifests
 - OPS-008 Kustomize overlays and ArgoCD application templates
+- OPS-009 Harbor registry setup and dev overlay registry wiring
+- SEC-006 Keycloak deployment values for LDAP-backed auth
 
 Changed
 - Moved observability manifests to k8s/ overlays and updated ArgoCD repo refs
+- Added dev overlay SurrealDB manifest for minikube testing
 
 Fixed
 - Disambiguated storage adapter trait calls across API and Timescale wrappers

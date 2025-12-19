@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 c2-config = { version = "0.1.0", path = "../../crates/c2-config" }
 c2-observability = { version = "0.1.0", path = "../../crates/c2-observability" }
+c2-storage-surreal = { version = "0.1.0", path = "../../crates/c2-storage-surreal" }
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "signal"] }

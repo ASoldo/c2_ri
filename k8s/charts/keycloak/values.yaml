@@ -1,0 +1,65 @@
+replicaCount: 1
+
+image:
+  repository: keycloak/keycloak
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+admin:
+  user: admin
+  password: change-me
+
+command: []
+args:
+  - start-dev
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  runAsUser: 1000
+  runAsNonRoot: true
+
+resources: {}
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  hostname: ""
+  annotations: {}
+  tls: []
+
+env:
+  proxyHeaders: xforwarded
+  hostnameStrict: "false"
+  httpEnabled: "true"
+  healthEnabled: "true"
+  metricsEnabled: "false"
+
+extraEnv: []
+extraEnvFrom: []
+
+postgresql:
+  enabled: true
+  image:
+    repository: bitnami/postgresql
+    tag: latest
+    pullPolicy: IfNotPresent
+  auth:
+    username: keycloak
+    password: change-me
+    database: keycloak
+  primary:
+    persistence:
+      enabled: true

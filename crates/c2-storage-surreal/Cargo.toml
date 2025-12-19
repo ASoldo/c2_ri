@@ -10,4 +10,6 @@ c2-core = { version = "0.1.0", path = "../c2-core" }
 c2-storage = { version = "0.1.0", path = "../c2-storage" }
 serde = { version = "1.0.228", features = ["derive"] }
 surrealdb = { version = "2.4.0", features = ["protocol-ws", "protocol-http", "rustls", "kv-mem"] }
+tokio = { version = "1.48.0", features = ["time"] }
+tracing = "0.1.44"
 uuid = "1.19.0"

@@ -17,6 +17,8 @@ pub struct ObservabilityHandle {
 }
 
 pub fn init(config: &ObservabilityConfig) -> ObservabilityHandle {
+    init_tls_provider();
+
     let filter = EnvFilter::try_new(&config.log_level).unwrap_or_else(|_| EnvFilter::new("info"));
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -40,6 +42,10 @@ pub fn log_startup(handle: &ObservabilityHandle, environment: &str) {
         metrics_enabled = handle.metrics_enabled,
         "C2 service starting"
     );
+}
+
+fn init_tls_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 }
 
 fn init_metrics(config: &ObservabilityConfig) -> bool {

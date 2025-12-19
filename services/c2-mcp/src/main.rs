@@ -1262,7 +1262,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log_startup(&handle, &obs_config.environment);
 
     let surreal_config = SurrealConfig::from_env();
-    let store = SurrealStore::connect(&surreal_config).await?;
+    let store = SurrealStore::connect_with_retry(&surreal_config).await?;
     let policy = BasicPolicyEngine::with_default_rules();
     let service = C2McpService::new(store, policy);
 

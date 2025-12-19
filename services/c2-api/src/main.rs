@@ -23,7 +23,7 @@ async fn main() -> io::Result<()> {
     log_startup(&handle, &obs_config.environment);
 
     let bind_addr = config.bind_addr.clone();
-    let store = SurrealStore::connect(&SurrealConfig::from_env())
+    let store = SurrealStore::connect_with_retry(&SurrealConfig::from_env())
         .await
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err.message))?;
     let policy = BasicPolicyEngine::with_default_rules();
