@@ -1,0 +1,9 @@
+[package]
+name = "c2-policy"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+c2-core = { version = "0.1.0", path = "../c2-core" }
+c2-identity = { version = "0.1.0", path = "../c2-identity" }
+serde = { version = "1.0.228", features = ["derive"] }

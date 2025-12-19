@@ -1,0 +1,36 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+  <div class="brand">
+    <span>Operational Console</span>
+    <h1>C2 Walaris</h1>
+  </div>
+  <div class="status-pill">
+    <span class="status-dot"></span>
+    {{ service_name }} · {{ environment | upper }}
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Live Mission Feed</h2>
+    <p>Streaming mission state changes, asset health, and command approvals.</p>
+    <div class="highlight">Awaiting telemetry link</div>
+  </section>
+  <section class="card">
+    <h2>Priority Incidents</h2>
+    <p>First responder incidents and defense escalations are routed here.</p>
+    <div class="highlight">0 active escalations</div>
+  </section>
+  <section class="card">
+    <h2>Asset Readiness</h2>
+    <p>Quick view of active units and their readiness posture.</p>
+    <div class="highlight">24 ready · 3 degraded</div>
+  </section>
+</main>
+
+<footer>
+  Template shell for the operator console. Connect to live services to populate panels.
+</footer>
+{% endblock content %}

@@ -1,0 +1,8 @@
+[package]
+name = "c2-worker"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+c2-config = { version = "0.1.0", path = "../../crates/c2-config" }
+c2-observability = { version = "0.1.0", path = "../../crates/c2-observability" }

@@ -1,0 +1,10 @@
+[package]
+name = "c2-storage-postgres"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+async-trait = "0.1.89"
+c2-core = { version = "0.1.0", path = "../c2-core" }
+c2-storage = { version = "0.1.0", path = "../c2-storage" }

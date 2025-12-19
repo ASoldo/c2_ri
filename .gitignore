@@ -1,0 +1,13 @@
+AGENTS.md
+
+# Rust
+/target/
+**/*.rs.bk
+
+# AI planning artifacts
+.ai/
+ai/
+ai_notes/
+**/ai_plans/
+**/*.ai.md
+**/*.llm.md

@@ -1,0 +1,10 @@
+[package]
+name = "c2-web"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+actix-web = { version = "4.12.1", features = ["macros"] }
+c2-config = { version = "0.1.0", path = "../../crates/c2-config" }
+c2-observability = { version = "0.1.0", path = "../../crates/c2-observability" }
+tera = { version = "1.20.1", features = ["builtins"] }
