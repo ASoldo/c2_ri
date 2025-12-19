@@ -16,7 +16,7 @@ SUPERADMIN_TEMP_PASSWORD=true \
 ## Defaults
 
 - Realm: `c2`
-- Super-admin user: `soldo.andrej@gmail.com` (Andrej Soldo)
+- Super-admin user: `andrej.soldo` (Andrej Soldo)
 - Roles:
   - `c2_super_admin`
   - `c2_devsecops`

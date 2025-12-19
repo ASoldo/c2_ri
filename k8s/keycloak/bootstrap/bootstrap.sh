@@ -10,10 +10,11 @@ ADMIN_SECRET="${KEYCLOAK_ADMIN_SECRET:-${KEYCLOAK_RELEASE}-admin}"
 ADMIN_USER="${KEYCLOAK_ADMIN_USER:-$(kubectl -n "${KEYCLOAK_NAMESPACE}" get secret "${ADMIN_SECRET}" -o jsonpath='{.data.admin-user}' | base64 -d)}"
 ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-$(kubectl -n "${KEYCLOAK_NAMESPACE}" get secret "${ADMIN_SECRET}" -o jsonpath='{.data.admin-password}' | base64 -d)}"
 
-SUPERADMIN_USERNAME="${SUPERADMIN_USERNAME:-soldo.andrej@gmail.com}"
-SUPERADMIN_EMAIL="${SUPERADMIN_EMAIL:-soldo.andrej@gmail.com}"
 SUPERADMIN_FIRSTNAME="${SUPERADMIN_FIRSTNAME:-Andrej}"
 SUPERADMIN_LASTNAME="${SUPERADMIN_LASTNAME:-Soldo}"
+default_username="$(printf '%s.%s' "${SUPERADMIN_FIRSTNAME}" "${SUPERADMIN_LASTNAME}" | tr '[:upper:]' '[:lower:]' | tr ' ' '.' | tr -s '.')"
+SUPERADMIN_USERNAME="${SUPERADMIN_USERNAME:-${default_username}}"
+SUPERADMIN_EMAIL="${SUPERADMIN_EMAIL:-soldo.andrej@gmail.com}"
 SUPERADMIN_PASSWORD="${SUPERADMIN_PASSWORD:-change-me}"
 SUPERADMIN_TEMP_PASSWORD="${SUPERADMIN_TEMP_PASSWORD:-true}"
 
@@ -85,15 +86,39 @@ done
 "${KC_ADMIN[@]}" add-roles -r "${KEYCLOAK_REALM}" --gname c2-devsecops --cclientid realm-management --rolename view-users >/dev/null || true
 "${KC_ADMIN[@]}" add-roles -r "${KEYCLOAK_REALM}" --gname c2-devsecops --cclientid realm-management --rolename manage-users >/dev/null || true
 
-user_lookup=$("${KC_ADMIN[@]}" get users -r "${KEYCLOAK_REALM}" -q username="${SUPERADMIN_USERNAME}")
-if ! echo "${user_lookup}" | grep -q "\"username\" : \"${SUPERADMIN_USERNAME}\""; then
-  "${KC_ADMIN[@]}" create users -r "${KEYCLOAK_REALM}" \
-    -s username="${SUPERADMIN_USERNAME}" \
-    -s email="${SUPERADMIN_EMAIL}" \
-    -s firstName="${SUPERADMIN_FIRSTNAME}" \
-    -s lastName="${SUPERADMIN_LASTNAME}" \
-    -s enabled=true \
-    -s emailVerified=true
+user_id=$("${KC_ADMIN[@]}" get users -r "${KEYCLOAK_REALM}" -q username="${SUPERADMIN_USERNAME}" | sed -n 's/.*\"id\" : \"\\([^\"]*\\)\".*/\\1/p' | head -n1)
+if [[ -z "${user_id}" ]]; then
+  email_id=$("${KC_ADMIN[@]}" get users -r "${KEYCLOAK_REALM}" -q email="${SUPERADMIN_EMAIL}" | sed -n 's/.*\"id\" : \"\\([^\"]*\\)\".*/\\1/p' | head -n1)
+  if [[ -n "${email_id}" ]]; then
+    edit_username_allowed=$("${KC_ADMIN[@]}" get realms/"${KEYCLOAK_REALM}" | sed -n 's/.*\"editUsernameAllowed\" : \\([a-z]*\\).*/\\1/p' | head -n1)
+    restore_edit_username=false
+    if [[ "${edit_username_allowed}" != "true" ]]; then
+      "${KC_ADMIN[@]}" update realms/"${KEYCLOAK_REALM}" -s editUsernameAllowed=true
+      restore_edit_username=true
+    fi
+
+    "${KC_ADMIN[@]}" update users/"${email_id}" -r "${KEYCLOAK_REALM}" \
+      -s username="${SUPERADMIN_USERNAME}" \
+      -s email="${SUPERADMIN_EMAIL}" \
+      -s firstName="${SUPERADMIN_FIRSTNAME}" \
+      -s lastName="${SUPERADMIN_LASTNAME}" \
+      -s enabled=true \
+      -s emailVerified=true
+
+    if [[ "${restore_edit_username}" == "true" ]]; then
+      "${KC_ADMIN[@]}" update realms/"${KEYCLOAK_REALM}" -s editUsernameAllowed=false
+    fi
+    user_id="${email_id}"
+  else
+    "${KC_ADMIN[@]}" create users -r "${KEYCLOAK_REALM}" \
+      -s username="${SUPERADMIN_USERNAME}" \
+      -s email="${SUPERADMIN_EMAIL}" \
+      -s firstName="${SUPERADMIN_FIRSTNAME}" \
+      -s lastName="${SUPERADMIN_LASTNAME}" \
+      -s enabled=true \
+      -s emailVerified=true
+    user_id=$("${KC_ADMIN[@]}" get users -r "${KEYCLOAK_REALM}" -q username="${SUPERADMIN_USERNAME}" | sed -n 's/.*\"id\" : \"\\([^\"]*\\)\".*/\\1/p' | head -n1)
+  fi
 fi
 
 temp_flag=()
@@ -105,8 +130,6 @@ fi
   --username "${SUPERADMIN_USERNAME}" \
   "${temp_flag[@]}" \
   --new-password "${SUPERADMIN_PASSWORD}"
-
-user_id=$("${KC_ADMIN[@]}" get users -r "${KEYCLOAK_REALM}" -q username="${SUPERADMIN_USERNAME}" | sed -n 's/.*\"id\" : \"\\([^\"]*\\)\".*/\\1/p' | head -n1)
 
 for group in c2-super-admins c2-devsecops c2-developers; do
   group_id=$("${KC_ADMIN[@]}" get groups -r "${KEYCLOAK_REALM}" -q search="${group}" | sed -n 's/.*\"id\" : \"\\([^\"]*\\)\".*/\\1/p' | head -n1)

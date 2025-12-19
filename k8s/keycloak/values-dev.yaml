@@ -17,6 +17,10 @@ ingress:
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
     nginx.ingress.kubernetes.io/app-root: /realms/c2/account
+  tls:
+    - hosts:
+        - keycloak.c2.local
+      secretName: keycloak-tls
 
 env:
   proxyHeaders: xforwarded
