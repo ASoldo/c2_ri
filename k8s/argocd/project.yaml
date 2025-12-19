@@ -1,0 +1,15 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: c2
+  namespace: argocd
+spec:
+  description: C2 GitOps project
+  sourceRepos:
+    - https://github.com/ASoldo/c2_ri
+  destinations:
+    - namespace: c2-system
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"

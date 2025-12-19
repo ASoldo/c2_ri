@@ -103,9 +103,67 @@ impl GatewayUpstream {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayTlsConfig {
+    pub bind_addr: String,
+    pub cert_path: String,
+    pub key_path: String,
+}
+
+impl GatewayTlsConfig {
+    pub fn from_env() -> Option<Self> {
+        let bind_addr = env::var("C2_GATEWAY_TLS_ADDR").ok();
+        let cert_path = env::var("C2_GATEWAY_TLS_CERT").ok();
+        let key_path = env::var("C2_GATEWAY_TLS_KEY").ok();
+
+        match (bind_addr, cert_path, key_path) {
+            (Some(bind_addr), Some(cert_path), Some(key_path)) => Some(Self {
+                bind_addr,
+                cert_path,
+                key_path,
+            }),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayAuthConfig {
+    pub api_token: Option<String>,
+    pub header_name: String,
+    pub bypass_paths: Vec<String>,
+}
+
+impl GatewayAuthConfig {
+    pub fn from_env() -> Self {
+        let api_token = env::var("C2_GATEWAY_API_TOKEN").ok();
+        let header_name = env_var("C2_GATEWAY_AUTH_HEADER", "authorization".to_string());
+        let bypass_paths = env::var("C2_GATEWAY_AUTH_BYPASS_PATHS")
+            .unwrap_or_else(|_| "/health".to_string())
+            .split(',')
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+
+        Self {
+            api_token,
+            header_name,
+            bypass_paths,
+        }
+    }
+
+    pub fn is_bypassed(&self, path: &str) -> bool {
+        self.bypass_paths
+            .iter()
+            .any(|prefix| !prefix.is_empty() && path.starts_with(prefix))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayConfig {
     pub api: GatewayUpstream,
     pub web: GatewayUpstream,
+    pub tls: Option<GatewayTlsConfig>,
+    pub auth: GatewayAuthConfig,
 }
 
 impl GatewayConfig {
@@ -113,6 +171,8 @@ impl GatewayConfig {
         Self {
             api: GatewayUpstream::from_env("C2_GATEWAY_API", "c2-api", 8080),
             web: GatewayUpstream::from_env("C2_GATEWAY_WEB", "c2-web", 8080),
+            tls: GatewayTlsConfig::from_env(),
+            auth: GatewayAuthConfig::from_env(),
         }
     }
 }

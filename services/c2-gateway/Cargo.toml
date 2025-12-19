@@ -7,4 +7,5 @@ edition = "2024"
 async-trait = "0.1.89"
 c2-config = { version = "0.1.0", path = "../../crates/c2-config" }
 c2-observability = { version = "0.1.0", path = "../../crates/c2-observability" }
+http = "1.4.0"
 pingora = { version = "0.6.0", features = ["proxy", "lb"] }

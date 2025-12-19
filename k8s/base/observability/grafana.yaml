@@ -1,0 +1,102 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: c2-grafana-admin
+  namespace: c2-system
+stringData:
+  admin-user: admin
+  admin-password: change-me
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: c2-grafana-datasources
+  namespace: c2-system
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://c2-prometheus.c2-system.svc.cluster.local:9090
+        isDefault: true
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: c2-grafana-data
+  namespace: c2-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: c2-grafana
+  namespace: c2-system
+  labels:
+    app.kubernetes.io/name: c2-grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: c2-grafana
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: c2-grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.1.0
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: c2-grafana-admin
+                  key: admin-user
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: c2-grafana-admin
+                  key: admin-password
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: data
+              mountPath: /var/lib/grafana
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+      volumes:
+        - name: datasources
+          configMap:
+            name: c2-grafana-datasources
+        - name: data
+          persistentVolumeClaim:
+            claimName: c2-grafana-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: c2-grafana
+  namespace: c2-system
+spec:
+  selector:
+    app.kubernetes.io/name: c2-grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000

@@ -1,5 +1,6 @@
 use c2_core::{SecurityClassification, TenantId, UserId};
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,6 +27,43 @@ pub enum Permission {
     IngestData,
     ExportData,
     Admin,
+}
+
+impl FromStr for Role {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "system_admin" | "systemadmin" => Ok(Self::SystemAdmin),
+            "mission_commander" | "missioncommander" => Ok(Self::MissionCommander),
+            "operations" | "ops" => Ok(Self::Operations),
+            "analyst" => Ok(Self::Analyst),
+            "field_responder" | "fieldresponder" => Ok(Self::FieldResponder),
+            "integrator" => Ok(Self::Integrator),
+            "observer" => Ok(Self::Observer),
+            _ => Err(()),
+        }
+    }
+}
+
+impl FromStr for Permission {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "view_missions" | "viewmissions" => Ok(Self::ViewMissions),
+            "edit_missions" | "editmissions" => Ok(Self::EditMissions),
+            "dispatch_assets" | "dispatchassets" => Ok(Self::DispatchAssets),
+            "view_incidents" | "viewincidents" => Ok(Self::ViewIncidents),
+            "manage_users" | "manageusers" => Ok(Self::ManageUsers),
+            "manage_policies" | "managepolicies" => Ok(Self::ManagePolicies),
+            "access_classified" | "accessclassified" => Ok(Self::AccessClassified),
+            "ingest_data" | "ingestdata" => Ok(Self::IngestData),
+            "export_data" | "exportdata" => Ok(Self::ExportData),
+            "admin" => Ok(Self::Admin),
+            _ => Err(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

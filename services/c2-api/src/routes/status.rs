@@ -1,7 +1,8 @@
 use actix_web::{get, web, HttpResponse};
-use c2_config::ServiceConfig;
 use c2_core::now_epoch_millis;
 use serde::Serialize;
+
+use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
 struct StatusResponse {
@@ -12,11 +13,11 @@ struct StatusResponse {
 }
 
 #[get("/v1/status")]
-pub async fn status(config: web::Data<ServiceConfig>) -> HttpResponse {
+pub async fn status(state: web::Data<AppState>) -> HttpResponse {
     let response = StatusResponse {
-        service: config.service_name.clone(),
-        environment: config.environment.to_string(),
-        region: config.region.clone(),
+        service: state.config.service_name.clone(),
+        environment: state.config.environment.to_string(),
+        region: state.config.region.clone(),
         timestamp_ms: now_epoch_millis(),
     };
 

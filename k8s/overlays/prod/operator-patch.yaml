@@ -1,0 +1,15 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: c2-operator
+  namespace: c2-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: c2-operator
+          image: ghcr.io/walaris/c2-operator:0.1.0
+          imagePullPolicy: Always
+          env:
+            - name: C2_ENV
+              value: prod

@@ -11,3 +11,6 @@ ai_notes/
 **/ai_plans/
 **/*.ai.md
 **/*.llm.md
+
+# Local workspace tooling
+.obsidian/

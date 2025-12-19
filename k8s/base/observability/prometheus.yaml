@@ -1,0 +1,140 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: c2-prometheus
+  namespace: c2-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: c2-prometheus
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "services", "endpoints", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["extensions"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: c2-prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: c2-prometheus
+subjects:
+  - kind: ServiceAccount
+    name: c2-prometheus
+    namespace: c2-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: c2-prometheus-config
+  namespace: c2-system
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    scrape_configs:
+      - job_name: "c2-services"
+        kubernetes_sd_configs:
+          - role: service
+            namespaces:
+              names:
+                - c2-system
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port, __meta_kubernetes_service_cluster_ip]
+            action: replace
+            regex: (.+);(.+)
+            replacement: $2:$1
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_instance]
+            action: replace
+            target_label: c2_cluster
+          - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_component]
+            action: replace
+            target_label: c2_component
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: c2-prometheus-data
+  namespace: c2-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: c2-prometheus
+  namespace: c2-system
+  labels:
+    app.kubernetes.io/name: c2-prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: c2-prometheus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: c2-prometheus
+    spec:
+      serviceAccountName: c2-prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.55.0
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+          ports:
+            - name: http
+              containerPort: 9090
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: data
+              mountPath: /prometheus
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+      volumes:
+        - name: config
+          configMap:
+            name: c2-prometheus-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: c2-prometheus-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: c2-prometheus
+  namespace: c2-system
+spec:
+  selector:
+    app.kubernetes.io/name: c2-prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090

@@ -7,6 +7,7 @@ fn main() {
         service_name: config.service_name.clone(),
         environment: config.environment.to_string(),
         log_level: config.log_level.clone(),
+        metrics_addr: config.metrics_addr.clone(),
     };
     let handle = init(&obs_config);
     log_startup(&handle, &obs_config.environment);

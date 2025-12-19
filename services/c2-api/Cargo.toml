@@ -4,8 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+actix = "0.13.5"
 actix-web = { version = "4.12.1", features = ["macros"] }
+actix-web-actors = "4.3.1"
 c2-config = { version = "0.1.0", path = "../../crates/c2-config" }
 c2-core = { version = "0.1.0", path = "../../crates/c2-core" }
+c2-identity = { version = "0.1.0", path = "../../crates/c2-identity" }
 c2-observability = { version = "0.1.0", path = "../../crates/c2-observability" }
+c2-policy = { version = "0.1.0", path = "../../crates/c2-policy" }
+c2-proto = { version = "0.1.0", path = "../../crates/c2-proto" }
+c2-storage = { version = "0.1.0", path = "../../crates/c2-storage" }
+c2-storage-surreal = { version = "0.1.0", path = "../../crates/c2-storage-surreal" }
+futures-util = "0.3.31"
+prost = "0.14.1"
 serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+uuid = "1.19.0"

@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 c2-core = { version = "0.1.0", path = "../c2-core" }
 serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.145", features = ["preserve_order"] }
+zmq = { version = "0.10.0", features = ["zmq_has"] }

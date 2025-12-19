@@ -1,0 +1,14 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: c2-prod
+  namespace: argocd
+spec:
+  project: c2
+  source:
+    repoURL: https://github.com/ASoldo/c2_ri
+    targetRevision: HEAD
+    path: k8s/overlays/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: c2-system

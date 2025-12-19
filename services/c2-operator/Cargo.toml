@@ -1,0 +1,19 @@
+[package]
+name = "c2-operator"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+c2-config = { version = "0.1.0", path = "../../crates/c2-config" }
+c2-observability = { version = "0.1.0", path = "../../crates/c2-observability" }
+futures-util = "0.3.31"
+k8s-openapi = { version = "0.26.1", features = ["v1_30"] }
+kube = { version = "2.0.1", features = ["runtime", "derive"] }
+schemars = { version = "1.1.0", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.145", features = ["preserve_order"] }
+serde_yaml = "0.9.34"
+thiserror = "2.0.17"
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "signal"] }
+tracing = { version = "0.1.44", features = ["log"] }

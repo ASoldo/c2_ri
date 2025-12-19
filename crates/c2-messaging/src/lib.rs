@@ -1,6 +1,11 @@
 use c2_core::{CorrelationId, EpochMillis, MessageId, SecurityClassification, TenantId};
 use serde::{Deserialize, Serialize};
 
+mod zmq_transport;
+pub use zmq_transport::{
+    MessagingError, ZmqPublisher, ZmqPublisherConfig, ZmqSubscriber, ZmqSubscriberConfig,
+};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageMetadata {
     pub message_id: MessageId,

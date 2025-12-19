@@ -1,0 +1,21 @@
+[package]
+name = "c2-mcp"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+c2-config = { version = "0.1.0", path = "../../crates/c2-config" }
+c2-core = { version = "0.1.0", path = "../../crates/c2-core" }
+c2-identity = { version = "0.1.0", path = "../../crates/c2-identity" }
+c2-observability = { version = "0.1.0", path = "../../crates/c2-observability" }
+c2-policy = { version = "0.1.0", path = "../../crates/c2-policy" }
+c2-storage = { version = "0.1.0", path = "../../crates/c2-storage" }
+c2-storage-surreal = { version = "0.1.0", path = "../../crates/c2-storage-surreal" }
+rmcp = { version = "0.12.0", features = ["macros", "schemars", "server"] }
+schemars = { version = "1.1.0", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.145", features = ["preserve_order"] }
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "signal"] }
+tracing = { version = "0.1.44", features = ["log"] }
+uuid = { version = "1.19.0", features = ["v4"] }

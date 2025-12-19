@@ -45,3 +45,131 @@ pub struct PolicyRule {
 pub trait PolicyEngine {
     fn evaluate(&self, request: &PolicyRequest) -> PolicyDecision;
 }
+
+#[derive(Debug, Clone)]
+pub struct BasicPolicyEngine {
+    rules: Vec<PolicyRule>,
+}
+
+impl BasicPolicyEngine {
+    pub fn new(rules: Vec<PolicyRule>) -> Self {
+        Self { rules }
+    }
+
+    pub fn with_default_rules() -> Self {
+        Self::new(default_rules())
+    }
+
+    fn matches_rule(&self, request: &PolicyRequest, rule: &PolicyRule) -> bool {
+        if request.subject.clearance < rule.minimum_clearance {
+            return false;
+        }
+        if request.subject.clearance < request.classification {
+            return false;
+        }
+        if !rule.required_permissions.is_empty()
+            && !rule.required_permissions.contains(&request.action)
+        {
+            return false;
+        }
+        if !rule.required_roles.is_empty()
+            && !rule
+                .required_roles
+                .iter()
+                .any(|role| request.subject.has_role(*role))
+        {
+            return false;
+        }
+        true
+    }
+}
+
+impl PolicyEngine for BasicPolicyEngine {
+    fn evaluate(&self, request: &PolicyRequest) -> PolicyDecision {
+        if self.rules.is_empty() {
+            return if request.subject.clearance >= request.classification
+            {
+                PolicyDecision::Permit
+            } else {
+                PolicyDecision::Deny
+            };
+        }
+
+        if self
+            .rules
+            .iter()
+            .any(|rule| self.matches_rule(request, rule))
+        {
+            PolicyDecision::Permit
+        } else {
+            PolicyDecision::Deny
+        }
+    }
+}
+
+fn default_rules() -> Vec<PolicyRule> {
+    vec![
+        PolicyRule {
+            id: "view_missions".to_string(),
+            description: "View mission data".to_string(),
+            required_roles: vec![
+                Role::SystemAdmin,
+                Role::MissionCommander,
+                Role::Operations,
+                Role::Analyst,
+                Role::FieldResponder,
+                Role::Observer,
+            ],
+            required_permissions: vec![Permission::ViewMissions],
+            minimum_clearance: SecurityClassification::Unclassified,
+        },
+        PolicyRule {
+            id: "edit_missions".to_string(),
+            description: "Create or update missions".to_string(),
+            required_roles: vec![Role::SystemAdmin, Role::MissionCommander, Role::Operations],
+            required_permissions: vec![Permission::EditMissions],
+            minimum_clearance: SecurityClassification::Restricted,
+        },
+        PolicyRule {
+            id: "dispatch_assets".to_string(),
+            description: "Dispatch and reassign assets".to_string(),
+            required_roles: vec![Role::SystemAdmin, Role::MissionCommander, Role::Operations],
+            required_permissions: vec![Permission::DispatchAssets],
+            minimum_clearance: SecurityClassification::Restricted,
+        },
+        PolicyRule {
+            id: "view_incidents".to_string(),
+            description: "View incident feeds".to_string(),
+            required_roles: vec![
+                Role::SystemAdmin,
+                Role::MissionCommander,
+                Role::Operations,
+                Role::FieldResponder,
+                Role::Analyst,
+            ],
+            required_permissions: vec![Permission::ViewIncidents],
+            minimum_clearance: SecurityClassification::Unclassified,
+        },
+        PolicyRule {
+            id: "ingest_data".to_string(),
+            description: "Ingest incident and sensor data".to_string(),
+            required_roles: vec![Role::SystemAdmin, Role::Operations, Role::Analyst],
+            required_permissions: vec![Permission::IngestData],
+            minimum_clearance: SecurityClassification::Restricted,
+        },
+        PolicyRule {
+            id: "access_classified".to_string(),
+            description: "Access classified data".to_string(),
+            required_roles: vec![Role::SystemAdmin, Role::MissionCommander, Role::Operations],
+            required_permissions: vec![Permission::AccessClassified],
+            minimum_clearance: SecurityClassification::Secret,
+        },
+        PolicyRule {
+            id: "admin".to_string(),
+            description: "Administrative actions".to_string(),
+            required_roles: vec![Role::SystemAdmin],
+            required_permissions: vec![Permission::Admin],
+            minimum_clearance: SecurityClassification::Restricted,
+        },
+    ]
+}

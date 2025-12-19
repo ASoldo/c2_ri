@@ -1,0 +1,25 @@
+apiVersion: c2.walaris.com/v1alpha1
+kind: C2Cluster
+metadata:
+  name: c2
+  namespace: c2-system
+spec:
+  version: "dev"
+  image:
+    tag: "dev"
+    pullPolicy: IfNotPresent
+  runtime:
+    environment: "dev"
+  services:
+    api:
+      replicas: 1
+    gateway:
+      replicas: 1
+      service:
+        serviceType: NodePort
+    web:
+      replicas: 1
+    mcp:
+      replicas: 1
+    worker:
+      replicas: 1

@@ -1,0 +1,49 @@
+apiVersion: c2.walaris.com/v1alpha1
+kind: C2Cluster
+metadata:
+  name: c2
+  namespace: c2-system
+spec:
+  version: "0.1.0"
+  image:
+    registry: "ghcr.io/walaris"
+    tag: "0.1.0"
+  runtime:
+    environment: "prod"
+    logLevel: "info"
+    metricsPort: 9090
+  database:
+    surreal:
+      endpoint: "ws://surrealdb.c2-system.svc.cluster.local:8000"
+      namespace: "c2"
+      database: "operations"
+      username: "root"
+  globalEnv:
+    - name: C2_SURREAL_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: c2-surreal-credentials
+          key: password
+  services:
+    api:
+      replicas: 2
+      service:
+        serviceType: ClusterIP
+        port: 8080
+    gateway:
+      replicas: 2
+      service:
+        serviceType: ClusterIP
+        port: 8080
+    web:
+      replicas: 1
+      service:
+        serviceType: ClusterIP
+        port: 8080
+    mcp:
+      replicas: 1
+      service:
+        serviceType: ClusterIP
+        port: 8080
+    worker:
+      replicas: 2

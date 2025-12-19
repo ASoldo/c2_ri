@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: c2-system
+
+resources:
+  - namespace.yaml
+  - crd/c2clusters.yaml
+  - operator.yaml
+  - c2cluster.yaml
+  - observability/prometheus.yaml
+  - observability/grafana.yaml

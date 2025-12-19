@@ -1,0 +1,11 @@
+.git
+.github
+target
+**/target
+docs
+tests
+deploy
+*.md
+*.log
+*.swp
+.env

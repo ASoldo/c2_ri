@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package c2;
+
+message Mission {
+  string id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  MissionStatus status = 4;
+  OperationalPriority priority = 5;
+  SecurityClassification classification = 6;
+  uint64 created_at_ms = 7;
+  uint64 updated_at_ms = 8;
+}
+
+enum MissionStatus {
+  MISSION_STATUS_UNSPECIFIED = 0;
+  MISSION_STATUS_PLANNED = 1;
+  MISSION_STATUS_ACTIVE = 2;
+  MISSION_STATUS_SUSPENDED = 3;
+  MISSION_STATUS_COMPLETED = 4;
+  MISSION_STATUS_ABORTED = 5;
+}
+
+enum OperationalPriority {
+  OPERATIONAL_PRIORITY_UNSPECIFIED = 0;
+  OPERATIONAL_PRIORITY_ROUTINE = 1;
+  OPERATIONAL_PRIORITY_ELEVATED = 2;
+  OPERATIONAL_PRIORITY_URGENT = 3;
+  OPERATIONAL_PRIORITY_CRITICAL = 4;
+}
+
+enum SecurityClassification {
+  SECURITY_CLASSIFICATION_UNSPECIFIED = 0;
+  SECURITY_CLASSIFICATION_UNCLASSIFIED = 1;
+  SECURITY_CLASSIFICATION_CONTROLLED = 2;
+  SECURITY_CLASSIFICATION_RESTRICTED = 3;
+  SECURITY_CLASSIFICATION_CONFIDENTIAL = 4;
+  SECURITY_CLASSIFICATION_SECRET = 5;
+  SECURITY_CLASSIFICATION_TOP_SECRET = 6;
+}

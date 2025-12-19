@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use c2_core::{Asset, AssetId, Incident, IncidentId, Mission, MissionId, TenantId};
+use c2_core::{
+    Asset, AssetId, Incident, IncidentId, Mission, MissionId, Task, TaskId, TenantId,
+};
 use std::fmt;
 
 #[derive(Debug, Clone)]
@@ -33,6 +35,7 @@ pub trait MissionRepository: Send + Sync {
         offset: usize,
     ) -> Result<Vec<Mission>, StorageError>;
     async fn upsert(&self, mission: Mission) -> Result<(), StorageError>;
+    async fn delete(&self, id: MissionId) -> Result<(), StorageError>;
 }
 
 #[async_trait]
@@ -45,6 +48,7 @@ pub trait AssetRepository: Send + Sync {
         offset: usize,
     ) -> Result<Vec<Asset>, StorageError>;
     async fn upsert(&self, asset: Asset) -> Result<(), StorageError>;
+    async fn delete(&self, id: AssetId) -> Result<(), StorageError>;
 }
 
 #[async_trait]
@@ -57,4 +61,18 @@ pub trait IncidentRepository: Send + Sync {
         offset: usize,
     ) -> Result<Vec<Incident>, StorageError>;
     async fn upsert(&self, incident: Incident) -> Result<(), StorageError>;
+    async fn delete(&self, id: IncidentId) -> Result<(), StorageError>;
+}
+
+#[async_trait]
+pub trait TaskRepository: Send + Sync {
+    async fn get(&self, id: TaskId) -> Result<Option<Task>, StorageError>;
+    async fn list_by_mission(
+        &self,
+        mission_id: MissionId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Task>, StorageError>;
+    async fn upsert(&self, task: Task) -> Result<(), StorageError>;
+    async fn delete(&self, id: TaskId) -> Result<(), StorageError>;
 }

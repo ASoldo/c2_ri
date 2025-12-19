@@ -13,6 +13,7 @@ fn main() {
         service_name: config.service_name.clone(),
         environment: config.environment.to_string(),
         log_level: config.log_level.clone(),
+        metrics_addr: config.metrics_addr.clone(),
     };
     let handle = init(&obs_config);
     log_startup(&handle, &obs_config.environment);
@@ -23,8 +24,13 @@ fn main() {
     let mut server = Server::new(None).expect("failed to create Pingora server");
     server.bootstrap();
 
-    let mut proxy = http_proxy_service(&server.configuration, GatewayProxy::new(gateway_config));
+    let mut proxy = http_proxy_service(&server.configuration, GatewayProxy::new(gateway_config.clone()));
     proxy.add_tcp(&bind_addr);
+    if let Some(tls) = gateway_config.tls.as_ref() {
+        proxy
+            .add_tls(&tls.bind_addr, &tls.cert_path, &tls.key_path)
+            .expect("failed to add TLS listener");
+    }
     server.add_service(proxy);
     server.run_forever();
 }

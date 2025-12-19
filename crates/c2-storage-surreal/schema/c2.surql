@@ -1,0 +1,41 @@
+DEFINE TABLE mission SCHEMAFULL;
+DEFINE FIELD tenant_id ON mission TYPE string;
+DEFINE FIELD name ON mission TYPE string;
+DEFINE FIELD status ON mission TYPE string;
+DEFINE FIELD priority ON mission TYPE string;
+DEFINE FIELD classification ON mission TYPE string;
+DEFINE FIELD created_at_ms ON mission TYPE int;
+DEFINE FIELD updated_at_ms ON mission TYPE int;
+DEFINE INDEX mission_tenant_created ON mission COLUMNS tenant_id, created_at_ms;
+
+DEFINE TABLE asset SCHEMAFULL;
+DEFINE FIELD tenant_id ON asset TYPE string;
+DEFINE FIELD name ON asset TYPE string;
+DEFINE FIELD kind ON asset TYPE string;
+DEFINE FIELD status ON asset TYPE string;
+DEFINE FIELD classification ON asset TYPE string;
+DEFINE FIELD created_at_ms ON asset TYPE int;
+DEFINE FIELD updated_at_ms ON asset TYPE int;
+DEFINE INDEX asset_tenant_created ON asset COLUMNS tenant_id, created_at_ms;
+
+DEFINE TABLE incident SCHEMAFULL;
+DEFINE FIELD tenant_id ON incident TYPE string;
+DEFINE FIELD incident_type ON incident TYPE string;
+DEFINE FIELD status ON incident TYPE string;
+DEFINE FIELD summary ON incident TYPE string;
+DEFINE FIELD classification ON incident TYPE string;
+DEFINE FIELD created_at_ms ON incident TYPE int;
+DEFINE FIELD updated_at_ms ON incident TYPE int;
+DEFINE INDEX incident_tenant_created ON incident COLUMNS tenant_id, created_at_ms;
+
+DEFINE TABLE task SCHEMAFULL;
+DEFINE FIELD tenant_id ON task TYPE string;
+DEFINE FIELD mission_id ON task TYPE string;
+DEFINE FIELD title ON task TYPE string;
+DEFINE FIELD status ON task TYPE string;
+DEFINE FIELD priority ON task TYPE string;
+DEFINE FIELD classification ON task TYPE string;
+DEFINE FIELD created_at_ms ON task TYPE int;
+DEFINE FIELD updated_at_ms ON task TYPE int;
+DEFINE INDEX task_mission_created ON task COLUMNS mission_id, created_at_ms;
+DEFINE INDEX task_tenant_created ON task COLUMNS tenant_id, created_at_ms;

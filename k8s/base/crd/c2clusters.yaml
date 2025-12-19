@@ -1,0 +1,693 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: c2clusters.c2.walaris.com
+spec:
+  group: c2.walaris.com
+  names:
+    categories: []
+    kind: C2Cluster
+    plural: c2clusters
+    shortNames:
+    - c2
+    singular: c2cluster
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns: []
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for C2ClusterSpec via `CustomResource`
+        properties:
+          spec:
+            properties:
+              database:
+                nullable: true
+                properties:
+                  postgres:
+                    nullable: true
+                    properties:
+                      maxConnections:
+                        format: uint32
+                        minimum: 0.0
+                        nullable: true
+                        type: integer
+                      url:
+                        nullable: true
+                        type: string
+                    type: object
+                  surreal:
+                    nullable: true
+                    properties:
+                      database:
+                        nullable: true
+                        type: string
+                      endpoint:
+                        nullable: true
+                        type: string
+                      namespace:
+                        nullable: true
+                        type: string
+                      password:
+                        nullable: true
+                        type: string
+                      username:
+                        nullable: true
+                        type: string
+                    type: object
+                  timescale:
+                    nullable: true
+                    properties:
+                      maxConnections:
+                        format: uint32
+                        minimum: 0.0
+                        nullable: true
+                        type: integer
+                      url:
+                        nullable: true
+                        type: string
+                    type: object
+                type: object
+              globalEnv:
+                default: []
+                items:
+                  properties:
+                    name:
+                      type: string
+                    value:
+                      nullable: true
+                      type: string
+                    valueFrom:
+                      nullable: true
+                      properties:
+                        configMapKeyRef:
+                          nullable: true
+                          properties:
+                            key:
+                              type: string
+                            name:
+                              type: string
+                            optional:
+                              nullable: true
+                              type: boolean
+                          required:
+                          - key
+                          - name
+                          type: object
+                        secretKeyRef:
+                          nullable: true
+                          properties:
+                            key:
+                              type: string
+                            name:
+                              type: string
+                            optional:
+                              nullable: true
+                              type: boolean
+                          required:
+                          - key
+                          - name
+                          type: object
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
+              image:
+                default:
+                  registry: null
+                  tag: null
+                  pullPolicy: null
+                  api: null
+                  gateway: null
+                  web: null
+                  mcp: null
+                  worker: null
+                properties:
+                  api:
+                    nullable: true
+                    type: string
+                  gateway:
+                    nullable: true
+                    type: string
+                  mcp:
+                    nullable: true
+                    type: string
+                  pullPolicy:
+                    nullable: true
+                    type: string
+                  registry:
+                    nullable: true
+                    type: string
+                  tag:
+                    nullable: true
+                    type: string
+                  web:
+                    nullable: true
+                    type: string
+                  worker:
+                    nullable: true
+                    type: string
+                type: object
+              runtime:
+                default:
+                  environment: null
+                  region: null
+                  logLevel: null
+                  dataDir: null
+                  trustedProxies: null
+                  metricsPort: null
+                properties:
+                  dataDir:
+                    nullable: true
+                    type: string
+                  environment:
+                    nullable: true
+                    type: string
+                  logLevel:
+                    nullable: true
+                    type: string
+                  metricsPort:
+                    format: uint16
+                    maximum: 65535.0
+                    minimum: 0.0
+                    nullable: true
+                    type: integer
+                  region:
+                    nullable: true
+                    type: string
+                  trustedProxies:
+                    items:
+                      type: string
+                    nullable: true
+                    type: array
+                type: object
+              services:
+                default:
+                  api: null
+                  gateway: null
+                  web: null
+                  mcp: null
+                  worker: null
+                properties:
+                  api:
+                    nullable: true
+                    properties:
+                      enabled:
+                        nullable: true
+                        type: boolean
+                      env:
+                        items:
+                          properties:
+                            name:
+                              type: string
+                            value:
+                              nullable: true
+                              type: string
+                            valueFrom:
+                              nullable: true
+                              properties:
+                                configMapKeyRef:
+                                  nullable: true
+                                  properties:
+                                    key:
+                                      type: string
+                                    name:
+                                      type: string
+                                    optional:
+                                      nullable: true
+                                      type: boolean
+                                  required:
+                                  - key
+                                  - name
+                                  type: object
+                                secretKeyRef:
+                                  nullable: true
+                                  properties:
+                                    key:
+                                      type: string
+                                    name:
+                                      type: string
+                                    optional:
+                                      nullable: true
+                                      type: boolean
+                                  required:
+                                  - key
+                                  - name
+                                  type: object
+                              type: object
+                          required:
+                          - name
+                          type: object
+                        nullable: true
+                        type: array
+                      image:
+                        nullable: true
+                        type: string
+                      nodeSelector:
+                        additionalProperties:
+                          type: string
+                        nullable: true
+                        type: object
+                      replicas:
+                        format: int32
+                        nullable: true
+                        type: integer
+                      resources:
+                        nullable: true
+                        properties:
+                          limits:
+                            additionalProperties:
+                              type: string
+                            nullable: true
+                            type: object
+                          requests:
+                            additionalProperties:
+                              type: string
+                            nullable: true
+                            type: object
+                        type: object
+                      service:
+                        nullable: true
+                        properties:
+                          port:
+                            format: uint16
+                            maximum: 65535.0
+                            minimum: 0.0
+                            nullable: true
+                            type: integer
+                          serviceType:
+                            nullable: true
+                            type: string
+                        type: object
+                    type: object
+                  gateway:
+                    nullable: true
+                    properties:
+                      enabled:
+                        nullable: true
+                        type: boolean
+                      env:
+                        items:
+                          properties:
+                            name:
+                              type: string
+                            value:
+                              nullable: true
+                              type: string
+                            valueFrom:
+                              nullable: true
+                              properties:
+                                configMapKeyRef:
+                                  nullable: true
+                                  properties:
+                                    key:
+                                      type: string
+                                    name:
+                                      type: string
+                                    optional:
+                                      nullable: true
+                                      type: boolean
+                                  required:
+                                  - key
+                                  - name
+                                  type: object
+                                secretKeyRef:
+                                  nullable: true
+                                  properties:
+                                    key:
+                                      type: string
+                                    name:
+                                      type: string
+                                    optional:
+                                      nullable: true
+                                      type: boolean
+                                  required:
+                                  - key
+                                  - name
+                                  type: object
+                              type: object
+                          required:
+                          - name
+                          type: object
+                        nullable: true
+                        type: array
+                      image:
+                        nullable: true
+                        type: string
+                      nodeSelector:
+                        additionalProperties:
+                          type: string
+                        nullable: true
+                        type: object
+                      replicas:
+                        format: int32
+                        nullable: true
+                        type: integer
+                      resources:
+                        nullable: true
+                        properties:
+                          limits:
+                            additionalProperties:
+                              type: string
+                            nullable: true
+                            type: object
+                          requests:
+                            additionalProperties:
+                              type: string
+                            nullable: true
+                            type: object
+                        type: object
+                      service:
+                        nullable: true
+                        properties:
+                          port:
+                            format: uint16
+                            maximum: 65535.0
+                            minimum: 0.0
+                            nullable: true
+                            type: integer
+                          serviceType:
+                            nullable: true
+                            type: string
+                        type: object
+                    type: object
+                  mcp:
+                    nullable: true
+                    properties:
+                      enabled:
+                        nullable: true
+                        type: boolean
+                      env:
+                        items:
+                          properties:
+                            name:
+                              type: string
+                            value:
+                              nullable: true
+                              type: string
+                            valueFrom:
+                              nullable: true
+                              properties:
+                                configMapKeyRef:
+                                  nullable: true
+                                  properties:
+                                    key:
+                                      type: string
+                                    name:
+                                      type: string
+                                    optional:
+                                      nullable: true
+                                      type: boolean
+                                  required:
+                                  - key
+                                  - name
+                                  type: object
+                                secretKeyRef:
+                                  nullable: true
+                                  properties:
+                                    key:
+                                      type: string
+                                    name:
+                                      type: string
+                                    optional:
+                                      nullable: true
+                                      type: boolean
+                                  required:
+                                  - key
+                                  - name
+                                  type: object
+                              type: object
+                          required:
+                          - name
+                          type: object
+                        nullable: true
+                        type: array
+                      image:
+                        nullable: true
+                        type: string
+                      nodeSelector:
+                        additionalProperties:
+                          type: string
+                        nullable: true
+                        type: object
+                      replicas:
+                        format: int32
+                        nullable: true
+                        type: integer
+                      resources:
+                        nullable: true
+                        properties:
+                          limits:
+                            additionalProperties:
+                              type: string
+                            nullable: true
+                            type: object
+                          requests:
+                            additionalProperties:
+                              type: string
+                            nullable: true
+                            type: object
+                        type: object
+                      service:
+                        nullable: true
+                        properties:
+                          port:
+                            format: uint16
+                            maximum: 65535.0
+                            minimum: 0.0
+                            nullable: true
+                            type: integer
+                          serviceType:
+                            nullable: true
+                            type: string
+                        type: object
+                    type: object
+                  web:
+                    nullable: true
+                    properties:
+                      enabled:
+                        nullable: true
+                        type: boolean
+                      env:
+                        items:
+                          properties:
+                            name:
+                              type: string
+                            value:
+                              nullable: true
+                              type: string
+                            valueFrom:
+                              nullable: true
+                              properties:
+                                configMapKeyRef:
+                                  nullable: true
+                                  properties:
+                                    key:
+                                      type: string
+                                    name:
+                                      type: string
+                                    optional:
+                                      nullable: true
+                                      type: boolean
+                                  required:
+                                  - key
+                                  - name
+                                  type: object
+                                secretKeyRef:
+                                  nullable: true
+                                  properties:
+                                    key:
+                                      type: string
+                                    name:
+                                      type: string
+                                    optional:
+                                      nullable: true
+                                      type: boolean
+                                  required:
+                                  - key
+                                  - name
+                                  type: object
+                              type: object
+                          required:
+                          - name
+                          type: object
+                        nullable: true
+                        type: array
+                      image:
+                        nullable: true
+                        type: string
+                      nodeSelector:
+                        additionalProperties:
+                          type: string
+                        nullable: true
+                        type: object
+                      replicas:
+                        format: int32
+                        nullable: true
+                        type: integer
+                      resources:
+                        nullable: true
+                        properties:
+                          limits:
+                            additionalProperties:
+                              type: string
+                            nullable: true
+                            type: object
+                          requests:
+                            additionalProperties:
+                              type: string
+                            nullable: true
+                            type: object
+                        type: object
+                      service:
+                        nullable: true
+                        properties:
+                          port:
+                            format: uint16
+                            maximum: 65535.0
+                            minimum: 0.0
+                            nullable: true
+                            type: integer
+                          serviceType:
+                            nullable: true
+                            type: string
+                        type: object
+                    type: object
+                  worker:
+                    nullable: true
+                    properties:
+                      enabled:
+                        nullable: true
+                        type: boolean
+                      env:
+                        items:
+                          properties:
+                            name:
+                              type: string
+                            value:
+                              nullable: true
+                              type: string
+                            valueFrom:
+                              nullable: true
+                              properties:
+                                configMapKeyRef:
+                                  nullable: true
+                                  properties:
+                                    key:
+                                      type: string
+                                    name:
+                                      type: string
+                                    optional:
+                                      nullable: true
+                                      type: boolean
+                                  required:
+                                  - key
+                                  - name
+                                  type: object
+                                secretKeyRef:
+                                  nullable: true
+                                  properties:
+                                    key:
+                                      type: string
+                                    name:
+                                      type: string
+                                    optional:
+                                      nullable: true
+                                      type: boolean
+                                  required:
+                                  - key
+                                  - name
+                                  type: object
+                              type: object
+                          required:
+                          - name
+                          type: object
+                        nullable: true
+                        type: array
+                      image:
+                        nullable: true
+                        type: string
+                      nodeSelector:
+                        additionalProperties:
+                          type: string
+                        nullable: true
+                        type: object
+                      replicas:
+                        format: int32
+                        nullable: true
+                        type: integer
+                      resources:
+                        nullable: true
+                        properties:
+                          limits:
+                            additionalProperties:
+                              type: string
+                            nullable: true
+                            type: object
+                          requests:
+                            additionalProperties:
+                              type: string
+                            nullable: true
+                            type: object
+                        type: object
+                      service:
+                        nullable: true
+                        properties:
+                          port:
+                            format: uint16
+                            maximum: 65535.0
+                            minimum: 0.0
+                            nullable: true
+                            type: integer
+                          serviceType:
+                            nullable: true
+                            type: string
+                        type: object
+                    type: object
+                type: object
+              version:
+                type: string
+            required:
+            - version
+            type: object
+          status:
+            nullable: true
+            properties:
+              lastReconcileTime:
+                nullable: true
+                type: string
+              observedGeneration:
+                format: int64
+                nullable: true
+                type: integer
+              phase:
+                nullable: true
+                type: string
+              ready:
+                nullable: true
+                type: boolean
+              services:
+                items:
+                  properties:
+                    name:
+                      type: string
+                    readyReplicas:
+                      format: int32
+                      nullable: true
+                      type: integer
+                  required:
+                  - name
+                  type: object
+                nullable: true
+                type: array
+            type: object
+        required:
+        - spec
+        title: C2Cluster
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+

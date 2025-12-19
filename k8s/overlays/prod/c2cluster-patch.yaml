@@ -1,0 +1,25 @@
+apiVersion: c2.walaris.com/v1alpha1
+kind: C2Cluster
+metadata:
+  name: c2
+  namespace: c2-system
+spec:
+  version: "0.1.0"
+  image:
+    tag: "0.1.0"
+    pullPolicy: Always
+  runtime:
+    environment: "prod"
+  services:
+    api:
+      replicas: 3
+    gateway:
+      replicas: 3
+      service:
+        serviceType: LoadBalancer
+    web:
+      replicas: 2
+    mcp:
+      replicas: 2
+    worker:
+      replicas: 3
