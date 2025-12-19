@@ -13,8 +13,7 @@ spec:
     singular: c2cluster
   scope: Namespaced
   versions:
-  - additionalPrinterColumns: []
-    name: v1alpha1
+  - name: v1alpha1
     schema:
       openAPIV3Schema:
         description: Auto-generated derived type for C2ClusterSpec via `CustomResource`
@@ -114,15 +113,7 @@ spec:
                   type: object
                 type: array
               image:
-                default:
-                  registry: null
-                  tag: null
-                  pullPolicy: null
-                  api: null
-                  gateway: null
-                  web: null
-                  mcp: null
-                  worker: null
+                default: {}
                 properties:
                   api:
                     nullable: true
@@ -150,13 +141,7 @@ spec:
                     type: string
                 type: object
               runtime:
-                default:
-                  environment: null
-                  region: null
-                  logLevel: null
-                  dataDir: null
-                  trustedProxies: null
-                  metricsPort: null
+                default: {}
                 properties:
                   dataDir:
                     nullable: true
@@ -183,12 +168,7 @@ spec:
                     type: array
                 type: object
               services:
-                default:
-                  api: null
-                  gateway: null
-                  web: null
-                  mcp: null
-                  worker: null
+                default: {}
                 properties:
                   api:
                     nullable: true
@@ -690,4 +670,3 @@ spec:
     storage: true
     subresources:
       status: {}
-
