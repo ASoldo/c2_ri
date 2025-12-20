@@ -6,6 +6,7 @@ x-c2-permissions: {{permissions}}
 x-c2-clearance: {{clearance}}
 HTTP 200
 Content-Type: application/json
+[Asserts]
 jsonpath "$.version" exists
 
 POST {{base_url}}/v1/mcp/handshake
@@ -21,6 +22,7 @@ Content-Type: application/json
 }
 HTTP 200
 Content-Type: application/json
+[Asserts]
 jsonpath "$.session_id" exists
 
 POST {{base_url}}/v1/mcp/sessions
@@ -36,6 +38,7 @@ Content-Type: application/json
 }
 HTTP 200
 Content-Type: application/json
+[Asserts]
 jsonpath "$.session_id" exists
 
 POST {{base_url}}/v1/mcp/heartbeat
@@ -46,6 +49,7 @@ x-c2-permissions: {{permissions}}
 x-c2-clearance: {{clearance}}
 HTTP 200
 Content-Type: application/json
+[Asserts]
 jsonpath "$.status" == "ok"
 
 POST {{base_url}}/v1/mcp/ingest
@@ -55,7 +59,8 @@ x-c2-roles: {{roles}}
 x-c2-permissions: {{permissions}}
 x-c2-clearance: {{clearance}}
 Content-Type: text/plain
-sensor=alpha;value=42
+`sensor=alpha;value=42`
 HTTP 202
 Content-Type: application/json
+[Asserts]
 jsonpath "$.status" == "accepted"

@@ -45,6 +45,7 @@ x-c2-permissions: {{permissions}}
 x-c2-clearance: {{clearance}}
 HTTP 200
 Content-Type: application/json
+[Asserts]
 jsonpath "$.id" == "{{task_id}}"
 
 GET {{base_url}}/v1/missions/{{task_mission_id}}/tasks?limit=10&offset=0
