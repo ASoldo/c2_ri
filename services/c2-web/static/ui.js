@@ -599,18 +599,18 @@ class TileManager {
         texture.colorSpace = THREE.SRGBColorSpace;
         texture.anisotropy = this.renderer?.capabilities?.getMaxAnisotropy?.() || 1;
         const geometry = this.buildTileGeometry(tile.bounds);
-        const material = new THREE.MeshStandardMaterial({
+        const material = new THREE.MeshBasicMaterial({
           map: texture,
           transparent: true,
-          opacity: 0.98,
-          roughness: 0.9,
-          metalness: 0,
+          opacity: 0.96,
+          color: new THREE.Color(0xffffff),
           side: THREE.DoubleSide,
         });
-        material.polygonOffset = true;
-        material.polygonOffsetFactor = -1;
-        material.polygonOffsetUnits = -1;
+        material.depthTest = true;
         material.depthWrite = false;
+        material.polygonOffset = true;
+        material.polygonOffsetFactor = -2;
+        material.polygonOffsetUnits = -2;
         const mesh = new THREE.Mesh(geometry, material);
         mesh.renderOrder = 2;
         mesh.frustumCulled = false;
@@ -822,7 +822,7 @@ class Renderer3D {
 
     this.tileManager = new TileManager(
       this.scene,
-      this.globeRadius + 0.6,
+      this.globeRadius + 1.2,
       this.renderer,
       this.globeRotation,
     );
