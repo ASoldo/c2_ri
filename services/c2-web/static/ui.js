@@ -388,10 +388,13 @@ class TileManager {
     this.rotationY = rotationY;
     this.group.rotation.y = rotationY;
     this.group.visible = false;
-    this.group.renderOrder = 2;
+    this.group.renderOrder = 10;
     this.scene.add(this.group);
     this.tiles = new Map();
     this.pending = new Set();
+    this.queue = [];
+    this.inFlight = 0;
+    this.maxInFlight = 8;
     this.provider = null;
     this.maxTiles = TILE_CONFIG.maxTiles;
     this.baseDistance = 1;
@@ -451,7 +454,7 @@ class TileManager {
     const dir = this.tmpVec.copy(camera.position).normalize();
     const distance = camera.position.length();
     if (
-      now - this.lastUpdate < 220 &&
+      now - this.lastUpdate < 320 &&
       dir.dot(this.lastDirection) > 0.999 &&
       Math.abs(distance - this.lastDistance) < 0.4
     ) {
@@ -470,13 +473,15 @@ class TileManager {
       this.zoom = zoom;
       this.clear();
     }
-    const desired = new Set(tileSet.keys);
-    for (const key of tileSet.keys) {
-      if (this.tiles.has(key) || this.pending.has(key)) continue;
-      const tile = tileSet.tiles.get(key);
-      if (!tile) continue;
-      this.loadTile(tile);
+    const limitedKeys = tileSet.keys.slice(0, this.maxTiles);
+    const desired = new Set(limitedKeys.map((entry) => entry.key));
+    const queue = [];
+    for (const entry of limitedKeys) {
+      if (this.tiles.has(entry.key) || this.pending.has(entry.key)) continue;
+      queue.push(entry.tile);
     }
+    this.queue = queue;
+    this.drainQueue();
     for (const [key, tile] of this.tiles.entries()) {
       if (!desired.has(key)) {
         tile.mesh?.removeFromParent();
@@ -508,6 +513,11 @@ class TileManager {
     }
     const latMin = Math.max(-85, Math.min(...geos.map((g) => g.lat)));
     const latMax = Math.min(85, Math.max(...geos.map((g) => g.lat)));
+    const centerGeo = this.sampleGeo(camera, 0, 0) || geos[0];
+    const center = {
+      x: tileXForLon(centerGeo.lon, zoom),
+      y: tileYForLat(centerGeo.lat, zoom),
+    };
     const lonStats = this.computeLonRange(geos.map((g) => g.lon));
     const yMin = Math.max(0, tileYForLat(latMax, zoom) - 1);
     const yMax = Math.min(2 ** zoom - 1, tileYForLat(latMin, zoom) + 1);
@@ -530,11 +540,14 @@ class TileManager {
           const key = `${zoom}/${x}/${y}`;
           if (tiles.has(key)) continue;
           const bounds = tileBounds(x, y, zoom);
-          tiles.set(key, { key, x, y, zoom, bounds });
-          keys.push(key);
+          const tile = { key, x, y, zoom, bounds };
+          tiles.set(key, tile);
+          const dist = (x - center.x) ** 2 + (y - center.y) ** 2;
+          keys.push({ key, dist, tile });
         }
       }
     });
+    keys.sort((a, b) => a.dist - b.dist);
     return { keys, tiles };
   }
 
@@ -586,6 +599,14 @@ class TileManager {
     return null;
   }
 
+  drainQueue() {
+    while (this.inFlight < this.maxInFlight && this.queue.length) {
+      const tile = this.queue.shift();
+      if (!tile) break;
+      this.loadTile(tile);
+    }
+  }
+
   loadTile(tile) {
     if (!this.provider) return;
     const url = this.provider.url
@@ -593,6 +614,7 @@ class TileManager {
       .replace("{x}", tile.x)
       .replace("{y}", tile.y);
     this.pending.add(tile.key);
+    this.inFlight += 1;
     this.loader.load(
       url,
       (texture) => {
@@ -602,17 +624,17 @@ class TileManager {
         const material = new THREE.MeshBasicMaterial({
           map: texture,
           transparent: true,
-          opacity: 0.96,
+          opacity: 1.0,
           color: new THREE.Color(0xffffff),
           side: THREE.DoubleSide,
         });
-        material.depthTest = true;
+        material.depthTest = false;
         material.depthWrite = false;
         material.polygonOffset = true;
-        material.polygonOffsetFactor = -2;
-        material.polygonOffsetUnits = -2;
+        material.polygonOffsetFactor = -3;
+        material.polygonOffsetUnits = -3;
         const mesh = new THREE.Mesh(geometry, material);
-        mesh.renderOrder = 2;
+        mesh.renderOrder = 10;
         mesh.frustumCulled = false;
         this.group.add(mesh);
         this.tiles.set(tile.key, {
@@ -622,10 +644,14 @@ class TileManager {
           material,
         });
         this.pending.delete(tile.key);
+        this.inFlight = Math.max(0, this.inFlight - 1);
+        this.drainQueue();
       },
       undefined,
       () => {
         this.pending.delete(tile.key);
+        this.inFlight = Math.max(0, this.inFlight - 1);
+        this.drainQueue();
       },
     );
   }
