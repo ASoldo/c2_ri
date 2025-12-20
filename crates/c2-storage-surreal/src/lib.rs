@@ -86,7 +86,7 @@ fn normalize_endpoint(raw: &str) -> Result<(SurrealScheme, String), StorageError
 #[derive(Debug, Deserialize)]
 struct SurrealMissionRecord {
     id: Thing,
-    tenant_id: TenantId,
+    tenant_id: String,
     name: String,
     status: MissionStatus,
     priority: OperationalPriority,
@@ -97,7 +97,7 @@ struct SurrealMissionRecord {
 
 #[derive(Debug, Serialize)]
 struct SurrealMissionWrite {
-    tenant_id: TenantId,
+    tenant_id: String,
     name: String,
     status: MissionStatus,
     priority: OperationalPriority,
@@ -109,7 +109,7 @@ struct SurrealMissionWrite {
 #[derive(Debug, Deserialize)]
 struct SurrealAssetRecord {
     id: Thing,
-    tenant_id: TenantId,
+    tenant_id: String,
     name: String,
     kind: AssetKind,
     status: AssetStatus,
@@ -120,7 +120,7 @@ struct SurrealAssetRecord {
 
 #[derive(Debug, Serialize)]
 struct SurrealAssetWrite {
-    tenant_id: TenantId,
+    tenant_id: String,
     name: String,
     kind: AssetKind,
     status: AssetStatus,
@@ -132,7 +132,7 @@ struct SurrealAssetWrite {
 #[derive(Debug, Deserialize)]
 struct SurrealIncidentRecord {
     id: Thing,
-    tenant_id: TenantId,
+    tenant_id: String,
     incident_type: IncidentType,
     status: IncidentStatus,
     summary: String,
@@ -143,7 +143,7 @@ struct SurrealIncidentRecord {
 
 #[derive(Debug, Serialize)]
 struct SurrealIncidentWrite {
-    tenant_id: TenantId,
+    tenant_id: String,
     incident_type: IncidentType,
     status: IncidentStatus,
     summary: String,
@@ -155,8 +155,8 @@ struct SurrealIncidentWrite {
 #[derive(Debug, Deserialize)]
 struct SurrealTaskRecord {
     id: Thing,
-    tenant_id: TenantId,
-    mission_id: MissionId,
+    tenant_id: String,
+    mission_id: String,
     title: String,
     status: TaskStatus,
     priority: OperationalPriority,
@@ -167,8 +167,8 @@ struct SurrealTaskRecord {
 
 #[derive(Debug, Serialize)]
 struct SurrealTaskWrite {
-    tenant_id: TenantId,
-    mission_id: MissionId,
+    tenant_id: String,
+    mission_id: String,
     title: String,
     status: TaskStatus,
     priority: OperationalPriority,
@@ -254,7 +254,7 @@ impl MissionRepository for SurrealStore {
     ) -> Result<Vec<Mission>, StorageError> {
         #[derive(Serialize)]
         struct Bindings {
-            tenant_id: TenantId,
+            tenant_id: String,
             limit: usize,
             offset: usize,
         }
@@ -265,7 +265,7 @@ impl MissionRepository for SurrealStore {
                 "SELECT * FROM mission WHERE tenant_id = $tenant_id ORDER BY created_at_ms DESC LIMIT $limit START $offset",
             )
             .bind(Bindings {
-                tenant_id,
+                tenant_id: tenant_id.to_string(),
                 limit,
                 offset,
             })
@@ -322,7 +322,7 @@ impl AssetRepository for SurrealStore {
     ) -> Result<Vec<Asset>, StorageError> {
         #[derive(Serialize)]
         struct Bindings {
-            tenant_id: TenantId,
+            tenant_id: String,
             limit: usize,
             offset: usize,
         }
@@ -333,7 +333,7 @@ impl AssetRepository for SurrealStore {
                 "SELECT * FROM asset WHERE tenant_id = $tenant_id ORDER BY created_at_ms DESC LIMIT $limit START $offset",
             )
             .bind(Bindings {
-                tenant_id,
+                tenant_id: tenant_id.to_string(),
                 limit,
                 offset,
             })
@@ -387,7 +387,7 @@ impl IncidentRepository for SurrealStore {
     ) -> Result<Vec<Incident>, StorageError> {
         #[derive(Serialize)]
         struct Bindings {
-            tenant_id: TenantId,
+            tenant_id: String,
             limit: usize,
             offset: usize,
         }
@@ -398,7 +398,7 @@ impl IncidentRepository for SurrealStore {
                 "SELECT * FROM incident WHERE tenant_id = $tenant_id ORDER BY created_at_ms DESC LIMIT $limit START $offset",
             )
             .bind(Bindings {
-                tenant_id,
+                tenant_id: tenant_id.to_string(),
                 limit,
                 offset,
             })
@@ -455,7 +455,7 @@ impl TaskRepository for SurrealStore {
     ) -> Result<Vec<Task>, StorageError> {
         #[derive(Serialize)]
         struct Bindings {
-            mission_id: MissionId,
+            mission_id: String,
             limit: usize,
             offset: usize,
         }
@@ -466,7 +466,7 @@ impl TaskRepository for SurrealStore {
                 "SELECT * FROM task WHERE mission_id = $mission_id ORDER BY created_at_ms DESC LIMIT $limit START $offset",
             )
             .bind(Bindings {
-                mission_id,
+                mission_id: mission_id.to_string(),
                 limit,
                 offset,
             })
@@ -528,13 +528,17 @@ fn thing_uuid(thing: &Thing) -> Result<Uuid, StorageError> {
     }
 }
 
+fn parse_uuid(value: &str, field: &str) -> Result<Uuid, StorageError> {
+    Uuid::parse_str(value).map_err(|_| StorageError::new(format!("invalid {field}")))
+}
+
 impl TryFrom<SurrealMissionRecord> for Mission {
     type Error = StorageError;
 
     fn try_from(value: SurrealMissionRecord) -> Result<Self, Self::Error> {
         Ok(Mission {
             id: MissionId::from_uuid(thing_uuid(&value.id)?),
-            tenant_id: value.tenant_id,
+            tenant_id: TenantId::from_uuid(parse_uuid(&value.tenant_id, "tenant_id")?),
             name: value.name,
             status: value.status,
             priority: value.priority,
@@ -548,7 +552,7 @@ impl TryFrom<SurrealMissionRecord> for Mission {
 impl From<&Mission> for SurrealMissionWrite {
     fn from(value: &Mission) -> Self {
         Self {
-            tenant_id: value.tenant_id,
+            tenant_id: value.tenant_id.to_string(),
             name: value.name.clone(),
             status: value.status,
             priority: value.priority,
@@ -565,7 +569,7 @@ impl TryFrom<SurrealAssetRecord> for Asset {
     fn try_from(value: SurrealAssetRecord) -> Result<Self, Self::Error> {
         Ok(Asset {
             id: AssetId::from_uuid(thing_uuid(&value.id)?),
-            tenant_id: value.tenant_id,
+            tenant_id: TenantId::from_uuid(parse_uuid(&value.tenant_id, "tenant_id")?),
             name: value.name,
             kind: value.kind,
             status: value.status,
@@ -579,7 +583,7 @@ impl TryFrom<SurrealAssetRecord> for Asset {
 impl From<&Asset> for SurrealAssetWrite {
     fn from(value: &Asset) -> Self {
         Self {
-            tenant_id: value.tenant_id,
+            tenant_id: value.tenant_id.to_string(),
             name: value.name.clone(),
             kind: value.kind,
             status: value.status,
@@ -596,7 +600,7 @@ impl TryFrom<SurrealIncidentRecord> for Incident {
     fn try_from(value: SurrealIncidentRecord) -> Result<Self, Self::Error> {
         Ok(Incident {
             id: IncidentId::from_uuid(thing_uuid(&value.id)?),
-            tenant_id: value.tenant_id,
+            tenant_id: TenantId::from_uuid(parse_uuid(&value.tenant_id, "tenant_id")?),
             incident_type: value.incident_type,
             status: value.status,
             summary: value.summary,
@@ -610,7 +614,7 @@ impl TryFrom<SurrealIncidentRecord> for Incident {
 impl From<&Incident> for SurrealIncidentWrite {
     fn from(value: &Incident) -> Self {
         Self {
-            tenant_id: value.tenant_id,
+            tenant_id: value.tenant_id.to_string(),
             incident_type: value.incident_type,
             status: value.status,
             summary: value.summary.clone(),
@@ -627,8 +631,8 @@ impl TryFrom<SurrealTaskRecord> for Task {
     fn try_from(value: SurrealTaskRecord) -> Result<Self, Self::Error> {
         Ok(Task {
             id: TaskId::from_uuid(thing_uuid(&value.id)?),
-            mission_id: value.mission_id,
-            tenant_id: value.tenant_id,
+            mission_id: MissionId::from_uuid(parse_uuid(&value.mission_id, "mission_id")?),
+            tenant_id: TenantId::from_uuid(parse_uuid(&value.tenant_id, "tenant_id")?),
             title: value.title,
             status: value.status,
             priority: value.priority,
@@ -642,8 +646,8 @@ impl TryFrom<SurrealTaskRecord> for Task {
 impl From<&Task> for SurrealTaskWrite {
     fn from(value: &Task) -> Self {
         Self {
-            tenant_id: value.tenant_id,
-            mission_id: value.mission_id,
+            tenant_id: value.tenant_id.to_string(),
+            mission_id: value.mission_id.to_string(),
             title: value.title.clone(),
             status: value.status,
             priority: value.priority,
