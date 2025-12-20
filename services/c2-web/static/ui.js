@@ -1179,13 +1179,21 @@ class EdgeLayer {
         this.layerEl.appendChild(node);
       }
 
-      let dx = screen.x - centerX;
-      let dy = screen.y - centerY;
-      const safeDx = Math.abs(dx) < 1 ? 1 : dx;
-      const safeDy = Math.abs(dy) < 1 ? 1 : dy;
-      const scale = Math.min(edgeX / Math.abs(safeDx), edgeY / Math.abs(safeDy));
-      const x = centerX + safeDx * scale;
-      const y = centerY + safeDy * scale;
+      const dx = screen.x - centerX;
+      const dy = screen.y - centerY;
+      const halfW = edgeX;
+      const halfH = edgeY;
+      const safeDx = Math.abs(dx) < 1 ? (dx >= 0 ? 1 : -1) : dx;
+      const safeDy = Math.abs(dy) < 1 ? (dy >= 0 ? 1 : -1) : dy;
+      const scale = Math.min(halfW / Math.abs(safeDx), halfH / Math.abs(safeDy));
+      let x = centerX + safeDx * scale;
+      let y = centerY + safeDy * scale;
+      const hitVertical = Math.abs(safeDx) * halfH >= Math.abs(safeDy) * halfW;
+      if (hitVertical) {
+        x = centerX + Math.sign(safeDx) * halfW;
+      } else {
+        y = centerY + Math.sign(safeDy) * halfH;
+      }
       node.style.opacity = "1";
       node.style.pointerEvents = "auto";
       node.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
