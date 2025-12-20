@@ -8,6 +8,7 @@ const els = {
   wsStatus: document.getElementById("ws-status"),
   runtimeStats: document.getElementById("runtime-stats"),
   cameraStats: document.getElementById("camera-stats"),
+  tileStatus: document.getElementById("tile-status"),
   board: document.getElementById("board"),
   layerStack: document.getElementById("layer-stack"),
   map2d: document.getElementById("map-2d"),
@@ -19,6 +20,62 @@ const els = {
 };
 
 const partialEls = Array.from(document.querySelectorAll("[data-partial]"));
+
+const DEFAULT_TILE_PROVIDERS = {
+  osm: {
+    name: "OSM Standard",
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    minZoom: 0,
+    maxZoom: 19,
+  },
+  hot: {
+    name: "OSM Humanitarian",
+    url: "https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+    minZoom: 0,
+    maxZoom: 19,
+  },
+  opentopo: {
+    name: "OpenTopoMap",
+    url: "https://tile.opentopomap.org/{z}/{x}/{y}.png",
+    minZoom: 0,
+    maxZoom: 17,
+  },
+  nasa: {
+    name: "NASA Blue Marble",
+    url: "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief/default/2013-12-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg",
+    minZoom: 0,
+    maxZoom: 8,
+  },
+};
+
+const buildTileConfig = () => {
+  const config = window.C2_TILE_CONFIG || {};
+  const providers = { ...DEFAULT_TILE_PROVIDERS, ...(config.providers || {}) };
+  const normalized = {};
+  Object.entries(providers).forEach(([id, provider]) => {
+    if (!provider || !provider.url) return;
+    normalized[id] = {
+      id,
+      name: provider.name || id,
+      url: provider.url,
+      minZoom: Number.isFinite(provider.minZoom) ? provider.minZoom : 0,
+      maxZoom: Number.isFinite(provider.maxZoom) ? provider.maxZoom : 19,
+    };
+  });
+  const order = Array.isArray(config.order)
+    ? config.order.filter((id) => normalized[id])
+    : Object.keys(normalized);
+  const saved = window.localStorage?.getItem?.("c2.tileProvider");
+  const activeProvider = config.activeProvider || saved || order[0] || null;
+  return {
+    providers: normalized,
+    order,
+    activeProvider,
+    maxTiles: Number.isFinite(config.maxTiles) ? config.maxTiles : 220,
+  };
+};
+
+const TILE_CONFIG = buildTileConfig();
 
 const setDot = (state) => {
   if (!els.apiDot) return;
@@ -273,6 +330,291 @@ class BoardView {
   }
 }
 
+const clampLat = (lat) => Math.max(-85.05112878, Math.min(85.05112878, lat));
+
+const tileXForLon = (lon, zoom) => {
+  const n = 2 ** zoom;
+  const x = Math.floor(((lon + 180) / 360) * n);
+  return Math.max(0, Math.min(n - 1, x));
+};
+
+const tileYForLat = (lat, zoom) => {
+  const n = 2 ** zoom;
+  const rad = (clampLat(lat) * Math.PI) / 180;
+  const value = (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2;
+  const y = Math.floor(value * n);
+  return Math.max(0, Math.min(n - 1, y));
+};
+
+const tileBounds = (x, y, zoom) => {
+  const n = 2 ** zoom;
+  const lonWest = (x / n) * 360 - 180;
+  const lonEast = ((x + 1) / n) * 360 - 180;
+  const latNorth = (180 / Math.PI) * Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n)));
+  const latSouth =
+    (180 / Math.PI) * Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 1)) / n)));
+  return { latNorth, latSouth, lonWest, lonEast };
+};
+
+const sphereToGeo = (point) => {
+  const radius = Math.max(point.length(), 1);
+  const phi = Math.acos(point.y / radius);
+  const theta = Math.atan2(point.z, point.x);
+  const lat = 90 - (phi * 180) / Math.PI;
+  const lon = (theta * 180) / Math.PI - 180;
+  return { lat, lon };
+};
+
+class TileManager {
+  constructor(scene, radius, renderer) {
+    this.scene = scene;
+    this.radius = radius;
+    this.renderer = renderer;
+    this.group = new THREE.Group();
+    this.group.rotation.y = Math.PI;
+    this.group.visible = false;
+    this.group.renderOrder = 2;
+    this.scene.add(this.group);
+    this.tiles = new Map();
+    this.pending = new Set();
+    this.provider = null;
+    this.maxTiles = TILE_CONFIG.maxTiles;
+    this.baseDistance = 1;
+    this.zoom = null;
+    this.lastUpdate = 0;
+    this.lastDirection = new THREE.Vector3();
+    this.lastDistance = 0;
+    this.ray = new THREE.Ray();
+    this.tmpVec = new THREE.Vector3();
+    this.loader = new THREE.TextureLoader();
+    this.loader.crossOrigin = "anonymous";
+  }
+
+  setBaseDistance(distance) {
+    if (Number.isFinite(distance) && distance > 0) {
+      this.baseDistance = distance;
+    }
+  }
+
+  setProvider(provider) {
+    this.provider = provider || null;
+    this.zoom = null;
+    this.group.visible = Boolean(this.provider);
+    this.clear();
+  }
+
+  clear() {
+    for (const tile of this.tiles.values()) {
+      tile.mesh?.removeFromParent();
+      tile.texture?.dispose();
+      tile.geometry?.dispose();
+      tile.material?.dispose();
+    }
+    this.tiles.clear();
+    this.pending.clear();
+  }
+
+  pickZoom(camera) {
+    if (!this.provider || !camera?.isPerspectiveCamera) return this.provider?.minZoom ?? 0;
+    const distance = camera.position.length();
+    const ratio = Math.max(
+      0,
+      Math.min(1, (this.baseDistance * 1.2 - distance) / (this.baseDistance * 0.9)),
+    );
+    const range = Math.max(0, this.provider.maxZoom - this.provider.minZoom);
+    const zoom = Math.round(this.provider.minZoom + range * ratio);
+    return Math.min(this.provider.maxZoom, Math.max(this.provider.minZoom, zoom));
+  }
+
+  update(camera, size) {
+    if (!this.provider || !camera || !size?.width || !size?.height) return;
+    const now = performance.now();
+    const dir = this.tmpVec.copy(camera.position).normalize();
+    const distance = camera.position.length();
+    if (
+      now - this.lastUpdate < 220 &&
+      dir.dot(this.lastDirection) > 0.999 &&
+      Math.abs(distance - this.lastDistance) < 0.4
+    ) {
+      return;
+    }
+    this.lastUpdate = now;
+    this.lastDirection.copy(dir);
+    this.lastDistance = distance;
+    let zoom = this.pickZoom(camera);
+    let tileSet = this.computeVisibleTiles(camera, size, zoom);
+    while (tileSet.keys.length > this.maxTiles && zoom > this.provider.minZoom) {
+      zoom -= 1;
+      tileSet = this.computeVisibleTiles(camera, size, zoom);
+    }
+    if (zoom !== this.zoom) {
+      this.zoom = zoom;
+      this.clear();
+    }
+    const desired = new Set(tileSet.keys);
+    for (const key of tileSet.keys) {
+      if (this.tiles.has(key) || this.pending.has(key)) continue;
+      const tile = tileSet.tiles.get(key);
+      if (!tile) continue;
+      this.loadTile(tile);
+    }
+    for (const [key, tile] of this.tiles.entries()) {
+      if (!desired.has(key)) {
+        tile.mesh?.removeFromParent();
+        tile.texture?.dispose();
+        tile.geometry?.dispose();
+        tile.material?.dispose();
+        this.tiles.delete(key);
+      }
+    }
+  }
+
+  computeVisibleTiles(camera, size, zoom) {
+    const samples = [
+      [-1, -1],
+      [1, -1],
+      [-1, 1],
+      [1, 1],
+      [0, 0],
+      [0, -0.5],
+      [0, 0.5],
+      [-0.5, 0],
+      [0.5, 0],
+    ];
+    const geos = samples
+      .map(([x, y]) => this.sampleGeo(camera, x, y))
+      .filter(Boolean);
+    if (!geos.length) {
+      return { keys: [], tiles: new Map() };
+    }
+    const latMin = Math.max(-85, Math.min(...geos.map((g) => g.lat)));
+    const latMax = Math.min(85, Math.max(...geos.map((g) => g.lat)));
+    const lonStats = this.computeLonRange(geos.map((g) => g.lon));
+    const yMin = Math.max(0, tileYForLat(latMax, zoom) - 1);
+    const yMax = Math.min(2 ** zoom - 1, tileYForLat(latMin, zoom) + 1);
+    const n = 2 ** zoom;
+    const xMin = tileXForLon(lonStats.min, zoom);
+    const xMax = tileXForLon(lonStats.max, zoom);
+    const ranges =
+      xMin <= xMax
+        ? [[xMin, xMax]]
+        : [
+            [0, xMax],
+            [xMin, n - 1],
+          ];
+    const tiles = new Map();
+    const keys = [];
+    ranges.forEach(([start, end]) => {
+      for (let x = start - 1; x <= end + 1; x += 1) {
+        if (x < 0 || x >= n) continue;
+        for (let y = yMin; y <= yMax; y += 1) {
+          const key = `${zoom}/${x}/${y}`;
+          if (tiles.has(key)) continue;
+          const bounds = tileBounds(x, y, zoom);
+          tiles.set(key, { key, x, y, zoom, bounds });
+          keys.push(key);
+        }
+      }
+    });
+    return { keys, tiles };
+  }
+
+  computeLonRange(lons) {
+    let sumSin = 0;
+    let sumCos = 0;
+    lons.forEach((lon) => {
+      const rad = (lon * Math.PI) / 180;
+      sumSin += Math.sin(rad);
+      sumCos += Math.cos(rad);
+    });
+    const mean = (Math.atan2(sumSin, sumCos) * 180) / Math.PI;
+    let min = 180;
+    let max = -180;
+    lons.forEach((lon) => {
+      let delta = lon - mean;
+      delta = ((delta + 540) % 360) - 180;
+      min = Math.min(min, delta);
+      max = Math.max(max, delta);
+    });
+    return { min: mean + min, max: mean + max };
+  }
+
+  sampleGeo(camera, ndcX, ndcY) {
+    const dir = this.tmpVec.set(ndcX, ndcY, 0.5).unproject(camera).sub(camera.position);
+    dir.normalize();
+    this.ray.origin.copy(camera.position);
+    this.ray.direction.copy(dir);
+    const t = this.raySphereIntersect(this.ray, this.radius);
+    if (!Number.isFinite(t)) return null;
+    const point = this.ray.origin.clone().add(this.ray.direction.clone().multiplyScalar(t));
+    return sphereToGeo(point);
+  }
+
+  raySphereIntersect(ray, radius) {
+    const origin = ray.origin;
+    const dir = ray.direction;
+    const b = 2 * origin.dot(dir);
+    const c = origin.dot(origin) - radius * radius;
+    const disc = b * b - 4 * c;
+    if (disc < 0) return null;
+    const t1 = (-b - Math.sqrt(disc)) / 2;
+    const t2 = (-b + Math.sqrt(disc)) / 2;
+    if (t1 > 0) return t1;
+    if (t2 > 0) return t2;
+    return null;
+  }
+
+  loadTile(tile) {
+    if (!this.provider) return;
+    const url = this.provider.url
+      .replace("{z}", tile.zoom)
+      .replace("{x}", tile.x)
+      .replace("{y}", tile.y);
+    this.pending.add(tile.key);
+    this.loader.load(
+      url,
+      (texture) => {
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.anisotropy = this.renderer?.capabilities?.getMaxAnisotropy?.() || 1;
+        const geometry = this.buildTileGeometry(tile.bounds);
+        const material = new THREE.MeshStandardMaterial({
+          map: texture,
+          transparent: true,
+          opacity: 0.98,
+          roughness: 0.9,
+          metalness: 0,
+        });
+        material.depthWrite = false;
+        const mesh = new THREE.Mesh(geometry, material);
+        this.group.add(mesh);
+        this.tiles.set(tile.key, {
+          mesh,
+          texture,
+          geometry,
+          material,
+        });
+        this.pending.delete(tile.key);
+      },
+      undefined,
+      () => {
+        this.pending.delete(tile.key);
+      },
+    );
+  }
+
+  buildTileGeometry(bounds) {
+    const latNorth = bounds.latNorth;
+    const latSouth = bounds.latSouth;
+    const lonWest = bounds.lonWest;
+    const lonEast = bounds.lonEast;
+    const phiStart = ((lonWest + 180) * Math.PI) / 180;
+    const phiLength = ((lonEast - lonWest) * Math.PI) / 180;
+    const thetaStart = ((90 - latNorth) * Math.PI) / 180;
+    const thetaLength = ((latNorth - latSouth) * Math.PI) / 180;
+    return new THREE.SphereGeometry(this.radius, 12, 12, phiStart, phiLength, thetaStart, thetaLength);
+  }
+}
+
 class Renderer3D {
   constructor(canvas) {
     this.canvas = canvas;
@@ -295,6 +637,9 @@ class Renderer3D {
     this.clouds = null;
     this.axisHelper = null;
     this.gridLines = null;
+    this.tileManager = null;
+    this.tileProvider = null;
+    this.tileZoom = null;
     this.dayMap = null;
     this.nightMap = null;
     this.normalMap = null;
@@ -422,6 +767,13 @@ class Renderer3D {
     this.clouds.rotation.y = Math.PI;
     this.scene.add(this.clouds);
 
+    this.tileManager = new TileManager(
+      this.scene,
+      this.globeRadius + 0.6,
+      this.renderer,
+    );
+    this.tileManager.setBaseDistance(this.defaultDistance);
+
     const planeMaterial = new THREE.MeshStandardMaterial({
       map: this.dayMap,
       roughness: 0.9,
@@ -448,6 +800,7 @@ class Renderer3D {
     this.setCloudsVisible(true);
     this.setAxesVisible(true);
     this.setGridVisible(true);
+    this.setTileProvider(TILE_CONFIG.activeProvider);
     this.setMode("globe", true);
   }
 
@@ -462,7 +815,7 @@ class Renderer3D {
     this.controls.target.set(0, 0, 0);
     this.controls.screenSpacePanning = true;
     if (this.camera.isPerspectiveCamera) {
-      this.controls.minDistance = this.globeRadius * 1.6;
+      this.controls.minDistance = this.globeRadius * 1.05;
       this.controls.maxDistance = this.globeRadius * 6;
     }
     if (this.camera.isOrthographicCamera) {
@@ -497,6 +850,9 @@ class Renderer3D {
     if (this.clouds) this.clouds.visible = mode === "globe" && this.showClouds;
     if (this.axisHelper) this.axisHelper.visible = mode === "globe" && this.showAxes;
     if (this.gridLines) this.gridLines.visible = mode === "globe" && this.showGrid;
+    if (this.tileManager) {
+      this.tileManager.group.visible = mode === "globe" && Boolean(this.tileProvider);
+    }
     if (els.map2d) {
       els.map2d.style.display = mode === "iso" ? "block" : "none";
     }
@@ -581,6 +937,10 @@ class Renderer3D {
     this.updateTrails();
     this.updateFocus();
     this.controls?.update();
+    if (this.tileManager && this.tileProvider && this.mode === "globe") {
+      this.tileManager.update(this.camera, this.size);
+      this.tileZoom = this.tileManager.zoom;
+    }
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -603,8 +963,12 @@ class Renderer3D {
     this.defaultDistance = distance;
     this.cameraPerspective.position.setLength(distance);
     if (this.controls?.object?.isPerspectiveCamera) {
-      this.controls.minDistance = distance * 0.6;
-      this.controls.maxDistance = distance * 2.6;
+      const minDistance = Math.max(this.globeRadius * 1.02, distance * 0.25);
+      this.controls.minDistance = minDistance;
+      this.controls.maxDistance = distance * 3;
+    }
+    if (this.tileManager) {
+      this.tileManager.setBaseDistance(distance);
     }
   }
 
@@ -647,6 +1011,15 @@ class Renderer3D {
     this.showGrid = Boolean(visible);
     if (this.gridLines) {
       this.gridLines.visible = this.showGrid && this.mode === "globe";
+    }
+  }
+
+  setTileProvider(providerId) {
+    const provider = TILE_CONFIG.providers[providerId] || null;
+    this.tileProvider = provider;
+    if (this.tileManager) {
+      this.tileManager.setProvider(provider);
+      this.tileZoom = provider ? this.tileManager.zoom : null;
     }
   }
 
@@ -1284,6 +1657,39 @@ const setupGlobeControls = (renderer3d) => {
   });
 };
 
+const setupTileProviders = (renderer3d) => {
+  const select = document.getElementById("tile-provider");
+  if (!select) return;
+  select.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "Base texture";
+  select.appendChild(none);
+
+  TILE_CONFIG.order.forEach((id) => {
+    const provider = TILE_CONFIG.providers[id];
+    if (!provider) return;
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = provider.name;
+    select.appendChild(option);
+  });
+
+  const initial = renderer3d.tileProvider?.id || TILE_CONFIG.activeProvider || "";
+  select.value = initial || "";
+  renderer3d.setTileProvider(initial || null);
+
+  select.addEventListener("change", () => {
+    const value = select.value || null;
+    renderer3d.setTileProvider(value);
+    if (value) {
+      window.localStorage?.setItem?.("c2.tileProvider", value);
+    } else {
+      window.localStorage?.removeItem?.("c2.tileProvider");
+    }
+  });
+};
+
 const main = () => {
   const bus = new EventBus();
   const world = new World();
@@ -1308,6 +1714,9 @@ const main = () => {
   bus.on("entities:update", (payload) => {
     syncEntities(payload, world);
   });
+
+  setupTileProviders(renderer3d);
+  setupGlobeControls(renderer3d);
 
   const renderLoop = (() => {
     let lastFrame = performance.now();
@@ -1354,6 +1763,16 @@ const main = () => {
           els.cameraStats.textContent = `View: Globe · Dist: ${Math.round(distance)}`;
         }
       }
+      if (els.tileStatus) {
+        const provider = renderer3d.tileProvider;
+        const zoomLabel =
+          renderer3d.tileZoom !== null && renderer3d.tileZoom !== undefined
+            ? `z${renderer3d.tileZoom}`
+            : "--";
+        els.tileStatus.textContent = provider
+          ? `Tiles: ${provider.name} ${zoomLabel}`
+          : "Tiles: disabled";
+      }
 
       requestAnimationFrame(tick);
     };
@@ -1378,7 +1797,6 @@ const main = () => {
   setInterval(refreshPartials, 12000);
   setInterval(() => fetchEntities(bus), 20000);
   setupDockToggles();
-  setupGlobeControls(renderer3d);
   setupLayerToggles();
 
   requestAnimationFrame(renderLoop);

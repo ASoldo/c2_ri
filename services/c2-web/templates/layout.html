@@ -10,6 +10,11 @@
 </head>
 <body>
   {% block content %}{% endblock content %}
+  {% if tile_config_json and tile_config_json != "" %}
+  <script>
+    window.C2_TILE_CONFIG = {{ tile_config_json | safe }};
+  </script>
+  {% endif %}
   <script type="module" src="/static/ui.js"></script>
 </body>
 </html>

@@ -39,7 +39,16 @@ async fn main() -> io::Result<()> {
     let bind_addr = config.bind_addr.clone();
     let api = ApiClient::from_env()
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err.message))?;
-    let state = web::Data::new(AppState { config, tera, api });
+    let tile_config_json = env::var("C2_WEB_TILE_CONFIG")
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .map(|value| value.to_string());
+    let state = web::Data::new(AppState {
+        config,
+        tera,
+        api,
+        tile_config_json,
+    });
 
     HttpServer::new(move || {
         App::new()

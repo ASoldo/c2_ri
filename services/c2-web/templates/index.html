@@ -19,6 +19,8 @@
       <span class="status-sep">|</span>
       <span id="camera-stats">View: Globe · Dist: --</span>
       <span class="status-sep">|</span>
+      <span id="tile-status">Tiles: --</span>
+      <span class="status-sep">|</span>
       {{ service_name }} · {{ environment | upper }}
     </div>
   </header>
@@ -44,6 +46,10 @@
         </section>
         <section class="panel-section">
           <h2>Globe Layers</h2>
+          <div class="panel-field">
+            <label for="tile-provider">Tile provider</label>
+            <select id="tile-provider"></select>
+          </div>
           <div class="panel-actions">
             <button data-globe-mode="day" data-active="true">Day</button>
             <button data-globe-mode="night">Night</button>

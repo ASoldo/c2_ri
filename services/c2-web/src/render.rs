@@ -9,6 +9,7 @@ pub struct UiTemplateData {
     pub environment: String,
     pub status: Option<StatusResponse>,
     pub snapshot: UiSnapshot,
+    pub tile_config_json: Option<String>,
 }
 
 impl UiTemplateData {
@@ -18,6 +19,7 @@ impl UiTemplateData {
             environment: state.config.environment.to_string(),
             status,
             snapshot,
+            tile_config_json: state.tile_config_json.clone(),
         }
     }
 }
@@ -28,5 +30,6 @@ pub fn build_context(data: &UiTemplateData) -> Context {
     context.insert("environment", &data.environment);
     context.insert("status", &data.status);
     context.insert("snapshot", &data.snapshot);
+    context.insert("tile_config_json", &data.tile_config_json);
     context
 }

@@ -7,4 +7,5 @@ pub struct AppState {
     pub config: ServiceConfig,
     pub tera: Tera,
     pub api: ApiClient,
+    pub tile_config_json: Option<String>,
 }
