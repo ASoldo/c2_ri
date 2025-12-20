@@ -1,5 +1,6 @@
 pub mod health;
 pub mod partials;
+pub mod tiles;
 pub mod ui_api;
 pub mod ui;
 
@@ -13,6 +14,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(ui_api::entities)
         .service(ui_api::sse)
         .service(ui_api::ws_route)
+        .service(tiles::tile)
         .service(partials::mission_feed)
         .service(partials::incidents)
         .service(partials::assets);

@@ -25,24 +25,28 @@ const DEFAULT_TILE_PROVIDERS = {
   osm: {
     name: "OSM Standard",
     url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    proxy: true,
     minZoom: 0,
     maxZoom: 19,
   },
   hot: {
     name: "OSM Humanitarian",
     url: "https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+    proxy: true,
     minZoom: 0,
     maxZoom: 19,
   },
   opentopo: {
     name: "OpenTopoMap",
     url: "https://tile.opentopomap.org/{z}/{x}/{y}.png",
+    proxy: true,
     minZoom: 0,
     maxZoom: 17,
   },
   nasa: {
     name: "NASA Blue Marble",
     url: "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief/default/2013-12-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg",
+    proxy: true,
     minZoom: 0,
     maxZoom: 8,
   },
@@ -54,10 +58,18 @@ const buildTileConfig = () => {
   const normalized = {};
   Object.entries(providers).forEach(([id, provider]) => {
     if (!provider || !provider.url) return;
+    const remoteUrl = provider.url;
+    const proxy =
+      provider.proxy !== false && /^https?:\/\//i.test(remoteUrl || "");
+    const resolvedUrl = proxy
+      ? `/ui/tiles/${id}/{z}/{x}/{y}`
+      : remoteUrl;
     normalized[id] = {
       id,
       name: provider.name || id,
-      url: provider.url,
+      url: resolvedUrl,
+      remoteUrl,
+      proxy,
       minZoom: Number.isFinite(provider.minZoom) ? provider.minZoom : 0,
       maxZoom: Number.isFinite(provider.maxZoom) ? provider.maxZoom : 19,
     };

@@ -2,6 +2,7 @@ mod api;
 mod render;
 mod routes;
 mod state;
+mod tiles;
 
 use actix_files::Files;
 use actix_web::{web, App, HttpServer};
@@ -39,15 +40,27 @@ async fn main() -> io::Result<()> {
     let bind_addr = config.bind_addr.clone();
     let api = ApiClient::from_env()
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err.message))?;
-    let tile_config_json = env::var("C2_WEB_TILE_CONFIG")
+    let tile_config_value = env::var("C2_WEB_TILE_CONFIG")
         .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .map(|value| value.to_string());
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
+    let tile_config_json = tile_config_value.as_ref().map(|value| value.to_string());
+    let tile_providers = tile_config_value
+        .as_ref()
+        .and_then(tiles::tile_providers_from_value)
+        .unwrap_or_else(tiles::default_tile_providers);
+    let tile_user_agent = env::var("C2_WEB_TILE_USER_AGENT")
+        .unwrap_or_else(|_| format!("C2-Walaris/{}", env!("CARGO_PKG_VERSION")));
+    let tile_client = reqwest::Client::builder()
+        .user_agent(tile_user_agent)
+        .build()
+        .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
     let state = web::Data::new(AppState {
         config,
         tera,
         api,
         tile_config_json,
+        tile_providers,
+        tile_client,
     });
 
     HttpServer::new(move || {
