@@ -368,6 +368,8 @@ const tileBounds = (x, y, zoom) => {
   return { latNorth, latSouth, lonWest, lonEast };
 };
 
+const AXIS_Y = new THREE.Vector3(0, 1, 0);
+
 const sphereToGeo = (point) => {
   const radius = Math.max(point.length(), 1);
   const phi = Math.acos(point.y / radius);
@@ -378,12 +380,13 @@ const sphereToGeo = (point) => {
 };
 
 class TileManager {
-  constructor(scene, radius, renderer) {
+  constructor(scene, radius, renderer, rotationY = 0) {
     this.scene = scene;
     this.radius = radius;
     this.renderer = renderer;
     this.group = new THREE.Group();
-    this.group.rotation.y = Math.PI;
+    this.rotationY = rotationY;
+    this.group.rotation.y = rotationY;
     this.group.visible = false;
     this.group.renderOrder = 2;
     this.scene.add(this.group);
@@ -398,6 +401,7 @@ class TileManager {
     this.lastDistance = 0;
     this.ray = new THREE.Ray();
     this.tmpVec = new THREE.Vector3();
+    this.tmpPoint = new THREE.Vector3();
     this.loader = new THREE.TextureLoader();
     this.loader.crossOrigin = "anonymous";
   }
@@ -561,8 +565,11 @@ class TileManager {
     this.ray.direction.copy(dir);
     const t = this.raySphereIntersect(this.ray, this.radius);
     if (!Number.isFinite(t)) return null;
-    const point = this.ray.origin.clone().add(this.ray.direction.clone().multiplyScalar(t));
-    return sphereToGeo(point);
+    this.tmpPoint.copy(this.ray.direction).multiplyScalar(t).add(this.ray.origin);
+    if (this.rotationY) {
+      this.tmpPoint.applyAxisAngle(AXIS_Y, -this.rotationY);
+    }
+    return sphereToGeo(this.tmpPoint);
   }
 
   raySphereIntersect(ray, radius) {
@@ -598,9 +605,15 @@ class TileManager {
           opacity: 0.98,
           roughness: 0.9,
           metalness: 0,
+          side: THREE.DoubleSide,
         });
+        material.polygonOffset = true;
+        material.polygonOffsetFactor = -1;
+        material.polygonOffsetUnits = -1;
         material.depthWrite = false;
         const mesh = new THREE.Mesh(geometry, material);
+        mesh.renderOrder = 2;
+        mesh.frustumCulled = false;
         this.group.add(mesh);
         this.tiles.set(tile.key, {
           mesh,
@@ -655,6 +668,7 @@ class Renderer3D {
     this.tileManager = null;
     this.tileProvider = null;
     this.tileZoom = null;
+    this.globeRotation = Math.PI;
     this.dayMap = null;
     this.nightMap = null;
     this.normalMap = null;
@@ -750,7 +764,7 @@ class Renderer3D {
       new THREE.SphereGeometry(this.globeRadius, 128, 128),
       this.globeMaterial,
     );
-    this.globe.rotation.y = Math.PI;
+    this.globe.rotation.y = this.globeRotation;
     this.scene.add(this.globe);
 
     this.atmosphere = new THREE.Mesh(
@@ -779,13 +793,14 @@ class Renderer3D {
     );
     this.clouds.material.depthTest = true;
     this.clouds.renderOrder = 3;
-    this.clouds.rotation.y = Math.PI;
+    this.clouds.rotation.y = this.globeRotation;
     this.scene.add(this.clouds);
 
     this.tileManager = new TileManager(
       this.scene,
       this.globeRadius + 0.6,
       this.renderer,
+      this.globeRotation,
     );
     this.tileManager.setBaseDistance(this.defaultDistance);
 
