@@ -34,6 +34,7 @@ body {
   min-height: 100vh;
   display: grid;
   grid-template-rows: auto 1fr auto;
+  z-index: 5;
 }
 
 .topbar {
@@ -116,24 +117,24 @@ body {
   overflow: hidden;
   border-radius: 24px;
   margin: 0 12px 12px;
-  background: rgba(255, 255, 255, 0.55);
-  box-shadow: var(--shadow);
+  background: transparent;
+  box-shadow: none;
 }
 
 .board::before {
   content: "";
   position: absolute;
   inset: 0;
-  background-image: linear-gradient(var(--grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-  background-size: 48px 48px;
+  background-image: none;
+  background-size: 0 0;
   pointer-events: none;
-  opacity: 0.6;
+  opacity: 0;
 }
 
 .layer-stack {
-  position: absolute;
+  position: fixed;
   inset: 0;
+  z-index: 1;
 }
 
 .layer-stack canvas,

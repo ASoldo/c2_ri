@@ -307,6 +307,8 @@ class Renderer3D {
     });
     this.renderer.setPixelRatio(devicePixelRatio);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.05;
     this.scene = new THREE.Scene();
     this.cameraPerspective = new THREE.PerspectiveCamera(55, 1, 0.1, 6000);
     this.cameraPerspective.position.set(0, 0, this.globeRadius * 2.8);
@@ -320,11 +322,16 @@ class Renderer3D {
     this.cameraIso.lookAt(0, 0, 0);
     this.camera = this.cameraPerspective;
 
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x3f3f3f, 0.9);
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x3f3f3f, 0.65);
     this.scene.add(hemi);
-    const sun = new THREE.DirectionalLight(0xffffff, 0.6);
-    sun.position.set(200, 180, 120);
+    const ambient = new THREE.AmbientLight(0x0f172a, 0.25);
+    this.scene.add(ambient);
+    const sun = new THREE.DirectionalLight(0xffffff, 1.15);
+    sun.position.set(280, 160, 120);
     this.scene.add(sun);
+    const rim = new THREE.DirectionalLight(0x93c5fd, 0.35);
+    rim.position.set(-240, -180, -220);
+    this.scene.add(rim);
 
     const loader = new THREE.TextureLoader();
     const dayMap = loader.load("/static/maps/8k_earth_daymap.png");
@@ -349,13 +356,13 @@ class Renderer3D {
     const globeMaterial = new THREE.MeshPhongMaterial({
       map: dayMap,
       normalMap,
-      normalScale: new THREE.Vector2(0.4, 0.4),
+      normalScale: new THREE.Vector2(1.1, 1.1),
       specularMap,
-      specular: new THREE.Color(0x222222),
-      shininess: 14,
+      specular: new THREE.Color(0x666666),
+      shininess: 28,
       emissive: new THREE.Color(0x0b0f23),
       emissiveMap: nightMap,
-      emissiveIntensity: 0.6,
+      emissiveIntensity: 0.35,
     });
     this.globe = new THREE.Mesh(
       new THREE.SphereGeometry(this.globeRadius, 128, 128),
@@ -835,10 +842,8 @@ const main = () => {
   })();
 
   const resize = () => {
-    if (!els.board) return;
-    const rect = els.board.getBoundingClientRect();
     board.resize();
-    renderer3d.resize(rect.width, rect.height);
+    renderer3d.resize(window.innerWidth, window.innerHeight);
   };
 
   window.addEventListener("resize", resize);
