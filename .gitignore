@@ -20,3 +20,6 @@ k8s/charts/**/charts/
 
 # Argo CD local secrets
 k8s/argocd/secret.env
+
+# Grafana OIDC local secrets
+k8s/overlays/dev/grafana-oidc.env

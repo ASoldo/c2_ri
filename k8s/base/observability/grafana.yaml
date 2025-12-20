@@ -68,6 +68,48 @@ spec:
                 secretKeyRef:
                   name: c2-grafana-admin
                   key: admin-password
+            - name: GF_SERVER_DOMAIN
+              value: grafana.c2.local
+            - name: GF_SERVER_ROOT_URL
+              value: https://grafana.c2.local/
+            - name: GF_AUTH_GENERIC_OAUTH_ENABLED
+              value: "true"
+            - name: GF_AUTH_GENERIC_OAUTH_NAME
+              value: Keycloak
+            - name: GF_AUTH_GENERIC_OAUTH_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: c2-grafana-oidc
+                  key: GRAFANA_OIDC_CLIENT_ID
+            - name: GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: c2-grafana-oidc
+                  key: GRAFANA_OIDC_CLIENT_SECRET
+            - name: GF_AUTH_GENERIC_OAUTH_AUTH_URL
+              value: https://keycloak.c2.local/realms/c2/protocol/openid-connect/auth
+            - name: GF_AUTH_GENERIC_OAUTH_TOKEN_URL
+              value: https://keycloak.c2.local/realms/c2/protocol/openid-connect/token
+            - name: GF_AUTH_GENERIC_OAUTH_API_URL
+              value: https://keycloak.c2.local/realms/c2/protocol/openid-connect/userinfo
+            - name: GF_AUTH_GENERIC_OAUTH_SCOPES
+              value: openid profile email
+            - name: GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP
+              value: "true"
+            - name: GF_AUTH_GENERIC_OAUTH_LOGIN_ATTRIBUTE_PATH
+              value: preferred_username
+            - name: GF_AUTH_GENERIC_OAUTH_NAME_ATTRIBUTE_PATH
+              value: preferred_username
+            - name: GF_AUTH_GENERIC_OAUTH_EMAIL_ATTRIBUTE_PATH
+              value: email
+            - name: GF_AUTH_GENERIC_OAUTH_GROUPS_ATTRIBUTE_PATH
+              value: groups
+            - name: GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH
+              value: contains(groups[*], '/c2-super-admins') && 'Admin' || contains(groups[*], '/c2-devsecops') && 'Admin' || contains(groups[*], '/c2-developers') && 'Editor' || contains(groups[*], '/c2-field-operators') && 'Viewer' || contains(groups[*], '/c2-clients-readonly') && 'Viewer' || 'Viewer'
+            - name: GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_STRICT
+              value: "false"
+            - name: GF_AUTH_GENERIC_OAUTH_TLS_SKIP_VERIFY_INSECURE
+              value: "true"
           volumeMounts:
             - name: datasources
               mountPath: /etc/grafana/provisioning/datasources

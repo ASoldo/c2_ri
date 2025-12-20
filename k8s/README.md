@@ -70,6 +70,21 @@ Keycloak runs in a dedicated `keycloak` namespace. Install it using
 
 ## Secrets
 
+Create the dev ingress TLS secret (for c2/grafana/prometheus):
+
+```sh
+openssl req -x509 -nodes -newkey rsa:4096 -days 365 \
+  -keyout /tmp/c2-ingress.key \
+  -out /tmp/c2-ingress.crt \
+  -subj "/CN=c2.local" \
+  -addext "subjectAltName=DNS:c2.local,DNS:grafana.c2.local,DNS:prometheus.c2.local"
+
+kubectl -n c2-system create secret tls c2-ingress-tls \
+  --cert=/tmp/c2-ingress.crt \
+  --key=/tmp/c2-ingress.key \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
 Create the Harbor registry pull secret and SurrealDB secret before applying overlays.
 All C2 workloads should pull images via the service account imagePullSecrets, not
 per-pod credentials:
@@ -90,6 +105,8 @@ Create the SurrealDB secret:
 ```sh
 kubectl -n c2-system create secret generic c2-surreal-credentials --from-literal=password=CHANGEME
 ```
+
+If you enable Grafana OIDC, create the Grafana secret (see `k8s/grafana/oidc/README.md`).
 
 The dev overlay includes a SurrealDB deployment suitable for local testing.
 Update Grafana admin credentials in `k8s/base/observability/grafana.yaml` before production use.

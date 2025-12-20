@@ -4,9 +4,15 @@ metadata:
   name: c2-ingress
   namespace: c2-system
   annotations:
-    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
 spec:
   ingressClassName: nginx
+  tls:
+    - hosts:
+        - grafana.c2.local
+        - prometheus.c2.local
+        - c2.local
+      secretName: c2-ingress-tls
   rules:
     - host: c2.local
       http:
