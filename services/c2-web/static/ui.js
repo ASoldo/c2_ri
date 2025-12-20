@@ -312,6 +312,8 @@ class Renderer3D {
     this.tmpVec = new THREE.Vector3();
     this.tmpVec2 = new THREE.Vector3();
     this.tmpVec3 = new THREE.Vector3();
+    this.tmpAxis = new THREE.Vector3();
+    this.tmpQuat = new THREE.Quaternion();
   }
 
   init() {
@@ -396,19 +398,24 @@ class Renderer3D {
         opacity: 0.08,
       }),
     );
+    this.atmosphere.renderOrder = 4;
     this.scene.add(this.atmosphere);
 
     this.clouds = new THREE.Mesh(
-      new THREE.SphereGeometry(this.globeRadius + 1.2, 128, 128),
+      new THREE.SphereGeometry(this.globeRadius + 2.2, 128, 128),
       new THREE.MeshPhongMaterial({
         map: this.cloudsMap,
+        alphaMap: this.cloudsMap,
         transparent: true,
-        opacity: 0.8,
-        alphaTest: 0.03,
+        opacity: 0.9,
+        alphaTest: 0.02,
         depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        color: new THREE.Color(0xffffff),
       }),
     );
     this.clouds.material.depthTest = true;
+    this.clouds.renderOrder = 3;
     this.clouds.rotation.y = Math.PI;
     this.scene.add(this.clouds);
 
@@ -669,7 +676,7 @@ class Renderer3D {
     const material = new THREE.LineBasicMaterial({
       color: 0xf97316,
       transparent: true,
-      opacity: 0.35,
+      opacity: 0.45,
     });
     return new THREE.LineSegments(geometry, material);
   }
@@ -696,10 +703,24 @@ class Renderer3D {
     const points = [];
     const segments = 32;
     const radius = this.globeRadius + 1.4;
-    for (let i = 0; i <= segments; i += 1) {
-      const t = i / segments;
-      const point = new THREE.Vector3().slerpVectors(startVec, endVec, t).multiplyScalar(radius);
-      points.push(point);
+    const start = startVec.clone().normalize();
+    const end = endVec.clone().normalize();
+    const angle = start.angleTo(end);
+    if (angle < 0.0001) {
+      points.push(start.clone().multiplyScalar(radius), end.clone().multiplyScalar(radius));
+    } else {
+      this.tmpAxis.crossVectors(start, end);
+      if (this.tmpAxis.lengthSq() < 1e-6) {
+        this.tmpAxis.set(0, 1, 0);
+      } else {
+        this.tmpAxis.normalize();
+      }
+      for (let i = 0; i <= segments; i += 1) {
+        const t = i / segments;
+        this.tmpQuat.setFromAxisAngle(this.tmpAxis, angle * t);
+        const point = start.clone().applyQuaternion(this.tmpQuat).multiplyScalar(radius);
+        points.push(point);
+      }
     }
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
     const material = new THREE.LineBasicMaterial({
@@ -959,6 +980,18 @@ const edgeSymbolFor = (meta) => {
   }
 };
 
+const collapseLabel = (label) => {
+  if (!label) return "";
+  const trimmed = label.trim();
+  if (!trimmed) return "";
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (words.length > 1) {
+    return words.map((word) => word[0]).join("").slice(0, 3).toUpperCase();
+  }
+  if (trimmed.length <= 3) return trimmed.toUpperCase();
+  return trimmed.slice(0, 3).toUpperCase();
+};
+
 class EdgeLayer {
   constructor(layerEl, renderer, boundsEl) {
     this.layerEl = layerEl;
@@ -1037,7 +1070,9 @@ class EdgeLayer {
     entities.forEach((entity) => {
       const geo = world.getComponent(entity, "Geo");
       const meta = world.getComponent(entity, "Meta");
+      const pin = world.getComponent(entity, "Pin");
       if (!geo || !meta) return;
+      if (!pin) return;
       const pos = this.renderer.positionForGeo(geo, this.renderer.markerAltitude + 2.5);
       const screen = this.renderer.projectToScreen(pos);
       if (!screen) return;
@@ -1049,7 +1084,11 @@ class EdgeLayer {
         screen.y <= clamp.bottom - pad;
       if (screen.visible && withinBounds) {
         const existing = this.nodes.get(entity);
-        if (existing) existing.style.opacity = "0";
+        if (existing) {
+          existing.style.opacity = "0";
+          existing.style.pointerEvents = "none";
+          existing.dataset.open = "false";
+        }
         return;
       }
 
@@ -1072,11 +1111,12 @@ class EdgeLayer {
       const x = centerX + safeDx * scale;
       const y = centerY + safeDy * scale;
       node.style.opacity = "1";
+      node.style.pointerEvents = "auto";
       node.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
       node.classList.toggle("occluded", screen.behind);
-      const symbol = edgeSymbolFor(meta);
+      const symbol = collapseLabel(pin.label) || edgeSymbolFor(meta);
       node.querySelector(".edge-symbol").textContent = symbol;
-      node.title = meta.data?.name || meta.data?.summary || meta.kind;
+      node.title = pin.label || meta.data?.name || meta.data?.summary || meta.kind;
     });
   }
 
