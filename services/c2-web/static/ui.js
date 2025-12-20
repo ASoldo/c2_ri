@@ -1057,98 +1057,74 @@ class EdgeLayer {
     this.nodes = new Map();
     this.active = null;
     this.onAction = onAction;
+    this.popupBackdrop = null;
+    this.popup = null;
+    this.initPopup();
+  }
+
+  initPopup() {
+    const backdrop = document.createElement("div");
+    backdrop.className = "edge-popup-backdrop";
+    const popup = document.createElement("div");
+    popup.className = "edge-popup";
+    backdrop.appendChild(popup);
+    document.body.appendChild(backdrop);
+    backdrop.addEventListener("click", () => this.closeMenu());
+    popup.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const button = event.target.closest("button[data-action]");
+      if (!button || !this.active) return;
+      const action = button.dataset.action;
+      const entityId = this.active.dataset.entity;
+      if (action && entityId) this.onAction?.(action, entityId);
+      this.closeMenu();
+    });
+    this.popupBackdrop = backdrop;
+    this.popup = popup;
   }
 
   bind() {
     if (!this.layerEl) return;
     this.layerEl.addEventListener("click", (event) => {
-      const actionButton = event.target.closest(".edge-menu button");
-      if (actionButton) {
-        event.stopPropagation();
-        const marker = actionButton.closest(".edge-marker");
-        if (marker) {
-          const action = actionButton.dataset.action;
-          const entityId = marker.dataset.entity;
-          this.onAction?.(action, entityId);
-          marker.dataset.open = "false";
-          this.active = null;
-        }
-        return;
-      }
       const marker = event.target.closest(".edge-marker");
       if (!marker) return;
       event.stopPropagation();
-      const open = marker.dataset.open === "true";
-      this.closeMenu();
-      marker.dataset.open = open ? "false" : "true";
-      this.active = marker.dataset.open === "true" ? marker : null;
-      if (this.active) {
-        requestAnimationFrame(() => this.positionMenu(marker));
+      if (this.active === marker) {
+        this.closeMenu();
+        return;
       }
-    });
-    document.addEventListener("click", () => this.closeMenu());
-    window.addEventListener("resize", () => {
-      if (this.active) this.positionMenu(this.active);
+      this.openMenu(marker);
     });
   }
 
   closeMenu() {
-    if (this.active) {
-      this.active.dataset.open = "false";
-      this.active = null;
-    }
+    if (this.active) this.active.classList.remove("selected");
+    this.active = null;
+    if (this.popupBackdrop) this.popupBackdrop.classList.remove("active");
   }
 
-  positionMenu(marker) {
-    const menu = marker.querySelector(".edge-menu");
-    if (!menu) return;
-    const rect = marker.getBoundingClientRect();
-    const menuRect = menu.getBoundingClientRect();
-    const pad = 8;
-    const edge = 56;
-    const viewportW = window.innerWidth;
-    const viewportH = window.innerHeight;
-    const onLeft = rect.left < edge;
-    const onRight = rect.right > viewportW - edge;
-    const onTop = rect.top < edge;
-    const onBottom = rect.bottom > viewportH - edge;
-    let left;
-    let top;
-
-    if (onLeft) {
-      left = rect.right + pad;
-    } else if (onRight) {
-      left = rect.left - menuRect.width - pad;
-    } else {
-      left = rect.left + rect.width / 2 - menuRect.width / 2;
-    }
-
-    if (onTop) {
-      top = rect.bottom + pad;
-    } else if (onBottom) {
-      top = rect.top - menuRect.height - pad;
-    } else {
-      top = rect.top + rect.height / 2 - menuRect.height / 2;
-    }
-
-    left = Math.max(pad, Math.min(left, viewportW - menuRect.width - pad));
-    top = Math.max(pad, Math.min(top, viewportH - menuRect.height - pad));
-    menu.style.left = `${left}px`;
-    menu.style.top = `${top}px`;
+  openMenu(marker) {
+    if (!this.popup || !this.popupBackdrop) return;
+    this.closeMenu();
+    this.active = marker;
+    this.active.classList.add("selected");
+    const label = marker.dataset.label || marker.title || "Entity";
+    this.popup.innerHTML = `
+      <div class="edge-popup-title">${label}</div>
+      <div class="edge-popup-actions">
+        <button data-action="focus">Focus</button>
+        <button data-action="details">Details</button>
+        <button data-action="task">Task</button>
+      </div>
+    `;
+    this.popupBackdrop.classList.add("active");
   }
 
   createNode(entityId) {
     const node = document.createElement("div");
     node.className = "edge-marker";
     node.dataset.entity = entityId;
-    node.innerHTML = `
-      <span class="edge-symbol"></span>
-      <div class="edge-menu">
-        <button data-action="focus">Focus</button>
-        <button data-action="details">Details</button>
-        <button data-action="task">Task</button>
-      </div>
-    `;
+    node.innerHTML = `<span class="edge-symbol"></span>`;
     return node;
   }
 
@@ -1189,7 +1165,7 @@ class EdgeLayer {
         if (existing) {
           existing.style.opacity = "0";
           existing.style.pointerEvents = "none";
-          existing.dataset.open = "false";
+          if (this.active === existing) this.closeMenu();
         }
         return;
       }
@@ -1223,6 +1199,7 @@ class EdgeLayer {
       const symbol = collapseLabel(pin.label) || edgeSymbolFor(meta);
       node.querySelector(".edge-symbol").textContent = symbol;
       node.title = pin.label || meta.data?.name || meta.data?.summary || meta.kind;
+      node.dataset.label = node.title;
     });
   }
 

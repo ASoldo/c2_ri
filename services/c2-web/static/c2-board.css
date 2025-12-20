@@ -202,32 +202,55 @@ body {
   box-shadow: 0 0 16px rgba(15, 23, 42, 0.35);
 }
 
-.edge-marker .edge-menu {
-  position: fixed;
-  top: 0;
-  left: 0;
-  transform: none;
-  background: rgba(15, 23, 42, 0.95);
-  color: white;
-  padding: 8px;
-  border-radius: 12px;
-  display: none;
-  gap: 6px;
-  flex-direction: column;
-  min-width: 140px;
-  z-index: 2;
+.edge-marker.selected {
+  background: rgba(250, 204, 21, 0.95);
+  color: #0f172a;
+  border-color: rgba(217, 119, 6, 0.8);
+  box-shadow: 0 0 16px rgba(250, 204, 21, 0.4);
 }
 
-.edge-marker[data-open="true"] .edge-menu {
+.edge-popup-backdrop {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.12);
+  z-index: 30;
+}
+
+.edge-popup-backdrop.active {
   display: flex;
 }
 
-.edge-menu button {
-  background: transparent;
+.edge-popup {
+  background: rgba(15, 23, 42, 0.96);
+  color: white;
+  padding: 14px 16px;
+  border-radius: 16px;
+  min-width: 220px;
+  max-width: 320px;
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.35);
+}
+
+.edge-popup-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.edge-popup-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.edge-popup-actions button {
+  background: rgba(30, 41, 59, 0.85);
   border: 1px solid rgba(148, 163, 184, 0.3);
   color: white;
   border-radius: 8px;
-  padding: 6px 8px;
+  padding: 8px 10px;
   cursor: pointer;
   font-size: 11px;
   text-align: left;
