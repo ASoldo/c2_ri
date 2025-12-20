@@ -13,6 +13,7 @@ const els = {
   map2d: document.getElementById("map-2d"),
   map3d: document.getElementById("map-3d"),
   pinLayer: document.getElementById("pin-layer"),
+  edgeLayer: document.getElementById("edge-layer"),
   dockLeft: document.getElementById("dock-left"),
   dockRight: document.getElementById("dock-right"),
 };
@@ -293,6 +294,7 @@ class Renderer3D {
     this.markerAltitude = 3.0;
     this.clouds = null;
     this.axisHelper = null;
+    this.gridLines = null;
     this.dayMap = null;
     this.nightMap = null;
     this.normalMap = null;
@@ -302,6 +304,10 @@ class Renderer3D {
     this.lightingMode = "day";
     this.showClouds = true;
     this.showAxes = true;
+    this.showGrid = true;
+    this.trails = [];
+    this.lastCameraVec = null;
+    this.lastTrailAt = 0;
     this.tmp = new THREE.Object3D();
     this.tmpVec = new THREE.Vector3();
     this.tmpVec2 = new THREE.Vector3();
@@ -397,10 +403,12 @@ class Renderer3D {
       new THREE.MeshPhongMaterial({
         map: this.cloudsMap,
         transparent: true,
-        opacity: 0.6,
+        opacity: 0.8,
+        alphaTest: 0.03,
         depthWrite: false,
       }),
     );
+    this.clouds.material.depthTest = true;
     this.clouds.rotation.y = Math.PI;
     this.scene.add(this.clouds);
 
@@ -430,9 +438,13 @@ class Renderer3D {
     this.axisHelper.visible = true;
     this.scene.add(this.axisHelper);
 
+    this.gridLines = this.buildLatLonGrid(this.globeRadius + 0.6, 20, 10);
+    this.scene.add(this.gridLines);
+
     this.setLightingMode("day");
     this.setCloudsVisible(true);
     this.setAxesVisible(true);
+    this.setGridVisible(true);
     this.setMode("globe", true);
   }
 
@@ -454,6 +466,8 @@ class Renderer3D {
       this.controls.minZoom = 0.6;
       this.controls.maxZoom = 2.4;
     }
+    this.lastCameraVec = this.camera.position.clone().normalize();
+    this.controls.addEventListener("change", () => this.recordCameraTrail());
   }
 
   setMode(mode, skipResize = false) {
@@ -479,6 +493,7 @@ class Renderer3D {
     if (this.mapPlane) this.mapPlane.visible = mode === "iso";
     if (this.clouds) this.clouds.visible = mode === "globe" && this.showClouds;
     if (this.axisHelper) this.axisHelper.visible = mode === "globe" && this.showAxes;
+    if (this.gridLines) this.gridLines.visible = mode === "globe" && this.showGrid;
     if (els.map2d) {
       els.map2d.style.display = mode === "iso" ? "block" : "none";
     }
@@ -559,6 +574,7 @@ class Renderer3D {
     if (this.clouds && this.mode === "globe" && this.showClouds) {
       this.clouds.rotation.y += 0.00025;
     }
+    this.updateTrails();
     this.controls?.update();
     this.renderer.render(this.scene, this.camera);
   }
@@ -596,6 +612,119 @@ class Renderer3D {
     if (this.axisHelper) {
       this.axisHelper.visible = this.showAxes && this.mode === "globe";
     }
+  }
+
+  setGridVisible(visible) {
+    this.showGrid = Boolean(visible);
+    if (this.gridLines) {
+      this.gridLines.visible = this.showGrid && this.mode === "globe";
+    }
+  }
+
+  buildLatLonGrid(radius, lonStep, latStep) {
+    const vertices = [];
+    const toRad = THREE.MathUtils.degToRad;
+    const addLine = (points) => {
+      for (let i = 0; i < points.length - 1; i += 1) {
+        const a = points[i];
+        const b = points[i + 1];
+        vertices.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      }
+    };
+
+    for (let lon = -180; lon <= 180; lon += lonStep) {
+      const points = [];
+      for (let lat = -90; lat <= 90; lat += latStep) {
+        const phi = toRad(90 - lat);
+        const theta = toRad(lon + 180);
+        points.push(
+          new THREE.Vector3(
+            radius * Math.sin(phi) * Math.cos(theta),
+            radius * Math.cos(phi),
+            radius * Math.sin(phi) * Math.sin(theta),
+          ),
+        );
+      }
+      addLine(points);
+    }
+
+    for (let lat = -60; lat <= 60; lat += lonStep) {
+      const points = [];
+      for (let lon = -180; lon <= 180; lon += latStep) {
+        const phi = toRad(90 - lat);
+        const theta = toRad(lon + 180);
+        points.push(
+          new THREE.Vector3(
+            radius * Math.sin(phi) * Math.cos(theta),
+            radius * Math.cos(phi),
+            radius * Math.sin(phi) * Math.sin(theta),
+          ),
+        );
+      }
+      addLine(points);
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+    const material = new THREE.LineBasicMaterial({
+      color: 0xf97316,
+      transparent: true,
+      opacity: 0.35,
+    });
+    return new THREE.LineSegments(geometry, material);
+  }
+
+  recordCameraTrail() {
+    if (!this.camera || this.mode !== "globe") return;
+    const now = performance.now();
+    if (now - this.lastTrailAt < 120) return;
+    this.lastTrailAt = now;
+    const current = this.camera.position.clone().normalize();
+    if (!this.lastCameraVec) {
+      this.lastCameraVec = current;
+      return;
+    }
+    const angle = this.lastCameraVec.angleTo(current);
+    if (angle < 0.02) return;
+    const line = this.createArcLine(this.lastCameraVec, current);
+    this.scene.add(line);
+    this.trails.push({ line, createdAt: now, duration: 2600 });
+    this.lastCameraVec.copy(current);
+  }
+
+  createArcLine(startVec, endVec) {
+    const points = [];
+    const segments = 32;
+    const radius = this.globeRadius + 1.4;
+    for (let i = 0; i <= segments; i += 1) {
+      const t = i / segments;
+      const point = new THREE.Vector3().slerpVectors(startVec, endVec, t).multiplyScalar(radius);
+      points.push(point);
+    }
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const material = new THREE.LineBasicMaterial({
+      color: 0xef4444,
+      transparent: true,
+      opacity: 0.9,
+    });
+    return new THREE.Line(geometry, material);
+  }
+
+  updateTrails() {
+    if (!this.trails.length) return;
+    const now = performance.now();
+    this.trails = this.trails.filter((trail) => {
+      const elapsed = now - trail.createdAt;
+      const remaining = Math.max(0, trail.duration - elapsed);
+      const alpha = remaining / trail.duration;
+      trail.line.material.opacity = alpha;
+      if (remaining <= 0) {
+        this.scene.remove(trail.line);
+        trail.line.geometry.dispose();
+        return false;
+      }
+      return true;
+    });
   }
 }
 
@@ -644,12 +773,12 @@ class PinLayer {
         screen.y >= clamp.top + pad &&
         screen.y <= clamp.bottom - pad;
       if (screen.visible && withinBounds) {
-        node.classList.remove("edge");
+        node.classList.remove("occluded");
         node.style.opacity = "1";
         node.style.transform = `translate(${screen.x}px, ${screen.y}px) translate(-50%, -50%)`;
       } else {
-        node.classList.add("edge");
-        node.style.opacity = "1";
+        node.classList.remove("occluded");
+        node.style.opacity = "0";
         node.style.transform = `translate(${clampedX}px, ${clampedY}px) translate(-50%, -50%)`;
       }
     });
@@ -814,6 +943,153 @@ const syncEntities = (payload, world) => {
   }
 };
 
+const edgeSymbolFor = (meta) => {
+  if (!meta) return "?";
+  switch (meta.kind) {
+    case "asset":
+      return "A";
+    case "unit":
+      return "U";
+    case "mission":
+      return "M";
+    case "incident":
+      return "I";
+    default:
+      return "?";
+  }
+};
+
+class EdgeLayer {
+  constructor(layerEl, renderer, boundsEl) {
+    this.layerEl = layerEl;
+    this.renderer = renderer;
+    this.boundsEl = boundsEl;
+    this.nodes = new Map();
+    this.active = null;
+  }
+
+  bind() {
+    if (!this.layerEl) return;
+    this.layerEl.addEventListener("click", (event) => {
+      const actionButton = event.target.closest(".edge-menu button");
+      if (actionButton) {
+        event.stopPropagation();
+        const marker = actionButton.closest(".edge-marker");
+        if (marker) {
+          const action = actionButton.dataset.action;
+          const entityId = marker.dataset.entity;
+          console.info("edge action", { action, entityId });
+          marker.dataset.open = "false";
+          this.active = null;
+        }
+        return;
+      }
+      const marker = event.target.closest(".edge-marker");
+      if (!marker) return;
+      event.stopPropagation();
+      const open = marker.dataset.open === "true";
+      this.closeMenu();
+      marker.dataset.open = open ? "false" : "true";
+      this.active = marker.dataset.open === "true" ? marker : null;
+    });
+    document.addEventListener("click", () => this.closeMenu());
+  }
+
+  closeMenu() {
+    if (this.active) {
+      this.active.dataset.open = "false";
+      this.active = null;
+    }
+  }
+
+  createNode(entityId) {
+    const node = document.createElement("div");
+    node.className = "edge-marker";
+    node.dataset.entity = entityId;
+    node.innerHTML = `
+      <span class="edge-symbol"></span>
+      <div class="edge-menu">
+        <button data-action="focus">Focus</button>
+        <button data-action="details">Details</button>
+        <button data-action="task">Task</button>
+      </div>
+    `;
+    return node;
+  }
+
+  syncEdges(entities, world) {
+    if (!this.layerEl || !this.renderer) return;
+    const bounds = this.boundsEl?.getBoundingClientRect?.();
+    const clamp = bounds || {
+      left: 0,
+      top: 0,
+      right: window.innerWidth,
+      bottom: window.innerHeight,
+      width: window.innerWidth,
+      height: window.innerHeight,
+    };
+    const pad = 22;
+    const centerX = clamp.left + clamp.width / 2;
+    const centerY = clamp.top + clamp.height / 2;
+    const edgeX = clamp.width / 2 - pad;
+    const edgeY = clamp.height / 2 - pad;
+
+    entities.forEach((entity) => {
+      const geo = world.getComponent(entity, "Geo");
+      const meta = world.getComponent(entity, "Meta");
+      if (!geo || !meta) return;
+      const pos = this.renderer.positionForGeo(geo, this.renderer.markerAltitude + 2.5);
+      const screen = this.renderer.projectToScreen(pos);
+      if (!screen) return;
+
+      const withinBounds =
+        screen.x >= clamp.left + pad &&
+        screen.x <= clamp.right - pad &&
+        screen.y >= clamp.top + pad &&
+        screen.y <= clamp.bottom - pad;
+      if (screen.visible && withinBounds) {
+        const existing = this.nodes.get(entity);
+        if (existing) existing.style.opacity = "0";
+        return;
+      }
+
+      let node = this.nodes.get(entity);
+      if (!node) {
+        node = this.createNode(entity);
+        this.nodes.set(entity, node);
+        this.layerEl.appendChild(node);
+      }
+
+      let dx = screen.x - centerX;
+      let dy = screen.y - centerY;
+      if (screen.behind) {
+        dx = -dx;
+        dy = -dy;
+      }
+      const safeDx = Math.abs(dx) < 1 ? 1 : dx;
+      const safeDy = Math.abs(dy) < 1 ? 1 : dy;
+      const scale = Math.min(edgeX / Math.abs(safeDx), edgeY / Math.abs(safeDy));
+      const x = centerX + safeDx * scale;
+      const y = centerY + safeDy * scale;
+      node.style.opacity = "1";
+      node.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
+      node.classList.toggle("occluded", screen.behind);
+      const symbol = edgeSymbolFor(meta);
+      node.querySelector(".edge-symbol").textContent = symbol;
+      node.title = meta.data?.name || meta.data?.summary || meta.kind;
+    });
+  }
+
+  prune(world) {
+    for (const [entity, node] of this.nodes.entries()) {
+      if (!world.entities.has(entity)) {
+        node.remove();
+        this.nodes.delete(entity);
+      }
+    }
+  }
+}
+
 const setupDockToggles = () => {
   document.querySelectorAll("[data-dock-toggle]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -860,6 +1136,7 @@ const setupGlobeControls = (renderer3d) => {
       button.setAttribute("aria-pressed", next.toString());
       if (key === "clouds") renderer3d.setCloudsVisible(next);
       if (key === "axes") renderer3d.setAxesVisible(next);
+      if (key === "grid") renderer3d.setGridVisible(next);
     });
   });
 };
@@ -874,6 +1151,8 @@ const main = () => {
   renderer3d.init();
 
   const pinLayer = new PinLayer(els.pinLayer, renderer3d, els.board);
+  const edgeLayer = new EdgeLayer(els.edgeLayer, renderer3d, els.board);
+  edgeLayer.bind();
 
   bus.on("entities:update", (payload) => {
     syncEntities(payload, world);
@@ -908,6 +1187,8 @@ const main = () => {
       const entitiesPins = world.query(["Geo", "Pin"]);
       pinLayer.syncPins(entitiesPins, world);
       pinLayer.prune(world);
+      edgeLayer.syncEdges(entities3d, world);
+      edgeLayer.prune(world);
 
       if (els.runtimeStats) {
         els.runtimeStats.textContent = `Entities: ${entities3d.length} · FPS: ${fps}`;

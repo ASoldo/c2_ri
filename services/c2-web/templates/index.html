@@ -45,6 +45,7 @@
             <button data-globe-mode="night">Night</button>
             <button data-globe-toggle="clouds" aria-pressed="true">Clouds</button>
             <button data-globe-toggle="axes" aria-pressed="true">Axes</button>
+            <button data-globe-toggle="grid" aria-pressed="true">Grid</button>
           </div>
           <div class="meta">Toggle globe lighting and debug layers.</div>
         </section>
@@ -63,7 +64,9 @@
         <canvas id="map-3d" data-layer="map-3d"></canvas>
         <canvas id="map-2d" data-layer="map-2d"></canvas>
         <div class="dom-layer" id="pin-layer" data-layer="pins"></div>
+        <div class="edge-layer" id="edge-layer" data-layer="edges"></div>
       </div>
+      <div class="crosshair" id="crosshair" aria-hidden="true"></div>
     </main>
 
     <aside class="dock right" id="dock-right" data-state="open">

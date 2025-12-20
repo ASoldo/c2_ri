@@ -166,6 +166,101 @@ body {
   z-index: 3;
 }
 
+.edge-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.edge-marker {
+  position: absolute;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f172a;
+  background: rgba(34, 211, 238, 0.9);
+  border: 1px solid rgba(34, 211, 238, 0.6);
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.35);
+  pointer-events: auto;
+}
+
+.edge-marker.occluded {
+  background: rgba(15, 23, 42, 0.9);
+  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.5);
+  box-shadow: 0 0 16px rgba(15, 23, 42, 0.35);
+}
+
+.edge-marker .edge-menu {
+  position: absolute;
+  top: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.95);
+  color: white;
+  padding: 8px;
+  border-radius: 12px;
+  display: none;
+  gap: 6px;
+  flex-direction: column;
+  min-width: 140px;
+  z-index: 2;
+}
+
+.edge-marker[data-open="true"] .edge-menu {
+  display: flex;
+}
+
+.edge-menu button {
+  background: transparent;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: white;
+  border-radius: 8px;
+  padding: 6px 8px;
+  cursor: pointer;
+  font-size: 11px;
+  text-align: left;
+}
+
+.crosshair {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: 28px;
+  height: 28px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 4;
+}
+
+.crosshair::before,
+.crosshair::after {
+  content: "";
+  position: absolute;
+  background: #ef4444;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.65);
+}
+
+.crosshair::before {
+  left: 50%;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  transform: translateX(-50%);
+}
+
+.crosshair::after {
+  top: 50%;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  transform: translateY(-50%);
+}
 .hud {
   position: absolute;
   right: 20px;
@@ -344,18 +439,17 @@ body {
 .pin {
   position: absolute;
   transform: translate(-50%, -50%);
-  background: rgba(15, 23, 42, 0.85);
-  color: white;
+  background: rgba(34, 211, 238, 0.9);
+  color: #0f172a;
   padding: 6px 10px;
   border-radius: 999px;
   font-size: 11px;
   pointer-events: none;
 }
 
-.pin.edge {
-  background: rgba(14, 116, 144, 0.9);
-  border: 1px solid rgba(148, 163, 184, 0.6);
-  box-shadow: 0 0 12px rgba(14, 116, 144, 0.35);
+.pin.occluded {
+  background: rgba(15, 23, 42, 0.9);
+  color: #e2e8f0;
 }
 
 @media (max-width: 1100px) {
