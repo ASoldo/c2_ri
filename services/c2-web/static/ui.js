@@ -577,14 +577,12 @@ class TileManager {
   }
 
   pickTileRadius(camera, zoom) {
-    if (!camera?.isPerspectiveCamera) return 4;
-    const distance = camera.position.length();
-    const ratio = this.baseDistance
-      ? Math.max(0.25, Math.min(1.2, distance / this.baseDistance))
-      : 1;
-    const zoomBias = this.provider ? Math.max(0, this.provider.maxZoom - zoom) : 0;
-    const radius = Math.round(2 + ratio * 2 + Math.min(2, zoomBias * 0.12));
-    return Math.max(2, Math.min(6, radius));
+    if (!camera?.isPerspectiveCamera) return 3;
+    if (zoom <= 4) return 1;
+    if (zoom <= 6) return 2;
+    if (zoom <= 9) return 3;
+    if (zoom <= 12) return 4;
+    return 5;
   }
 
   computeVisibleTiles(camera, size, zoom) {
@@ -1097,14 +1095,18 @@ class Renderer3D {
     this.crosshairHandlers = null;
   }
 
+  getRotateSpeed() {
+    if (!this.camera?.isPerspectiveCamera) return this.baseRotateSpeed;
+    const distance = this.camera.position.length();
+    const ratio = this.defaultDistance ? distance / this.defaultDistance : 1;
+    const eased = Math.max(0.04, Math.min(1.1, ratio));
+    return this.baseRotateSpeed * eased * eased;
+  }
+
   rotateFromCrosshair(dx, dy) {
     if (!this.camera || !this.controls) return;
     const target = this.controls.target || new THREE.Vector3();
-    const distance = this.camera.position.distanceTo(target);
-    const ratio = this.defaultDistance
-      ? Math.max(0.15, Math.min(1, distance / this.defaultDistance))
-      : 1;
-    const rotateSpeed = this.baseRotateSpeed * ratio;
+    const rotateSpeed = this.getRotateSpeed();
     const scale = (2 * Math.PI * rotateSpeed) / Math.max(1, this.size.height);
     const thetaDelta = -dx * scale;
     const phiDelta = dy * scale;
@@ -1271,11 +1273,7 @@ class Renderer3D {
   updateRotateSpeed() {
     if (!this.controls || !this.camera) return;
     if (!this.camera.isPerspectiveCamera) return;
-    const distance = this.camera.position.length();
-    const ratio = this.defaultDistance
-      ? Math.max(0.15, Math.min(1.2, distance / this.defaultDistance))
-      : 1;
-    this.controls.rotateSpeed = this.baseRotateSpeed * ratio;
+    this.controls.rotateSpeed = this.getRotateSpeed();
   }
 
   setLightingMode(mode) {
