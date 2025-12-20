@@ -308,6 +308,8 @@ class Renderer3D {
     this.trails = [];
     this.lastCameraVec = null;
     this.lastTrailAt = 0;
+    this.defaultDistance = this.globeRadius * 2.6;
+    this.fillRatio = 0.72;
     this.focusTween = null;
     this.tmp = new THREE.Object3D();
     this.tmpVec = new THREE.Vector3();
@@ -527,6 +529,7 @@ class Renderer3D {
       this.cameraIso.bottom = -frustum / 2;
       this.cameraIso.updateProjectionMatrix();
     }
+    this.updateCameraDistance(width, height);
   }
 
   positionForGeo(geo, altitude) {
@@ -587,6 +590,30 @@ class Renderer3D {
     this.updateFocus();
     this.controls?.update();
     this.renderer.render(this.scene, this.camera);
+  }
+
+  updateCameraDistance(width, height) {
+    if (!this.cameraPerspective) return;
+    if (!width || !height) return;
+    const fovV = THREE.MathUtils.degToRad(this.cameraPerspective.fov);
+    const aspect = width / height;
+    const fovH = 2 * Math.atan(Math.tan(fovV / 2) * aspect);
+    const desiredRadiusPx = width * this.fillRatio * 0.5;
+    const widthDistance =
+      (width * this.globeRadius) /
+      (desiredRadiusPx * Math.tan(fovH / 2) * 2);
+    const maxHeightRadiusPx = height * 0.48;
+    const heightDistance =
+      (height * this.globeRadius) /
+      (maxHeightRadiusPx * Math.tan(fovV / 2) * 2);
+    const distance = Math.max(widthDistance, heightDistance);
+    if (!Number.isFinite(distance) || distance <= 0) return;
+    this.defaultDistance = distance;
+    this.cameraPerspective.position.setLength(distance);
+    if (this.controls?.object?.isPerspectiveCamera) {
+      this.controls.minDistance = distance * 0.6;
+      this.controls.maxDistance = distance * 2.6;
+    }
   }
 
   setLightingMode(mode) {
@@ -755,7 +782,7 @@ class Renderer3D {
     if (!this.camera || !this.controls) return;
     const target = geoToSphere(geo, this.globeRadius);
     const targetPos = new THREE.Vector3(target.x, target.y, target.z).normalize();
-    const distance = this.globeRadius * 2.6;
+    const distance = this.defaultDistance || this.globeRadius * 2.6;
     const destination = targetPos.multiplyScalar(distance);
     this.focusTween = {
       start: performance.now(),
