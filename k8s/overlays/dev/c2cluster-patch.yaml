@@ -30,7 +30,7 @@ spec:
         - name: C2_UI_ROLES
           value: "system_admin"
         - name: C2_UI_PERMISSIONS
-          value: "view_missions,edit_missions,dispatch_assets,view_incidents,ingest_data,access_classified,admin"
+          value: "view_missions,edit_missions,dispatch_assets,view_units,view_teams,view_capabilities,view_incidents,ingest_data,access_classified,admin"
         - name: C2_UI_CLEARANCE
           value: "top_secret"
         - name: C2_UI_POLL_INTERVAL_MS

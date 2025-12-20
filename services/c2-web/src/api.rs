@@ -1,5 +1,5 @@
 use c2_core::{
-    now_epoch_millis, Asset, AssetStatus, Incident, IncidentStatus, Mission, MissionStatus,
+    now_epoch_millis, Asset, AssetStatus, Incident, IncidentStatus, Mission, MissionStatus, Unit,
 };
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Client, Url};
@@ -147,6 +147,36 @@ impl UiSnapshot {
             },
         }
     }
+
+    pub fn from_entities(entities: &UiEntitySnapshot) -> Self {
+        Self {
+            timestamp_ms: entities.timestamp_ms,
+            missions: summarize_missions(&entities.missions),
+            assets: summarize_assets(&entities.assets),
+            incidents: summarize_incidents(&entities.incidents),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct UiEntitySnapshot {
+    pub timestamp_ms: u64,
+    pub missions: Vec<Mission>,
+    pub assets: Vec<Asset>,
+    pub incidents: Vec<Incident>,
+    pub units: Vec<Unit>,
+}
+
+impl UiEntitySnapshot {
+    pub fn empty() -> Self {
+        Self {
+            timestamp_ms: now_epoch_millis(),
+            missions: Vec::new(),
+            assets: Vec::new(),
+            incidents: Vec::new(),
+            units: Vec::new(),
+        }
+    }
 }
 
 impl ApiClient {
@@ -193,6 +223,11 @@ impl ApiClient {
     }
 
     pub async fn snapshot(&self) -> Result<UiSnapshot, ApiError> {
+        let entities = self.entities().await?;
+        Ok(UiSnapshot::from_entities(&entities))
+    }
+
+    pub async fn entities(&self) -> Result<UiEntitySnapshot, ApiError> {
         let auth = self
             .auth
             .as_ref()
@@ -209,12 +244,17 @@ impl ApiClient {
             .list_incidents(auth, self.list_limit, 0)
             .await
             .unwrap_or_default();
+        let units = self
+            .list_units(auth, self.list_limit, 0)
+            .await
+            .unwrap_or_default();
 
-        Ok(UiSnapshot {
+        Ok(UiEntitySnapshot {
             timestamp_ms: now_epoch_millis(),
-            missions: summarize_missions(&missions),
-            assets: summarize_assets(&assets),
-            incidents: summarize_incidents(&incidents),
+            missions,
+            assets,
+            incidents,
+            units,
         })
     }
 
@@ -306,6 +346,36 @@ impl ApiClient {
             )));
         }
         Ok(response.json::<Vec<Incident>>().await?)
+    }
+
+    async fn list_units(
+        &self,
+        auth: &ApiAuth,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Unit>, ApiError> {
+        let url = self
+            .base_url
+            .join("v1/units")
+            .map_err(|err| ApiError::new(err.to_string()))?;
+        let response = self
+            .client
+            .get(url)
+            .headers(auth.headers.clone())
+            .query(&[
+                ("tenant_id", auth.tenant_id.as_str()),
+                ("limit", &limit.to_string()),
+                ("offset", &offset.to_string()),
+            ])
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(ApiError::new(format!(
+                "units request failed with {}",
+                response.status()
+            )));
+        }
+        Ok(response.json::<Vec<Unit>>().await?)
     }
 }
 

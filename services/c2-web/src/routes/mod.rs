@@ -10,6 +10,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(ui::index)
         .service(ui_api::status)
         .service(ui_api::summary)
+        .service(ui_api::entities)
         .service(ui_api::sse)
         .service(ui_api::ws_route)
         .service(partials::mission_feed)

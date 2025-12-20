@@ -7,7 +7,7 @@ use futures_util::stream::unfold;
 use serde::Serialize;
 use std::time::{Duration, Instant};
 
-use crate::api::{ApiClient, UiSnapshot};
+use crate::api::{ApiClient, UiEntitySnapshot, UiSnapshot};
 use crate::render::{build_context, UiTemplateData};
 use crate::state::AppState;
 
@@ -36,6 +36,21 @@ pub async fn summary(state: web::Data<AppState>) -> Result<HttpResponse, Error> 
     Ok(HttpResponse::Ok().json(snapshot))
 }
 
+#[get("/ui/entities")]
+pub async fn entities(state: web::Data<AppState>) -> Result<HttpResponse, Error> {
+    if !state.api.auth_enabled() {
+        return Ok(HttpResponse::ServiceUnavailable()
+            .content_type("application/json")
+            .body("{\"error\":\"missing C2_UI_* auth configuration\"}"));
+    }
+    let payload = state
+        .api
+        .entities()
+        .await
+        .map_err(|err| ErrorInternalServerError(err.message))?;
+    Ok(HttpResponse::Ok().json(payload))
+}
+
 #[get("/ui/stream/sse")]
 pub async fn sse(state: web::Data<AppState>) -> HttpResponse {
     if !state.api.auth_enabled() {
@@ -54,19 +69,25 @@ pub async fn sse(state: web::Data<AppState>) -> HttpResponse {
         let environment = environment.clone();
         async move {
             ticker.tick().await;
-            let snapshot = api.snapshot().await.unwrap_or_else(|_| UiSnapshot::empty());
-            let payload = match render_partials(&tera, &service_name, &environment, &snapshot) {
-                Ok(partials) => build_sse_event(
-                    "partials",
-                    &PartialsPayload { fragments: partials },
-                ),
+            let entity_snapshot = api
+                .entities()
+                .await
+                .unwrap_or_else(|_| UiEntitySnapshot::empty());
+            let snapshot = UiSnapshot::from_entities(&entity_snapshot);
+            let mut payload = String::new();
+            match render_partials(&tera, &service_name, &environment, &snapshot) {
+                Ok(partials) => {
+                    payload.push_str(&build_sse_event(
+                        "partials",
+                        &PartialsPayload { fragments: partials },
+                    ));
+                }
                 Err(err) => {
-                    let error = StreamError {
-                        message: err,
-                    };
-                    build_sse_event("error", &error)
+                    let error = StreamError { message: err };
+                    payload.push_str(&build_sse_event("error", &error));
                 }
             };
+            payload.push_str(&build_sse_event("entities", &entity_snapshot));
             Some((Ok::<Bytes, actix_web::Error>(Bytes::from(payload)), (ticker, api)))
         }
     });
@@ -173,15 +194,27 @@ impl UiWsSession {
             let tera = actor.tera.clone();
             let service_name = actor.service_name.clone();
             let environment = actor.environment.clone();
-            let fut = async move { api.snapshot().await.unwrap_or_else(|_| UiSnapshot::empty()) };
+            let fut = async move {
+                api.entities()
+                    .await
+                    .unwrap_or_else(|_| UiEntitySnapshot::empty())
+            };
             ctx.spawn(
                 actix::fut::wrap_future(fut).map(
-                    move |snapshot, _actor, ctx: &mut ws::WebsocketContext<UiWsSession>| {
+                    move |entity_snapshot, _actor, ctx: &mut ws::WebsocketContext<UiWsSession>| {
+                        let snapshot = UiSnapshot::from_entities(&entity_snapshot);
                         match render_partials(&tera, &service_name, &environment, &snapshot) {
                             Ok(partials) => {
                                 let envelope = WsEnvelope {
                                     kind: "partials",
                                     payload: PartialsPayload { fragments: partials },
+                                };
+                                if let Ok(text) = serde_json::to_string(&envelope) {
+                                    ctx.text(text);
+                                }
+                                let envelope = WsEnvelope {
+                                    kind: "entities",
+                                    payload: entity_snapshot,
                                 };
                                 if let Ok(text) = serde_json::to_string(&envelope) {
                                     ctx.text(text);

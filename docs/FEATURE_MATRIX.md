@@ -96,8 +96,8 @@ IDs are stable and used to track design, implementation, and changelog entries.
 | ID | Capability | Primary Users | Priority | Services | Crates | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | UI-001 | Operator web console shell and Tera templating | Command, Ops | P0 | c2-web | c2-config | In progress |
-| UI-002 | Mission dashboards and role-based panels | Command, Ops | P0 | c2-web | c2-config | Planned |
-| UI-003 | Alerts, notifications, and escalation panels | Command, Ops | P0 | c2-web | c2-config | Planned |
+| UI-002 | Mission dashboards and role-based panels | Command, Ops | P0 | c2-web | c2-config | In progress |
+| UI-003 | Alerts, notifications, and escalation panels | Command, Ops | P0 | c2-web | c2-config | In progress |
 | UI-004 | Playbooks, runbooks, and checklists | Ops | P1 | c2-web | c2-config | Planned |
 | UI-005 | Role-based layouts and access scoping | Command, Ops | P1 | c2-web | c2-config | Planned |
 | UI-006 | Reporting, exports, and templated briefs | Command | P1 | c2-web | c2-config | Planned |

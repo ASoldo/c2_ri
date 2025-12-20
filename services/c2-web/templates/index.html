@@ -1,42 +1,104 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<header>
-  <div class="brand">
-    <span>Operational Console</span>
-    <h1>C2 Walaris</h1>
-  </div>
-  <div class="status-pill">
-    <span class="status-dot" id="api-dot"></span>
-    <span id="api-status">API: booting</span>
-    <span class="status-sep">|</span>
-    <span id="stream-status">SSE: offline</span>
-    <span class="status-sep">|</span>
-    <span id="ws-status">WS: offline</span>
-    <span class="status-sep">|</span>
-    {{ service_name }} · {{ environment | upper }}
-  </div>
-</header>
+<div id="c2-root">
+  <header class="topbar">
+    <div class="brand">
+      <span>Operational Console</span>
+      <h1>C2 Walaris</h1>
+    </div>
+    <div class="status-pill">
+      <span class="status-dot" id="api-dot"></span>
+      <span id="api-status">API: booting</span>
+      <span class="status-sep">|</span>
+      <span id="stream-status">SSE: offline</span>
+      <span class="status-sep">|</span>
+      <span id="ws-status">WS: offline</span>
+      <span class="status-sep">|</span>
+      {{ service_name }} · {{ environment | upper }}
+    </div>
+  </header>
 
-<main>
-  <section class="card">
-    <div id="mission-feed-panel" data-partial="/partials/mission-feed">
-      {% include "partials/mission_feed.html" %}
-    </div>
-  </section>
-  <section class="card">
-    <div id="incident-panel" data-partial="/partials/incidents">
-      {% include "partials/incidents.html" %}
-    </div>
-  </section>
-  <section class="card">
-    <div id="asset-panel" data-partial="/partials/assets">
-      {% include "partials/assets.html" %}
-    </div>
-  </section>
-</main>
+  <div class="c2-body">
+    <aside class="dock left" id="dock-left" data-state="open">
+      <button class="dock-toggle" data-dock-toggle="left" aria-label="Toggle left dock">≡</button>
+      <div class="dock-panel">
+        <section class="panel-section">
+          <div id="mission-feed-panel" data-partial="/partials/mission-feed">
+            {% include "partials/mission_feed.html" %}
+          </div>
+        </section>
+        <section class="panel-section">
+          <div id="incident-panel" data-partial="/partials/incidents">
+            {% include "partials/incidents.html" %}
+          </div>
+        </section>
+        <section class="panel-section">
+          <div id="asset-panel" data-partial="/partials/assets">
+            {% include "partials/assets.html" %}
+          </div>
+        </section>
+        <section class="panel-section">
+          <h2>Layer Controls</h2>
+          <div class="panel-actions">
+            <button data-layer-toggle="map-3d">3D Map</button>
+            <button data-layer-toggle="map-2d">2D Grid</button>
+            <button data-layer-toggle="pins">Pins</button>
+          </div>
+          <div class="meta">Toggle overlays and rendering layers.</div>
+        </section>
+      </div>
+    </aside>
 
-<footer>
-  Template shell for the operator console. Connect to live services to populate panels.
-</footer>
+    <main class="board" id="board">
+      <div class="layer-stack" id="layer-stack">
+        <canvas id="map-3d" data-layer="map-3d"></canvas>
+        <canvas id="map-2d" data-layer="map-2d"></canvas>
+        <div class="dom-layer" id="pin-layer" data-layer="pins"></div>
+      </div>
+      <div class="hud">
+        <div class="hud-card">
+          <div class="hud-title">Runtime</div>
+          <div id="runtime-stats">Entities: 0 · FPS: --</div>
+        </div>
+        <div class="hud-card">
+          <div class="hud-title">View</div>
+          <div id="camera-stats">Zoom: 1.0 · Offset: 0,0</div>
+        </div>
+      </div>
+    </main>
+
+    <aside class="dock right" id="dock-right" data-state="open">
+      <button class="dock-toggle" data-dock-toggle="right" aria-label="Toggle right dock">≡</button>
+      <div class="dock-panel">
+        <section class="panel-section">
+          <h2>Inspector</h2>
+          <p class="meta">Select an entity to view assignments, posture, and comms.</p>
+        </section>
+        <section class="panel-section">
+          <h2>Alerts</h2>
+          <p class="meta">Escalations and warnings appear here.</p>
+        </section>
+        <section class="panel-section">
+          <h2>Overlays</h2>
+          <p class="meta">Toggle overlays tied to missions, units, and tasks.</p>
+        </section>
+      </div>
+    </aside>
+  </div>
+
+  <div class="bottom-bar">
+    <div class="timeline">
+      <span>Timeline</span>
+      <span class="status-sep">|</span>
+      <span>Live · Playback · Alerts</span>
+    </div>
+    <div class="osm-attrib">© OpenStreetMap contributors</div>
+    <div class="panel-actions">
+      <button>Pin View</button>
+      <button>Share Scene</button>
+      <button>Export Brief</button>
+    </div>
+  </div>
+</div>
 {% endblock content %}

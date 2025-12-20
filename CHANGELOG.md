@@ -41,6 +41,11 @@ Added
 - ODM-004 Asset maintenance and readiness/comms fields across stores
 - SEC-007 Policy rules for unit/team/capability permissions
 - OPS-005 Hurl coverage for units, teams, and capabilities
+- UI-002 Layered infinite-board UI shell with 2D/3D canvases and dock panels
+- UI-003 Realtime-ready ECS rendering loop with pin overlays and HUD stats
+- UI-001 Local vendor assets for Tailwind v4, htmx, and three.js
+- UI-002 Entity feeds wired into ECS with UI entity stream endpoint
+- UI-002 OSM globe texture layer for 3D map sphere rendering
 
 Changed
 - Moved observability manifests to k8s/ overlays and updated ArgoCD repo refs
