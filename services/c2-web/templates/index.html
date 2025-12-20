@@ -15,6 +15,10 @@
       <span class="status-sep">|</span>
       <span id="ws-status">WS: offline</span>
       <span class="status-sep">|</span>
+      <span id="runtime-stats">Entities: 0 · FPS: --</span>
+      <span class="status-sep">|</span>
+      <span id="camera-stats">View: Globe · Dist: --</span>
+      <span class="status-sep">|</span>
       {{ service_name }} · {{ environment | upper }}
     </div>
   </header>
@@ -88,23 +92,5 @@
     </aside>
   </div>
 
-  <div class="bottom-bar">
-    <div class="footer-stats">
-      <div class="hud-card">
-        <div class="hud-title">Runtime</div>
-        <div id="runtime-stats">Entities: 0 · FPS: --</div>
-      </div>
-      <div class="hud-card">
-        <div class="hud-title">View</div>
-        <div id="camera-stats">View: Globe · Dist: --</div>
-      </div>
-    </div>
-    <div class="osm-attrib">Earth textures: Solar System Scope</div>
-    <div class="panel-actions">
-      <button>Pin View</button>
-      <button>Share Scene</button>
-      <button>Export Brief</button>
-    </div>
-  </div>
 </div>
 {% endblock content %}

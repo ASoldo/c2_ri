@@ -50,13 +50,15 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  color: #f8fafc;
+  mix-blend-mode: difference;
 }
 
 .brand span {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.24em;
-  color: var(--sea);
+  color: inherit;
 }
 
 .brand h1 {
@@ -75,6 +77,8 @@ body {
   box-shadow: var(--shadow);
   font-size: 12px;
   font-weight: 600;
+  flex-wrap: wrap;
+  row-gap: 4px;
 }
 
 .status-dot {
@@ -199,10 +203,10 @@ body {
 }
 
 .edge-marker .edge-menu {
-  position: absolute;
-  top: 40px;
-  left: 50%;
-  transform: translateX(-50%);
+  position: fixed;
+  top: 0;
+  left: 0;
+  transform: none;
   background: rgba(15, 23, 42, 0.95);
   color: white;
   padding: 8px;
@@ -280,12 +284,6 @@ body {
   padding: 10px 14px;
   font-size: 12px;
   box-shadow: var(--shadow);
-}
-
-.footer-stats {
-  display: flex;
-  align-items: center;
-  gap: 12px;
 }
 
 .hud-title {
@@ -407,21 +405,6 @@ body {
   height: 64px;
   left: -26px;
   border-radius: 999px 0 0 999px;
-}
-
-.bottom-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 24px 18px;
-  z-index: 9;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.osm-attrib {
-  font-size: 11px;
-  color: #64748b;
 }
 
 .layer-toggle {

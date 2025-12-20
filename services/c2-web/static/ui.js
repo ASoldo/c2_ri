@@ -444,6 +444,7 @@ class Renderer3D {
 
     this.axisHelper = new THREE.AxesHelper(this.globeRadius * 1.6);
     this.axisHelper.visible = true;
+    this.axisHelper.setColors(0xff0000, 0x00ff00, 0x0000ff);
     this.scene.add(this.axisHelper);
 
     this.gridLines = this.buildLatLonGrid(this.globeRadius + 0.6, 20, 10);
@@ -1054,8 +1055,14 @@ class EdgeLayer {
       this.closeMenu();
       marker.dataset.open = open ? "false" : "true";
       this.active = marker.dataset.open === "true" ? marker : null;
+      if (this.active) {
+        requestAnimationFrame(() => this.positionMenu(marker));
+      }
     });
     document.addEventListener("click", () => this.closeMenu());
+    window.addEventListener("resize", () => {
+      if (this.active) this.positionMenu(this.active);
+    });
   }
 
   closeMenu() {
@@ -1063,6 +1070,22 @@ class EdgeLayer {
       this.active.dataset.open = "false";
       this.active = null;
     }
+  }
+
+  positionMenu(marker) {
+    const menu = marker.querySelector(".edge-menu");
+    if (!menu) return;
+    const rect = marker.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    let left = rect.left + rect.width / 2 - menuRect.width / 2;
+    let top = rect.bottom + 8;
+    if (top + menuRect.height > window.innerHeight - 8) {
+      top = rect.top - menuRect.height - 8;
+    }
+    left = Math.max(8, Math.min(left, window.innerWidth - menuRect.width - 8));
+    top = Math.max(8, Math.min(top, window.innerHeight - menuRect.height - 8));
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
   }
 
   createNode(entityId) {
