@@ -1,1 +1,3 @@
-Map tiles by OpenStreetMap contributors (https://www.openstreetmap.org).
+Earth texture set (8k_earth_daymap.png, 8k_earth_nightmap.png, 8k_earth_clouds.png,
+8k_earth_normal_map.*, 8k_earth_specular_map.*) from Solar System Scope:
+https://www.solarsystemscope.com/textures/

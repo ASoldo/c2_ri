@@ -148,8 +148,21 @@ body {
   display: block;
 }
 
+#map-3d {
+  z-index: 2;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+#map-2d {
+  z-index: 1;
+  pointer-events: none;
+  display: none;
+}
+
 .dom-layer {
   pointer-events: none;
+  z-index: 3;
 }
 
 .hud {

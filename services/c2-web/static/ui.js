@@ -278,11 +278,24 @@ class Renderer3D {
     this.renderer = null;
     this.scene = null;
     this.camera = null;
+    this.cameraPerspective = null;
+    this.cameraIso = null;
     this.controls = null;
     this.instances = null;
     this.globe = null;
+    this.atmosphere = null;
+    this.mapPlane = null;
     this.globeRadius = 120;
+    this.mode = "globe";
+    this.size = { width: 1, height: 1 };
+    this.planeSize = { width: this.globeRadius * 4, height: this.globeRadius * 2 };
+    this.isoFrustum = this.planeSize.height * 1.4;
+    this.markerAltitude = 3.0;
+    this.clouds = null;
     this.tmp = new THREE.Object3D();
+    this.tmpVec = new THREE.Vector3();
+    this.tmpVec2 = new THREE.Vector3();
+    this.tmpVec3 = new THREE.Vector3();
   }
 
   init() {
@@ -295,34 +308,63 @@ class Renderer3D {
     this.renderer.setPixelRatio(devicePixelRatio);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(60, 1, 0.1, 2000);
-    this.camera.position.set(0, 160, 240);
-    this.controls = new OrbitControls(this.camera, this.canvas);
-    this.controls.enableDamping = true;
-    this.controls.enablePan = true;
-    this.controls.target.set(0, 0, 0);
+    this.cameraPerspective = new THREE.PerspectiveCamera(55, 1, 0.1, 6000);
+    this.cameraPerspective.position.set(0, 0, this.globeRadius * 2.8);
+    this.cameraIso = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 4000);
+    this.cameraIso.position.set(
+      this.globeRadius * 1.6,
+      this.globeRadius * 1.6,
+      this.globeRadius * 1.6,
+    );
+    this.cameraIso.up.set(0, 1, 0);
+    this.cameraIso.lookAt(0, 0, 0);
+    this.camera = this.cameraPerspective;
 
     const hemi = new THREE.HemisphereLight(0xffffff, 0x3f3f3f, 0.9);
     this.scene.add(hemi);
+    const sun = new THREE.DirectionalLight(0xffffff, 0.6);
+    sun.position.set(200, 180, 120);
+    this.scene.add(sun);
 
-    const texture = new THREE.TextureLoader().load(
-      "/static/maps/osm-world-2k.jpg",
-    );
-    texture.colorSpace = THREE.SRGBColorSpace;
+    const loader = new THREE.TextureLoader();
+    const dayMap = loader.load("/static/maps/8k_earth_daymap.png");
+    const nightMap = loader.load("/static/maps/8k_earth_nightmap.png");
+    const normalMap = loader.load("/static/maps/8k_earth_normal_map.jpg");
+    const specularMap = loader.load("/static/maps/8k_earth_specular_map.jpg");
+    const cloudsMap = loader.load("/static/maps/8k_earth_clouds.png");
 
-    const globeMaterial = new THREE.MeshStandardMaterial({
-      map: texture,
-      roughness: 0.8,
-      metalness: 0.05,
+    dayMap.colorSpace = THREE.SRGBColorSpace;
+    nightMap.colorSpace = THREE.SRGBColorSpace;
+    cloudsMap.colorSpace = THREE.SRGBColorSpace;
+    normalMap.colorSpace = THREE.NoColorSpace;
+    specularMap.colorSpace = THREE.NoColorSpace;
+
+    const anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+    dayMap.anisotropy = anisotropy;
+    nightMap.anisotropy = anisotropy;
+    normalMap.anisotropy = anisotropy;
+    specularMap.anisotropy = anisotropy;
+    cloudsMap.anisotropy = anisotropy;
+
+    const globeMaterial = new THREE.MeshPhongMaterial({
+      map: dayMap,
+      normalMap,
+      normalScale: new THREE.Vector2(0.4, 0.4),
+      specularMap,
+      specular: new THREE.Color(0x222222),
+      shininess: 14,
+      emissive: new THREE.Color(0x0b0f23),
+      emissiveMap: nightMap,
+      emissiveIntensity: 0.6,
     });
     this.globe = new THREE.Mesh(
-      new THREE.SphereGeometry(this.globeRadius, 64, 64),
+      new THREE.SphereGeometry(this.globeRadius, 128, 128),
       globeMaterial,
     );
     this.globe.rotation.y = Math.PI;
     this.scene.add(this.globe);
 
-    const atmosphere = new THREE.Mesh(
+    this.atmosphere = new THREE.Mesh(
       new THREE.SphereGeometry(this.globeRadius + 2, 64, 64),
       new THREE.MeshBasicMaterial({
         color: 0x7dd3fc,
@@ -330,7 +372,33 @@ class Renderer3D {
         opacity: 0.08,
       }),
     );
-    this.scene.add(atmosphere);
+    this.scene.add(this.atmosphere);
+
+    this.clouds = new THREE.Mesh(
+      new THREE.SphereGeometry(this.globeRadius + 1.2, 128, 128),
+      new THREE.MeshPhongMaterial({
+        map: cloudsMap,
+        transparent: true,
+        opacity: 0.35,
+        depthWrite: false,
+      }),
+    );
+    this.clouds.rotation.y = Math.PI;
+    this.scene.add(this.clouds);
+
+    const planeMaterial = new THREE.MeshStandardMaterial({
+      map: dayMap,
+      roughness: 0.9,
+      metalness: 0.0,
+    });
+    this.mapPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(this.planeSize.width, this.planeSize.height, 1, 1),
+      planeMaterial,
+    );
+    this.mapPlane.rotation.x = -Math.PI / 2;
+    this.mapPlane.position.y = -1;
+    this.mapPlane.visible = false;
+    this.scene.add(this.mapPlane);
 
     const geometry = new THREE.SphereGeometry(2.4, 8, 8);
     const material = new THREE.MeshStandardMaterial({
@@ -339,13 +407,107 @@ class Renderer3D {
     });
     this.instances = new THREE.InstancedMesh(geometry, material, 1);
     this.scene.add(this.instances);
+
+    this.setMode("globe", true);
+  }
+
+  attachControls(allowRotate) {
+    if (!this.canvas || !this.camera) return;
+    this.controls?.dispose();
+    this.controls = new OrbitControls(this.camera, this.canvas);
+    this.controls.enableDamping = true;
+    this.controls.dampingFactor = 0.08;
+    this.controls.enablePan = false;
+    this.controls.enableRotate = allowRotate;
+    this.controls.target.set(0, 0, 0);
+    this.controls.screenSpacePanning = true;
+    if (this.camera.isPerspectiveCamera) {
+      this.controls.minDistance = this.globeRadius * 1.6;
+      this.controls.maxDistance = this.globeRadius * 6;
+    }
+    if (this.camera.isOrthographicCamera) {
+      this.controls.minZoom = 0.6;
+      this.controls.maxZoom = 2.4;
+    }
+  }
+
+  setMode(mode, skipResize = false) {
+    if (mode !== "globe" && mode !== "iso") return;
+    this.mode = mode;
+    this.camera = mode === "iso" ? this.cameraIso : this.cameraPerspective;
+    if (this.camera === this.cameraIso) {
+      this.camera.position.set(
+        this.globeRadius * 1.6,
+        this.globeRadius * 1.6,
+        this.globeRadius * 1.6,
+      );
+      this.camera.lookAt(0, 0, 0);
+    } else if (this.camera === this.cameraPerspective) {
+      this.camera.position.set(
+        0,
+        this.globeRadius * 1.5,
+        this.globeRadius * 2.7,
+      );
+    }
+    if (this.globe) this.globe.visible = mode === "globe";
+    if (this.atmosphere) this.atmosphere.visible = mode === "globe";
+    if (this.mapPlane) this.mapPlane.visible = mode === "iso";
+    if (this.clouds) this.clouds.visible = mode === "globe";
+    if (els.map2d) {
+      els.map2d.style.display = mode === "iso" ? "block" : "none";
+    }
+    this.attachControls(mode === "globe");
+    if (!skipResize) this.resize(this.size.width, this.size.height);
   }
 
   resize(width, height) {
     if (!this.renderer || !this.camera) return;
+    this.size = { width, height };
     this.renderer.setSize(width, height, false);
-    this.camera.aspect = width / height;
-    this.camera.updateProjectionMatrix();
+    if (this.cameraPerspective) {
+      this.cameraPerspective.aspect = width / height;
+      this.cameraPerspective.updateProjectionMatrix();
+    }
+    if (this.cameraIso) {
+      const aspect = width / height;
+      const frustum = this.isoFrustum;
+      this.cameraIso.left = (-frustum * aspect) / 2;
+      this.cameraIso.right = (frustum * aspect) / 2;
+      this.cameraIso.top = frustum / 2;
+      this.cameraIso.bottom = -frustum / 2;
+      this.cameraIso.updateProjectionMatrix();
+    }
+  }
+
+  positionForGeo(geo, altitude) {
+    if (this.mode === "iso") {
+      const plane = geoToPlane(geo, this.planeSize);
+      return { x: plane.x, y: altitude, z: plane.z };
+    }
+    return geoToSphere(geo, this.globeRadius + altitude);
+  }
+
+  projectToScreen(point) {
+    if (!this.camera) return null;
+    this.tmpVec.set(point.x, point.y, point.z);
+    if (this.mode === "globe") {
+      this.tmpVec2.set(point.x, point.y, point.z).normalize();
+      this.tmpVec3.copy(this.camera.position).normalize();
+      if (this.tmpVec2.dot(this.tmpVec3) <= 0) {
+        return { visible: false, x: 0, y: 0 };
+      }
+    }
+    this.tmpVec.project(this.camera);
+    const x = (this.tmpVec.x * 0.5 + 0.5) * this.size.width;
+    const y = (-this.tmpVec.y * 0.5 + 0.5) * this.size.height;
+    const visible =
+      this.tmpVec.z >= -1 &&
+      this.tmpVec.z <= 1 &&
+      x >= 0 &&
+      x <= this.size.width &&
+      y >= 0 &&
+      y <= this.size.height;
+    return { x, y, visible };
   }
 
   setInstances(points) {
@@ -368,15 +530,18 @@ class Renderer3D {
   render() {
     if (!this.renderer || !this.scene || !this.camera) return;
     if (els.map3d && els.map3d.style.display === "none") return;
+    if (this.clouds && this.mode === "globe") {
+      this.clouds.rotation.y += 0.00025;
+    }
     this.controls?.update();
     this.renderer.render(this.scene, this.camera);
   }
 }
 
 class PinLayer {
-  constructor(layerEl, board) {
+  constructor(layerEl, renderer) {
     this.layerEl = layerEl;
-    this.board = board;
+    this.renderer = renderer;
     this.nodes = new Map();
   }
 
@@ -396,9 +561,15 @@ class PinLayer {
       } else {
         node.textContent = pin.label;
       }
-      const transform = world.getComponent(entity, "Transform");
-      if (!transform) return;
-      const screen = this.board.worldToScreen(transform);
+      const geo = world.getComponent(entity, "Geo");
+      if (!geo || !this.renderer) return;
+      const pos = this.renderer.positionForGeo(geo, this.renderer.markerAltitude + 1.5);
+      const screen = this.renderer.projectToScreen(pos);
+      if (!screen || !screen.visible) {
+        node.style.opacity = "0";
+        return;
+      }
+      node.style.opacity = "1";
       node.style.transform = `translate(${screen.x}px, ${screen.y}px)`;
     });
   }
@@ -430,9 +601,10 @@ const hashToGeo = (id) => {
   return { lat, lon };
 };
 
-const geoToBoard = (geo, scale) => ({
-  x: geo.lon * scale,
-  y: -geo.lat * scale,
+const geoToPlane = (geo, plane) => ({
+  x: (geo.lon / 180) * (plane.width / 2),
+  y: 0,
+  z: (-geo.lat / 90) * (plane.height / 2),
 });
 
 const geoToSphere = (geo, radius) => {
@@ -505,7 +677,7 @@ const colorForIncident = (incident) => {
   }
 };
 
-const syncEntities = (payload, world, boardScale) => {
+const syncEntities = (payload, world) => {
   if (!payload) return;
   const seen = new Set();
   const index = world.entityIndex || new Map();
@@ -520,7 +692,6 @@ const syncEntities = (payload, world, boardScale) => {
     seen.add(entity);
     const geo = hashToGeo(data.id);
     world.addComponent(entity, "Geo", geo);
-    world.addComponent(entity, "Transform", geoToBoard(geo, boardScale));
     world.addComponent(entity, "Renderable", { color });
     world.addComponent(entity, "Meta", { kind: key.split(":")[0], data });
     if (pinLabel) {
@@ -588,22 +759,29 @@ const setupLayerToggles = () => {
   });
 };
 
+const setupViewToggles = (renderer3d) => {
+  document.querySelectorAll("[data-view-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const view = button.dataset.viewToggle;
+      if (!view) return;
+      renderer3d.setMode(view);
+    });
+  });
+};
+
 const main = () => {
   const bus = new EventBus();
   const world = new World();
   const board = new BoardView(els.board, els.map2d);
-  const boardScale = 2.2;
-
   board.resize();
-  board.bindInputs();
 
   const renderer3d = new Renderer3D(els.map3d);
   renderer3d.init();
 
-  const pinLayer = new PinLayer(els.pinLayer, board);
+  const pinLayer = new PinLayer(els.pinLayer, renderer3d);
 
   bus.on("entities:update", (payload) => {
-    syncEntities(payload, world, boardScale);
+    syncEntities(payload, world);
   });
 
   const renderLoop = (() => {
@@ -626,13 +804,13 @@ const main = () => {
       const points = entities3d.map((entity) => {
         const geo = world.getComponent(entity, "Geo");
         const renderable = world.getComponent(entity, "Renderable") || {};
-        const pos = geoToSphere(geo, renderer3d.globeRadius + 2.5);
+        const pos = renderer3d.positionForGeo(geo, renderer3d.markerAltitude);
         return { ...pos, color: renderable.color };
       });
       renderer3d.setInstances(points);
       renderer3d.render();
 
-      const entitiesPins = world.query(["Transform", "Pin"]);
+      const entitiesPins = world.query(["Geo", "Pin"]);
       pinLayer.syncPins(entitiesPins, world);
       pinLayer.prune(world);
 
@@ -640,9 +818,14 @@ const main = () => {
         els.runtimeStats.textContent = `Entities: ${entities3d.length} · FPS: ${fps}`;
       }
       if (els.cameraStats) {
-        els.cameraStats.textContent = `Zoom: ${board.zoom.toFixed(1)} · Offset: ${Math.round(
-          board.offset.x,
-        )},${Math.round(board.offset.y)}`;
+        if (renderer3d.mode === "iso" && renderer3d.camera?.isOrthographicCamera) {
+          els.cameraStats.textContent = `View: Iso · Zoom: ${renderer3d.camera.zoom.toFixed(
+            2,
+          )}`;
+        } else if (renderer3d.camera) {
+          const distance = renderer3d.camera.position.length();
+          els.cameraStats.textContent = `View: Globe · Dist: ${Math.round(distance)}`;
+        }
       }
 
       requestAnimationFrame(tick);
@@ -670,6 +853,7 @@ const main = () => {
   setInterval(refreshPartials, 12000);
   setInterval(() => fetchEntities(bus), 20000);
   setupDockToggles();
+  setupViewToggles(renderer3d);
   setupLayerToggles();
 
   requestAnimationFrame(renderLoop);
