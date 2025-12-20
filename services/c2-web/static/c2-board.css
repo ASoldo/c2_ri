@@ -59,12 +59,14 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.24em;
   color: inherit;
+  text-shadow: 0 2px 12px rgba(15, 23, 42, 0.55);
 }
 
 .brand h1 {
   margin: 0;
   font-size: 28px;
   letter-spacing: -0.03em;
+  text-shadow: 0 6px 18px rgba(15, 23, 42, 0.55);
 }
 
 .status-pill {
@@ -401,7 +403,7 @@ body {
   z-index: 10;
   width: 34px;
   height: 34px;
-  border-radius: 50%;
+  border-radius: 999px;
   border: none;
   background: var(--panel);
   box-shadow: var(--shadow);
@@ -416,18 +418,12 @@ body {
   left: -16px;
 }
 
-.dock.left[data-state="closed"] .dock-toggle {
-  width: 52px;
-  height: 64px;
-  right: -26px;
+.dock.left:not([data-state="closed"]) .dock-toggle {
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
 }
 
-.dock.right[data-state="closed"] .dock-toggle {
-  width: 52px;
-  height: 64px;
-  left: -26px;
+.dock.right:not([data-state="closed"]) .dock-toggle {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
 }
@@ -454,7 +450,14 @@ body {
   padding: 6px 10px;
   border-radius: 999px;
   font-size: 11px;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.pin.selected {
+  background: rgba(250, 204, 21, 0.95);
+  color: #1e293b;
+  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.4);
 }
 
 .pin.occluded {

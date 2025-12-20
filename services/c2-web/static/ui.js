@@ -436,14 +436,6 @@ class Renderer3D {
     this.mapPlane.visible = false;
     this.scene.add(this.mapPlane);
 
-    const geometry = new THREE.SphereGeometry(2.4, 8, 8);
-    const material = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      vertexColors: true,
-    });
-    this.instances = new THREE.InstancedMesh(geometry, material, 1);
-    this.scene.add(this.instances);
-
     this.axisHelper = new THREE.AxesHelper(this.globeRadius * 1.6);
     this.axisHelper.visible = true;
     this.axisHelper.setColors(0xff0000, 0x00ff00, 0x0000ff);
@@ -807,11 +799,25 @@ class Renderer3D {
 }
 
 class PinLayer {
-  constructor(layerEl, renderer, boundsEl) {
+  constructor(layerEl, renderer, boundsEl, popup) {
     this.layerEl = layerEl;
     this.renderer = renderer;
     this.boundsEl = boundsEl;
+    this.popup = popup;
     this.nodes = new Map();
+    this.bind();
+  }
+
+  bind() {
+    if (!this.layerEl) return;
+    this.layerEl.addEventListener("click", (event) => {
+      const pin = event.target.closest(".pin");
+      if (!pin) return;
+      event.stopPropagation();
+      const label = pin.dataset.label || pin.textContent || "Entity";
+      const entityId = pin.dataset.entity;
+      this.popup?.openFor(pin, entityId, label);
+    });
   }
 
   syncPins(entities, world) {
@@ -833,11 +839,13 @@ class PinLayer {
         node = document.createElement("div");
         node.className = "pin";
         node.textContent = pin.label;
+        node.dataset.entity = entity;
         this.layerEl.appendChild(node);
         this.nodes.set(entity, node);
       } else {
         node.textContent = pin.label;
       }
+      node.dataset.label = pin.label;
       const geo = world.getComponent(entity, "Geo");
       if (!geo || !this.renderer) return;
       const pos = this.renderer.positionForGeo(geo, this.renderer.markerAltitude + 1.5);
@@ -853,11 +861,14 @@ class PinLayer {
       if (screen.visible && withinBounds) {
         node.classList.remove("occluded");
         node.style.opacity = "1";
+        node.style.pointerEvents = "auto";
         node.style.transform = `translate(${screen.x}px, ${screen.y}px) translate(-50%, -50%)`;
       } else {
         node.classList.remove("occluded");
         node.style.opacity = "0";
+        node.style.pointerEvents = "none";
         node.style.transform = `translate(${clampedX}px, ${clampedY}px) translate(-50%, -50%)`;
+        if (this.popup?.active === node) this.popup.closeMenu();
       }
     });
   }
@@ -1093,7 +1104,11 @@ class EdgeLayer {
         this.closeMenu();
         return;
       }
-      this.openMenu(marker);
+      this.openFor(
+        marker,
+        marker.dataset.entity,
+        marker.dataset.label || marker.title || "Entity",
+      );
     });
   }
 
@@ -1103,14 +1118,19 @@ class EdgeLayer {
     if (this.popupBackdrop) this.popupBackdrop.classList.remove("active");
   }
 
-  openMenu(marker) {
+  openFor(node, entityId, label) {
     if (!this.popup || !this.popupBackdrop) return;
+    if (this.active === node) {
+      this.closeMenu();
+      return;
+    }
     this.closeMenu();
-    this.active = marker;
+    this.active = node;
     this.active.classList.add("selected");
-    const label = marker.dataset.label || marker.title || "Entity";
+    if (entityId) this.active.dataset.entity = entityId;
+    const safeLabel = label || "Entity";
     this.popup.innerHTML = `
-      <div class="edge-popup-title">${label}</div>
+      <div class="edge-popup-title">${safeLabel}</div>
       <div class="edge-popup-actions">
         <button data-action="focus">Focus</button>
         <button data-action="details">Details</button>
@@ -1273,7 +1293,6 @@ const main = () => {
   const renderer3d = new Renderer3D(els.map3d);
   renderer3d.init();
 
-  const pinLayer = new PinLayer(els.pinLayer, renderer3d, els.board);
   const edgeLayer = new EdgeLayer(els.edgeLayer, renderer3d, null, (action, entityId) => {
     if (action === "focus") {
       const entity = Number(entityId);
@@ -1284,6 +1303,7 @@ const main = () => {
     }
   });
   edgeLayer.bind();
+  const pinLayer = new PinLayer(els.pinLayer, renderer3d, els.board, edgeLayer);
 
   bus.on("entities:update", (payload) => {
     syncEntities(payload, world);
