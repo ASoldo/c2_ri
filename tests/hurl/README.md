@@ -16,6 +16,20 @@ These scripts validate the HTTP API surface (health, CRUD, protobuf, streams, MC
 hurl --variables-file tests/hurl/c2.env tests/hurl/*.hurl
 ```
 
+## Seed Data (Dev)
+
+Seed script inserts missions, assets, and incidents without deleting them:
+
+```sh
+hurl --variables-file tests/hurl/c2.env tests/hurl/90_seed_data.hurl
+```
+
+If you are hitting the cluster over HTTPS with a self-signed cert:
+
+```sh
+hurl --insecure --variables-file tests/hurl/c2.env tests/hurl/90_seed_data.hurl
+```
+
 ## Notes
 
 - WebSocket and SSE tests validate headers and status only; payload streaming is tested separately.

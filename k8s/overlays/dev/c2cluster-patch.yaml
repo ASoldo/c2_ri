@@ -20,6 +20,21 @@ spec:
         serviceType: NodePort
     web:
       replicas: 1
+      env:
+        - name: C2_API_BASE_URL
+          value: "http://c2-api:8080"
+        - name: C2_UI_TENANT_ID
+          value: "00000000-0000-0000-0000-000000000001"
+        - name: C2_UI_USER_ID
+          value: "00000000-0000-0000-0000-000000000002"
+        - name: C2_UI_ROLES
+          value: "system_admin"
+        - name: C2_UI_PERMISSIONS
+          value: "view_missions,edit_missions,dispatch_assets,view_incidents,ingest_data,access_classified,admin"
+        - name: C2_UI_CLEARANCE
+          value: "top_secret"
+        - name: C2_UI_POLL_INTERVAL_MS
+          value: "2000"
     mcp:
       replicas: 1
     worker:

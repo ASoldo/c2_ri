@@ -7,7 +7,13 @@
     <h1>C2 Walaris</h1>
   </div>
   <div class="status-pill">
-    <span class="status-dot"></span>
+    <span class="status-dot" id="api-dot"></span>
+    <span id="api-status">API: booting</span>
+    <span class="status-sep">|</span>
+    <span id="stream-status">SSE: offline</span>
+    <span class="status-sep">|</span>
+    <span id="ws-status">WS: offline</span>
+    <span class="status-sep">|</span>
     {{ service_name }} · {{ environment | upper }}
   </div>
 </header>
@@ -16,17 +22,20 @@
   <section class="card">
     <h2>Live Mission Feed</h2>
     <p>Streaming mission state changes, asset health, and command approvals.</p>
-    <div class="highlight">Awaiting telemetry link</div>
+    <div class="highlight" id="mission-feed">Awaiting telemetry link</div>
+    <div class="meta" id="mission-meta">Connect to live services to populate panels.</div>
   </section>
   <section class="card">
     <h2>Priority Incidents</h2>
     <p>First responder incidents and defense escalations are routed here.</p>
-    <div class="highlight">0 active escalations</div>
+    <div class="highlight" id="incident-count">0 active escalations</div>
+    <div class="meta" id="incident-meta">No incident telemetry yet.</div>
   </section>
   <section class="card">
     <h2>Asset Readiness</h2>
     <p>Quick view of active units and their readiness posture.</p>
-    <div class="highlight">24 ready · 3 degraded</div>
+    <div class="highlight" id="asset-readiness">24 ready · 3 degraded</div>
+    <div class="meta" id="asset-meta">Telemetry link pending.</div>
   </section>
 </main>
 
