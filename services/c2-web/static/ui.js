@@ -72,6 +72,7 @@ const buildTileConfig = () => {
       proxy,
       minZoom: Number.isFinite(provider.minZoom) ? provider.minZoom : 0,
       maxZoom: Number.isFinite(provider.maxZoom) ? provider.maxZoom : 19,
+      zoomBias: Number.isFinite(provider.zoomBias) ? provider.zoomBias : 0,
     };
   });
   const order = Array.isArray(config.order)
@@ -416,6 +417,7 @@ class TileManager {
     this.queue = [];
     this.inFlight = 0;
     this.desiredKeys = new Set();
+    this.forceUpdate = false;
     this.maxInFlight = 8;
     this.provider = null;
     this.maxTiles = TILE_CONFIG.maxTiles;
@@ -448,6 +450,10 @@ class TileManager {
     this.clear();
   }
 
+  markDirty() {
+    this.forceUpdate = true;
+  }
+
   clear() {
     for (const tile of this.tiles.values()) {
       tile.mesh?.removeFromParent();
@@ -459,15 +465,22 @@ class TileManager {
     this.pending.clear();
   }
 
-  pickZoom(camera) {
+  pickZoom(camera, size) {
     if (!this.provider || !camera?.isPerspectiveCamera) return this.provider?.minZoom ?? 0;
+    if (!size?.width || !size?.height) return this.provider?.minZoom ?? 0;
     const distance = camera.position.length();
-    const ratio = Math.max(
-      0,
-      Math.min(1, (this.baseDistance * 1.2 - distance) / (this.baseDistance * 0.9)),
-    );
-    const range = Math.max(0, this.provider.maxZoom - this.provider.minZoom);
-    const zoom = Math.round(this.provider.minZoom + range * ratio);
+    const depth = Math.max(1, distance - this.radius);
+    const fovV = THREE.MathUtils.degToRad(camera.fov);
+    const fovH = 2 * Math.atan(Math.tan(fovV / 2) * camera.aspect);
+    const visibleWidth = 2 * depth * Math.tan(fovH / 2);
+    const visibleHeight = 2 * depth * Math.tan(fovV / 2);
+    const degWidth = (visibleWidth / this.radius) * (180 / Math.PI);
+    const degHeight = (visibleHeight / this.radius) * (180 / Math.PI);
+    const tileDegWidth = degWidth * (256 / size.width);
+    const tileDegHeight = degHeight * (256 / size.height);
+    const tileDeg = Math.max(tileDegWidth, tileDegHeight);
+    let zoom = Math.round(Math.log2(360 / Math.max(0.0001, tileDeg)));
+    zoom += this.provider.zoomBias || 0;
     return Math.min(this.provider.maxZoom, Math.max(this.provider.minZoom, zoom));
   }
 
@@ -476,17 +489,24 @@ class TileManager {
     const now = performance.now();
     const dir = this.tmpVec.copy(camera.position).normalize();
     const distance = camera.position.length();
+    let zoom = this.pickZoom(camera, size);
+    const zoomChanged = zoom !== this.zoom;
+    const distanceDelta = Math.abs(distance - this.lastDistance);
+    const minDistanceDelta = Math.max(0.08, distance * 0.0015);
+    const interval = zoom >= 16 ? 120 : 240;
     if (
-      now - this.lastUpdate < 320 &&
+      !this.forceUpdate &&
+      !zoomChanged &&
+      now - this.lastUpdate < interval &&
       dir.dot(this.lastDirection) > 0.999 &&
-      Math.abs(distance - this.lastDistance) < 0.4
+      distanceDelta < minDistanceDelta
     ) {
       return;
     }
+    this.forceUpdate = false;
     this.lastUpdate = now;
     this.lastDirection.copy(dir);
     this.lastDistance = distance;
-    let zoom = this.pickZoom(camera);
     let tileSet = this.computeVisibleTiles(camera, size, zoom);
     while (tileSet.keys.length > this.maxTiles && zoom > this.provider.minZoom) {
       zoom -= 1;
@@ -494,6 +514,7 @@ class TileManager {
     }
     if (zoom !== this.zoom) {
       this.zoom = zoom;
+      this.clear();
     }
     const limitedKeys =
       tileSet.keys.length > this.maxTiles
@@ -505,8 +526,6 @@ class TileManager {
     for (const entry of limitedKeys) {
       const cached = this.tiles.get(entry.key);
       if (cached?.mesh) {
-        cached.mesh.visible = true;
-        cached.visible = true;
         cached.lastUsed = now;
         continue;
       }
@@ -516,9 +535,12 @@ class TileManager {
     this.queue = queue;
     this.drainQueue();
     for (const [key, tile] of this.tiles.entries()) {
-      if (!desired.has(key) && tile.mesh) {
-        tile.mesh.visible = false;
-        tile.visible = false;
+      if (!tile.mesh) continue;
+      const isDesired = desired.has(key);
+      tile.mesh.visible = isDesired;
+      tile.visible = isDesired;
+      if (isDesired) {
+        tile.lastUsed = now;
       }
     }
     this.evictCache(now);
@@ -554,60 +576,45 @@ class TileManager {
     }
   }
 
+  pickTileRadius(camera, zoom) {
+    if (!camera?.isPerspectiveCamera) return 4;
+    const distance = camera.position.length();
+    const ratio = this.baseDistance
+      ? Math.max(0.25, Math.min(1.2, distance / this.baseDistance))
+      : 1;
+    const zoomBias = this.provider ? Math.max(0, this.provider.maxZoom - zoom) : 0;
+    const radius = Math.round(2 + ratio * 2 + Math.min(2, zoomBias * 0.12));
+    return Math.max(2, Math.min(6, radius));
+  }
+
   computeVisibleTiles(camera, size, zoom) {
-    const samples = [
-      [-1, -1],
-      [1, -1],
-      [-1, 1],
-      [1, 1],
-      [0, 0],
-      [0, -0.5],
-      [0, 0.5],
-      [-0.5, 0],
-      [0.5, 0],
-    ];
-    const geos = samples
-      .map(([x, y]) => this.sampleGeo(camera, x, y))
-      .filter(Boolean);
-    if (!geos.length) {
+    const centerGeo = this.sampleGeo(camera, 0, 0);
+    if (!centerGeo) {
       return { keys: [], tiles: new Map() };
     }
-    const latMin = Math.max(-85, Math.min(...geos.map((g) => g.lat)));
-    const latMax = Math.min(85, Math.max(...geos.map((g) => g.lat)));
-    const centerGeo = this.sampleGeo(camera, 0, 0) || geos[0];
     const center = {
       x: tileXForLon(centerGeo.lon, zoom),
       y: tileYForLat(centerGeo.lat, zoom),
     };
-    const lonStats = this.computeLonRange(geos.map((g) => g.lon));
-    const yMin = Math.max(0, tileYForLat(latMax, zoom) - 1);
-    const yMax = Math.min(2 ** zoom - 1, tileYForLat(latMin, zoom) + 1);
+    const radius = this.pickTileRadius(camera, zoom);
     const n = 2 ** zoom;
-    const xMin = tileXForLon(lonStats.min, zoom);
-    const xMax = tileXForLon(lonStats.max, zoom);
-    const ranges =
-      xMin <= xMax
-        ? [[xMin, xMax]]
-        : [
-            [0, xMax],
-            [xMin, n - 1],
-          ];
     const tiles = new Map();
     const keys = [];
-    ranges.forEach(([start, end]) => {
-      for (let x = start - 1; x <= end + 1; x += 1) {
-        if (x < 0 || x >= n) continue;
-        for (let y = yMin; y <= yMax; y += 1) {
-          const key = `${zoom}/${x}/${y}`;
-          if (tiles.has(key)) continue;
-          const bounds = tileBounds(x, y, zoom);
-          const tile = { key, x, y, zoom, bounds };
-          tiles.set(key, tile);
-          const dist = (x - center.x) ** 2 + (y - center.y) ** 2;
-          keys.push({ key, dist, tile });
-        }
+    for (let dx = -radius; dx <= radius; dx += 1) {
+      const rawX = center.x + dx;
+      const wrappedX = ((rawX % n) + n) % n;
+      for (let dy = -radius; dy <= radius; dy += 1) {
+        const y = center.y + dy;
+        if (y < 0 || y >= n) continue;
+        const key = `${zoom}/${wrappedX}/${y}`;
+        if (tiles.has(key)) continue;
+        const bounds = tileBounds(wrappedX, y, zoom);
+        const tile = { key, x: wrappedX, y, zoom, bounds };
+        tiles.set(key, tile);
+        const dist = dx * dx + dy * dy;
+        keys.push({ key, dist, tile });
       }
-    });
+    }
     keys.sort((a, b) => a.dist - b.dist);
     return { keys, tiles };
   }
@@ -630,6 +637,38 @@ class TileManager {
       max = Math.max(max, delta);
     });
     return { min: mean + min, max: mean + max };
+  }
+
+  sampleHorizon(camera) {
+    if (!camera?.isPerspectiveCamera) return [];
+    const distance = camera.position.length();
+    if (!Number.isFinite(distance) || distance <= this.radius) return [];
+    const horizonAngle = Math.acos(this.radius / distance);
+    const fovV = THREE.MathUtils.degToRad(camera.fov);
+    const fovH = 2 * Math.atan(Math.tan(fovV / 2) * camera.aspect);
+    const cornerAngle = Math.atan(
+      Math.hypot(Math.tan(fovV / 2), Math.tan(fovH / 2)),
+    );
+    const angle = Math.min(horizonAngle, cornerAngle * 1.15);
+    const center = camera.position.clone().normalize();
+    const up = camera.up.clone().normalize();
+    const right = new THREE.Vector3().crossVectors(up, center).normalize();
+    const upOrtho = new THREE.Vector3().crossVectors(center, right).normalize();
+    const geos = [];
+    const segments = 18;
+    for (let i = 0; i < segments; i += 1) {
+      const t = (i / segments) * TWO_PI;
+      const dir = new THREE.Vector3()
+        .copy(center)
+        .multiplyScalar(Math.cos(angle))
+        .addScaledVector(right, Math.sin(angle) * Math.cos(t))
+        .addScaledVector(upOrtho, Math.sin(angle) * Math.sin(t));
+      if (this.rotationY) {
+        dir.applyAxisAngle(AXIS_Y, -this.rotationY);
+      }
+      geos.push(sphereToGeoTile(dir));
+    }
+    return geos;
   }
 
   sampleGeo(camera, ndcX, ndcY) {
@@ -702,7 +741,8 @@ class TileManager {
         material.polygonOffsetUnits = -3;
         const mesh = new THREE.Mesh(geometry, material);
         mesh.renderOrder = 10;
-        mesh.frustumCulled = false;
+        geometry.computeBoundingSphere();
+        mesh.frustumCulled = true;
         const visible = this.desiredKeys?.has(tile.key);
         mesh.visible = Boolean(visible);
         this.group.add(mesh);
@@ -813,6 +853,12 @@ class Renderer3D {
     this.showClouds = true;
     this.showAxes = true;
     this.showGrid = true;
+    this.baseRotateSpeed = 0.85;
+    this.crosshairRadius = 18;
+    this.crosshairActive = false;
+    this.crosshairPointerId = null;
+    this.crosshairLast = { x: 0, y: 0 };
+    this.crosshairHandlers = null;
     this.trails = [];
     this.lastCameraVec = null;
     this.lastTrailAt = 0;
@@ -825,6 +871,7 @@ class Renderer3D {
     this.tmpVec3 = new THREE.Vector3();
     this.tmpAxis = new THREE.Vector3();
     this.tmpQuat = new THREE.Quaternion();
+    this.tmpSpherical = new THREE.Spherical();
   }
 
   init() {
@@ -987,7 +1034,91 @@ class Renderer3D {
       this.controls.maxZoom = 2.4;
     }
     this.lastCameraVec = this.camera.position.clone().normalize();
-    this.controls.addEventListener("change", () => this.recordCameraTrail());
+    this.controls.addEventListener("change", () => {
+      this.recordCameraTrail();
+      this.tileManager?.markDirty();
+    });
+    this.attachCrosshairControls(allowRotate);
+  }
+
+  attachCrosshairControls(allowRotate) {
+    if (!this.canvas) return;
+    this.detachCrosshairControls();
+    const onPointerDown = (event) => {
+      if (!allowRotate || event.button !== 0) return;
+      const rect = this.canvas.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const dx = event.clientX - cx;
+      const dy = event.clientY - cy;
+      if (Math.hypot(dx, dy) > this.crosshairRadius) return;
+      this.crosshairActive = true;
+      this.crosshairPointerId = event.pointerId;
+      this.crosshairLast = { x: event.clientX, y: event.clientY };
+      if (this.controls) this.controls.enabled = false;
+      if (this.canvas.setPointerCapture) {
+        this.canvas.setPointerCapture(event.pointerId);
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const onPointerMove = (event) => {
+      if (!this.crosshairActive || event.pointerId !== this.crosshairPointerId) return;
+      const dx = event.clientX - this.crosshairLast.x;
+      const dy = event.clientY - this.crosshairLast.y;
+      this.crosshairLast = { x: event.clientX, y: event.clientY };
+      this.rotateFromCrosshair(dx, dy);
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const onPointerUp = (event) => {
+      if (event.pointerId !== this.crosshairPointerId) return;
+      this.crosshairActive = false;
+      this.crosshairPointerId = null;
+      if (this.controls) this.controls.enabled = true;
+      if (this.canvas.releasePointerCapture) {
+        this.canvas.releasePointerCapture(event.pointerId);
+      }
+    };
+    this.crosshairHandlers = { onPointerDown, onPointerMove, onPointerUp };
+    this.canvas.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+  }
+
+  detachCrosshairControls() {
+    if (!this.crosshairHandlers || !this.canvas) return;
+    const { onPointerDown, onPointerMove, onPointerUp } = this.crosshairHandlers;
+    this.canvas.removeEventListener("pointerdown", onPointerDown);
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
+    window.removeEventListener("pointercancel", onPointerUp);
+    this.crosshairHandlers = null;
+  }
+
+  rotateFromCrosshair(dx, dy) {
+    if (!this.camera || !this.controls) return;
+    const target = this.controls.target || new THREE.Vector3();
+    const distance = this.camera.position.distanceTo(target);
+    const ratio = this.defaultDistance
+      ? Math.max(0.15, Math.min(1, distance / this.defaultDistance))
+      : 1;
+    const rotateSpeed = this.baseRotateSpeed * ratio;
+    const scale = (2 * Math.PI * rotateSpeed) / Math.max(1, this.size.height);
+    const thetaDelta = -dx * scale;
+    const phiDelta = dy * scale;
+    this.tmpVec.copy(this.camera.position).sub(target);
+    this.tmpSpherical.setFromVector3(this.tmpVec);
+    this.tmpSpherical.theta += thetaDelta;
+    this.tmpSpherical.phi += phiDelta;
+    const EPS = 1e-5;
+    this.tmpSpherical.phi = Math.max(EPS, Math.min(Math.PI - EPS, this.tmpSpherical.phi));
+    this.tmpVec.setFromSpherical(this.tmpSpherical).add(target);
+    this.camera.position.copy(this.tmpVec);
+    this.camera.lookAt(target);
+    this.controls.update();
+    this.recordCameraTrail();
   }
 
   setMode(mode, skipResize = false) {
@@ -1100,6 +1231,7 @@ class Renderer3D {
     }
     this.updateTrails();
     this.updateFocus();
+    this.updateRotateSpeed();
     this.controls?.update();
     if (this.tileManager && this.tileProvider && this.mode === "globe") {
       this.tileManager.update(this.camera, this.size);
@@ -1134,6 +1266,16 @@ class Renderer3D {
     if (this.tileManager) {
       this.tileManager.setBaseDistance(distance);
     }
+  }
+
+  updateRotateSpeed() {
+    if (!this.controls || !this.camera) return;
+    if (!this.camera.isPerspectiveCamera) return;
+    const distance = this.camera.position.length();
+    const ratio = this.defaultDistance
+      ? Math.max(0.15, Math.min(1.2, distance / this.defaultDistance))
+      : 1;
+    this.controls.rotateSpeed = this.baseRotateSpeed * ratio;
   }
 
   setLightingMode(mode) {
