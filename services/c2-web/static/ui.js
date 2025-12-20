@@ -79,11 +79,16 @@ const buildTileConfig = () => {
     : Object.keys(normalized);
   const saved = window.localStorage?.getItem?.("c2.tileProvider");
   const activeProvider = config.activeProvider || saved || order[0] || null;
+  const maxTiles = Number.isFinite(config.maxTiles) ? config.maxTiles : 220;
+  const maxCache = Number.isFinite(config.maxCache)
+    ? config.maxCache
+    : Math.max(256, maxTiles * 3);
   return {
     providers: normalized,
     order,
     activeProvider,
-    maxTiles: Number.isFinite(config.maxTiles) ? config.maxTiles : 220,
+    maxTiles,
+    maxCache,
   };
 };
 
@@ -410,9 +415,11 @@ class TileManager {
     this.pending = new Set();
     this.queue = [];
     this.inFlight = 0;
+    this.desiredKeys = new Set();
     this.maxInFlight = 8;
     this.provider = null;
     this.maxTiles = TILE_CONFIG.maxTiles;
+    this.maxCache = TILE_CONFIG.maxCache;
     this.baseDistance = 1;
     this.zoom = null;
     this.lastUpdate = 0;
@@ -487,25 +494,63 @@ class TileManager {
     }
     if (zoom !== this.zoom) {
       this.zoom = zoom;
-      this.clear();
     }
-    const limitedKeys = tileSet.keys.slice(0, this.maxTiles);
+    const limitedKeys =
+      tileSet.keys.length > this.maxTiles
+        ? tileSet.keys.slice(0, this.maxTiles)
+        : tileSet.keys;
     const desired = new Set(limitedKeys.map((entry) => entry.key));
+    this.desiredKeys = desired;
     const queue = [];
     for (const entry of limitedKeys) {
-      if (this.tiles.has(entry.key) || this.pending.has(entry.key)) continue;
+      const cached = this.tiles.get(entry.key);
+      if (cached?.mesh) {
+        cached.mesh.visible = true;
+        cached.visible = true;
+        cached.lastUsed = now;
+        continue;
+      }
+      if (this.pending.has(entry.key)) continue;
       queue.push(entry.tile);
     }
     this.queue = queue;
     this.drainQueue();
     for (const [key, tile] of this.tiles.entries()) {
-      if (!desired.has(key)) {
-        tile.mesh?.removeFromParent();
-        tile.texture?.dispose();
-        tile.geometry?.dispose();
-        tile.material?.dispose();
-        this.tiles.delete(key);
+      if (!desired.has(key) && tile.mesh) {
+        tile.mesh.visible = false;
+        tile.visible = false;
       }
+    }
+    this.evictCache(now);
+  }
+
+  evictCache(now) {
+    if (this.tiles.size <= this.maxCache) return;
+    const hidden = [];
+    const visible = [];
+    for (const [key, tile] of this.tiles.entries()) {
+      const entry = {
+        key,
+        lastUsed: Number.isFinite(tile.lastUsed) ? tile.lastUsed : 0,
+        tile,
+      };
+      if (tile.mesh?.visible) {
+        visible.push(entry);
+      } else {
+        hidden.push(entry);
+      }
+    }
+    hidden.sort((a, b) => a.lastUsed - b.lastUsed);
+    visible.sort((a, b) => a.lastUsed - b.lastUsed);
+    const candidates = hidden.concat(visible);
+    for (const entry of candidates) {
+      if (this.tiles.size <= this.maxCache) break;
+      const tile = entry.tile;
+      tile.mesh?.removeFromParent();
+      tile.texture?.dispose();
+      tile.geometry?.dispose();
+      tile.material?.dispose();
+      this.tiles.delete(entry.key);
     }
   }
 
@@ -634,6 +679,7 @@ class TileManager {
     this.loader.load(
       url,
       (texture) => {
+        const now = performance.now();
         texture.colorSpace = THREE.SRGBColorSpace;
         texture.flipY = false;
         texture.generateMipmaps = false;
@@ -657,12 +703,16 @@ class TileManager {
         const mesh = new THREE.Mesh(geometry, material);
         mesh.renderOrder = 10;
         mesh.frustumCulled = false;
+        const visible = this.desiredKeys?.has(tile.key);
+        mesh.visible = Boolean(visible);
         this.group.add(mesh);
         this.tiles.set(tile.key, {
           mesh,
           texture,
           geometry,
           material,
+          visible: Boolean(visible),
+          lastUsed: now,
         });
         this.pending.delete(tile.key);
         this.inFlight = Math.max(0, this.inFlight - 1);
