@@ -853,9 +853,13 @@ class Renderer3D {
     this.showGrid = true;
     this.baseRotateSpeed = 0.85;
     this.crosshairRadius = 18;
+    this.crosshairInputRadius = 120;
+    this.crosshairDeadzone = 0.1;
     this.crosshairActive = false;
     this.crosshairPointerId = null;
+    this.crosshairCenter = { x: 0, y: 0 };
     this.crosshairLast = { x: 0, y: 0 };
+    this.crosshairVector = new THREE.Vector2();
     this.crosshairHandlers = null;
     this.trails = [];
     this.lastCameraVec = null;
@@ -977,7 +981,7 @@ class Renderer3D {
 
     this.tileManager = new TileManager(
       this.scene,
-      this.globeRadius + 1.2,
+      this.globeRadius + 0.08,
       this.renderer,
       this.globeRotation,
     );
@@ -1052,7 +1056,8 @@ class Renderer3D {
       if (Math.hypot(dx, dy) > this.crosshairRadius) return;
       this.crosshairActive = true;
       this.crosshairPointerId = event.pointerId;
-      this.crosshairLast = { x: event.clientX, y: event.clientY };
+      this.crosshairCenter = { x: cx, y: cy };
+      this.updateCrosshairInput(event.clientX, event.clientY);
       if (this.controls) this.controls.enabled = false;
       if (this.canvas.setPointerCapture) {
         this.canvas.setPointerCapture(event.pointerId);
@@ -1062,10 +1067,7 @@ class Renderer3D {
     };
     const onPointerMove = (event) => {
       if (!this.crosshairActive || event.pointerId !== this.crosshairPointerId) return;
-      const dx = event.clientX - this.crosshairLast.x;
-      const dy = event.clientY - this.crosshairLast.y;
-      this.crosshairLast = { x: event.clientX, y: event.clientY };
-      this.rotateFromCrosshair(dx, dy);
+      this.updateCrosshairInput(event.clientX, event.clientY);
       event.preventDefault();
       event.stopPropagation();
     };
@@ -1073,6 +1075,7 @@ class Renderer3D {
       if (event.pointerId !== this.crosshairPointerId) return;
       this.crosshairActive = false;
       this.crosshairPointerId = null;
+      this.crosshairVector.set(0, 0);
       if (this.controls) this.controls.enabled = true;
       if (this.canvas.releasePointerCapture) {
         this.canvas.releasePointerCapture(event.pointerId);
@@ -1085,6 +1088,19 @@ class Renderer3D {
     window.addEventListener("pointercancel", onPointerUp);
   }
 
+  updateCrosshairInput(clientX, clientY) {
+    const dx = clientX - this.crosshairCenter.x;
+    const dy = clientY - this.crosshairCenter.y;
+    const radius = Math.max(24, this.crosshairInputRadius);
+    const len = Math.hypot(dx, dy);
+    if (len < 0.001) {
+      this.crosshairVector.set(0, 0);
+      return;
+    }
+    const scale = len > radius ? radius / len : 1;
+    this.crosshairVector.set((dx * scale) / radius, (dy * scale) / radius);
+  }
+
   detachCrosshairControls() {
     if (!this.crosshairHandlers || !this.canvas) return;
     const { onPointerDown, onPointerMove, onPointerUp } = this.crosshairHandlers;
@@ -1095,12 +1111,25 @@ class Renderer3D {
     this.crosshairHandlers = null;
   }
 
+  updateCrosshairDrive(deltaMs) {
+    if (!this.crosshairActive || !this.camera || !this.controls) return;
+    const mag = this.crosshairVector.length();
+    if (mag <= this.crosshairDeadzone) return;
+    const strength = Math.min(1, (mag - this.crosshairDeadzone) / (1 - this.crosshairDeadzone));
+    const rotateSpeed = this.getRotateSpeed();
+    const rate = rotateSpeed * 2.4;
+    const scale = (deltaMs / 1000) * rate * strength;
+    const thetaDelta = this.crosshairVector.x * scale;
+    const phiDelta = this.crosshairVector.y * scale;
+    this.applySphericalDelta(thetaDelta, phiDelta);
+  }
+
   getRotateSpeed() {
     if (!this.camera?.isPerspectiveCamera) return this.baseRotateSpeed;
     const distance = this.camera.position.length();
     const ratio = this.defaultDistance ? distance / this.defaultDistance : 1;
-    const eased = Math.max(0.04, Math.min(1.1, ratio));
-    return this.baseRotateSpeed * eased * eased;
+    const eased = Math.max(0.02, Math.min(1.1, ratio));
+    return this.baseRotateSpeed * eased * eased * eased;
   }
 
   rotateFromCrosshair(dx, dy) {
@@ -1110,6 +1139,11 @@ class Renderer3D {
     const scale = (2 * Math.PI * rotateSpeed) / Math.max(1, this.size.height);
     const thetaDelta = -dx * scale;
     const phiDelta = dy * scale;
+    this.applySphericalDelta(thetaDelta, phiDelta);
+  }
+
+  applySphericalDelta(thetaDelta, phiDelta) {
+    const target = this.controls?.target || new THREE.Vector3();
     this.tmpVec.copy(this.camera.position).sub(target);
     this.tmpSpherical.setFromVector3(this.tmpVec);
     this.tmpSpherical.theta += thetaDelta;
@@ -1119,7 +1153,7 @@ class Renderer3D {
     this.tmpVec.setFromSpherical(this.tmpSpherical).add(target);
     this.camera.position.copy(this.tmpVec);
     this.camera.lookAt(target);
-    this.controls.update();
+    this.controls?.update();
     this.recordCameraTrail();
   }
 
@@ -1225,7 +1259,7 @@ class Renderer3D {
     }
   }
 
-  render() {
+  render(deltaMs = 16) {
     if (!this.renderer || !this.scene || !this.camera) return;
     if (els.map3d && els.map3d.style.display === "none") return;
     if (this.clouds && this.mode === "globe" && this.showClouds) {
@@ -1234,6 +1268,7 @@ class Renderer3D {
     this.updateTrails();
     this.updateFocus();
     this.updateRotateSpeed();
+    this.updateCrosshairDrive(deltaMs);
     this.controls?.update();
     if (this.tileManager && this.tileProvider && this.mode === "globe") {
       this.tileManager.update(this.camera, this.size);
@@ -2023,17 +2058,20 @@ const main = () => {
   setupGlobeControls(renderer3d);
 
   const renderLoop = (() => {
-    let lastFrame = performance.now();
+    let lastFpsSample = performance.now();
+    let lastTick = performance.now();
     let frameCount = 0;
     let fps = 0;
 
     const tick = () => {
       const now = performance.now();
+      const delta = Math.min(64, now - lastTick);
+      lastTick = now;
       frameCount += 1;
-      if (now - lastFrame >= 1000) {
-        fps = Math.round((frameCount * 1000) / (now - lastFrame));
+      if (now - lastFpsSample >= 1000) {
+        fps = Math.round((frameCount * 1000) / (now - lastFpsSample));
         frameCount = 0;
-        lastFrame = now;
+        lastFpsSample = now;
       }
 
       board.drawGrid();
@@ -2046,7 +2084,7 @@ const main = () => {
         return { ...pos, color: renderable.color };
       });
       renderer3d.setInstances(points);
-      renderer3d.render();
+      renderer3d.render(delta);
 
       const entitiesPins = world.query(["Geo", "Pin"]);
       pinLayer.syncPins(entitiesPins, world);
