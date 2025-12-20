@@ -1104,13 +1104,35 @@ class EdgeLayer {
     if (!menu) return;
     const rect = marker.getBoundingClientRect();
     const menuRect = menu.getBoundingClientRect();
-    let left = rect.left + rect.width / 2 - menuRect.width / 2;
-    let top = rect.bottom + 8;
-    if (top + menuRect.height > window.innerHeight - 8) {
-      top = rect.top - menuRect.height - 8;
+    const pad = 8;
+    const edge = 56;
+    const viewportW = window.innerWidth;
+    const viewportH = window.innerHeight;
+    const onLeft = rect.left < edge;
+    const onRight = rect.right > viewportW - edge;
+    const onTop = rect.top < edge;
+    const onBottom = rect.bottom > viewportH - edge;
+    let left;
+    let top;
+
+    if (onLeft) {
+      left = rect.right + pad;
+    } else if (onRight) {
+      left = rect.left - menuRect.width - pad;
+    } else {
+      left = rect.left + rect.width / 2 - menuRect.width / 2;
     }
-    left = Math.max(8, Math.min(left, window.innerWidth - menuRect.width - 8));
-    top = Math.max(8, Math.min(top, window.innerHeight - menuRect.height - 8));
+
+    if (onTop) {
+      top = rect.bottom + pad;
+    } else if (onBottom) {
+      top = rect.top - menuRect.height - pad;
+    } else {
+      top = rect.top + rect.height / 2 - menuRect.height / 2;
+    }
+
+    left = Math.max(pad, Math.min(left, viewportW - menuRect.width - pad));
+    top = Math.max(pad, Math.min(top, viewportH - menuRect.height - pad));
     menu.style.left = `${left}px`;
     menu.style.top = `${top}px`;
   }
