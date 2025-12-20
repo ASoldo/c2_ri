@@ -412,6 +412,9 @@ class TileManager {
     this.provider = provider || null;
     this.zoom = null;
     this.group.visible = Boolean(this.provider);
+    if (this.loader) {
+      this.loader.crossOrigin = this.provider?.proxy ? null : "anonymous";
+    }
     this.clear();
   }
 

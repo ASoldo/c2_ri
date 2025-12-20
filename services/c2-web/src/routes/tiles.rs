@@ -56,6 +56,8 @@ pub async fn tile(
         builder.insert_header((actix_header::CONTENT_TYPE, content_type));
     }
     Ok(builder
+        .insert_header(("Access-Control-Allow-Origin", "*"))
+        .insert_header(("Cross-Origin-Resource-Policy", "cross-origin"))
         .insert_header(("Cache-Control", "public, max-age=3600"))
         .body(bytes))
 }
