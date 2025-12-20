@@ -185,6 +185,12 @@ body {
   box-shadow: var(--shadow);
 }
 
+.footer-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .hud-title {
   font-weight: 700;
   text-transform: uppercase;
@@ -265,6 +271,12 @@ body {
   cursor: pointer;
 }
 
+.panel-actions button[aria-pressed="true"],
+.panel-actions button[data-active="true"] {
+  border-color: rgba(14, 116, 144, 0.6);
+  background: rgba(14, 116, 144, 0.12);
+}
+
 .dock-toggle {
   position: absolute;
   top: 22px;
@@ -286,29 +298,33 @@ body {
   left: -16px;
 }
 
+.dock.left[data-state="closed"] .dock-toggle {
+  width: 52px;
+  height: 64px;
+  right: -26px;
+  border-radius: 0 999px 999px 0;
+}
+
+.dock.right[data-state="closed"] .dock-toggle {
+  width: 52px;
+  height: 64px;
+  left: -26px;
+  border-radius: 999px 0 0 999px;
+}
+
 .bottom-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 12px 24px 18px;
   z-index: 9;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
 .osm-attrib {
   font-size: 11px;
   color: #64748b;
-}
-
-.timeline {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  background: var(--panel);
-  border-radius: 16px;
-  padding: 10px 16px;
-  border: 1px solid var(--panel-border);
-  box-shadow: var(--shadow);
-  font-size: 12px;
 }
 
 .layer-toggle {
@@ -334,6 +350,12 @@ body {
   border-radius: 999px;
   font-size: 11px;
   pointer-events: none;
+}
+
+.pin.edge {
+  background: rgba(14, 116, 144, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  box-shadow: 0 0 12px rgba(14, 116, 144, 0.35);
 }
 
 @media (max-width: 1100px) {

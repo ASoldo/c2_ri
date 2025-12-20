@@ -292,6 +292,16 @@ class Renderer3D {
     this.isoFrustum = this.planeSize.height * 1.4;
     this.markerAltitude = 3.0;
     this.clouds = null;
+    this.axisHelper = null;
+    this.dayMap = null;
+    this.nightMap = null;
+    this.normalMap = null;
+    this.specularMap = null;
+    this.cloudsMap = null;
+    this.globeMaterial = null;
+    this.lightingMode = "day";
+    this.showClouds = true;
+    this.showAxes = true;
     this.tmp = new THREE.Object3D();
     this.tmpVec = new THREE.Vector3();
     this.tmpVec2 = new THREE.Vector3();
@@ -334,39 +344,40 @@ class Renderer3D {
     this.scene.add(rim);
 
     const loader = new THREE.TextureLoader();
-    const dayMap = loader.load("/static/maps/8k_earth_daymap.png");
-    const nightMap = loader.load("/static/maps/8k_earth_nightmap.png");
-    const normalMap = loader.load("/static/maps/8k_earth_normal_map.jpg");
-    const specularMap = loader.load("/static/maps/8k_earth_specular_map.jpg");
-    const cloudsMap = loader.load("/static/maps/8k_earth_clouds.png");
+    this.dayMap = loader.load("/static/maps/8k_earth_daymap.png");
+    this.nightMap = loader.load("/static/maps/8k_earth_nightmap.png");
+    this.normalMap = loader.load("/static/maps/8k_earth_normal_map.jpg");
+    this.specularMap = loader.load("/static/maps/8k_earth_specular_map.jpg");
+    this.cloudsMap = loader.load("/static/maps/8k_earth_clouds.png");
 
-    dayMap.colorSpace = THREE.SRGBColorSpace;
-    nightMap.colorSpace = THREE.SRGBColorSpace;
-    cloudsMap.colorSpace = THREE.SRGBColorSpace;
-    normalMap.colorSpace = THREE.NoColorSpace;
-    specularMap.colorSpace = THREE.NoColorSpace;
+    this.dayMap.colorSpace = THREE.SRGBColorSpace;
+    this.nightMap.colorSpace = THREE.SRGBColorSpace;
+    this.cloudsMap.colorSpace = THREE.SRGBColorSpace;
+    this.normalMap.colorSpace = THREE.NoColorSpace;
+    this.specularMap.colorSpace = THREE.NoColorSpace;
 
     const anisotropy = this.renderer.capabilities.getMaxAnisotropy();
-    dayMap.anisotropy = anisotropy;
-    nightMap.anisotropy = anisotropy;
-    normalMap.anisotropy = anisotropy;
-    specularMap.anisotropy = anisotropy;
-    cloudsMap.anisotropy = anisotropy;
+    this.dayMap.anisotropy = anisotropy;
+    this.nightMap.anisotropy = anisotropy;
+    this.normalMap.anisotropy = anisotropy;
+    this.specularMap.anisotropy = anisotropy;
+    this.cloudsMap.anisotropy = anisotropy;
 
-    const globeMaterial = new THREE.MeshPhongMaterial({
-      map: dayMap,
-      normalMap,
+    this.globeMaterial = new THREE.MeshPhongMaterial({
+      map: this.dayMap,
+      color: new THREE.Color(0xffffff),
+      normalMap: this.normalMap,
       normalScale: new THREE.Vector2(1.1, 1.1),
-      specularMap,
+      specularMap: this.specularMap,
       specular: new THREE.Color(0x666666),
       shininess: 28,
       emissive: new THREE.Color(0x0b0f23),
-      emissiveMap: nightMap,
+      emissiveMap: this.nightMap,
       emissiveIntensity: 0.35,
     });
     this.globe = new THREE.Mesh(
       new THREE.SphereGeometry(this.globeRadius, 128, 128),
-      globeMaterial,
+      this.globeMaterial,
     );
     this.globe.rotation.y = Math.PI;
     this.scene.add(this.globe);
@@ -384,9 +395,9 @@ class Renderer3D {
     this.clouds = new THREE.Mesh(
       new THREE.SphereGeometry(this.globeRadius + 1.2, 128, 128),
       new THREE.MeshPhongMaterial({
-        map: cloudsMap,
+        map: this.cloudsMap,
         transparent: true,
-        opacity: 0.35,
+        opacity: 0.6,
         depthWrite: false,
       }),
     );
@@ -394,7 +405,7 @@ class Renderer3D {
     this.scene.add(this.clouds);
 
     const planeMaterial = new THREE.MeshStandardMaterial({
-      map: dayMap,
+      map: this.dayMap,
       roughness: 0.9,
       metalness: 0.0,
     });
@@ -415,6 +426,13 @@ class Renderer3D {
     this.instances = new THREE.InstancedMesh(geometry, material, 1);
     this.scene.add(this.instances);
 
+    this.axisHelper = new THREE.AxesHelper(this.globeRadius * 1.6);
+    this.axisHelper.visible = true;
+    this.scene.add(this.axisHelper);
+
+    this.setLightingMode("day");
+    this.setCloudsVisible(true);
+    this.setAxesVisible(true);
     this.setMode("globe", true);
   }
 
@@ -459,7 +477,8 @@ class Renderer3D {
     if (this.globe) this.globe.visible = mode === "globe";
     if (this.atmosphere) this.atmosphere.visible = mode === "globe";
     if (this.mapPlane) this.mapPlane.visible = mode === "iso";
-    if (this.clouds) this.clouds.visible = mode === "globe";
+    if (this.clouds) this.clouds.visible = mode === "globe" && this.showClouds;
+    if (this.axisHelper) this.axisHelper.visible = mode === "globe" && this.showAxes;
     if (els.map2d) {
       els.map2d.style.display = mode === "iso" ? "block" : "none";
     }
@@ -496,25 +515,25 @@ class Renderer3D {
 
   projectToScreen(point) {
     if (!this.camera) return null;
+    let behind = false;
     this.tmpVec.set(point.x, point.y, point.z);
     if (this.mode === "globe") {
       this.tmpVec2.set(point.x, point.y, point.z).normalize();
       this.tmpVec3.copy(this.camera.position).normalize();
-      if (this.tmpVec2.dot(this.tmpVec3) <= 0) {
-        return { visible: false, x: 0, y: 0 };
-      }
+      behind = this.tmpVec2.dot(this.tmpVec3) <= 0;
     }
     this.tmpVec.project(this.camera);
     const x = (this.tmpVec.x * 0.5 + 0.5) * this.size.width;
     const y = (-this.tmpVec.y * 0.5 + 0.5) * this.size.height;
-    const visible =
+    const inFrustum =
       this.tmpVec.z >= -1 &&
       this.tmpVec.z <= 1 &&
       x >= 0 &&
       x <= this.size.width &&
       y >= 0 &&
       y <= this.size.height;
-    return { x, y, visible };
+    const visible = !behind && inFrustum;
+    return { x, y, visible, behind };
   }
 
   setInstances(points) {
@@ -537,24 +556,68 @@ class Renderer3D {
   render() {
     if (!this.renderer || !this.scene || !this.camera) return;
     if (els.map3d && els.map3d.style.display === "none") return;
-    if (this.clouds && this.mode === "globe") {
+    if (this.clouds && this.mode === "globe" && this.showClouds) {
       this.clouds.rotation.y += 0.00025;
     }
     this.controls?.update();
     this.renderer.render(this.scene, this.camera);
   }
+
+  setLightingMode(mode) {
+    if (!this.globeMaterial) return;
+    this.lightingMode = mode === "night" ? "night" : "day";
+    if (this.lightingMode === "night") {
+      this.globeMaterial.map = this.nightMap;
+      this.globeMaterial.emissiveMap = null;
+      this.globeMaterial.emissiveIntensity = 0;
+      this.globeMaterial.specular.setHex(0x222222);
+      this.globeMaterial.shininess = 8;
+      this.globeMaterial.color.setHex(0xd1d5db);
+    } else {
+      this.globeMaterial.map = this.dayMap;
+      this.globeMaterial.emissiveMap = this.nightMap;
+      this.globeMaterial.emissiveIntensity = 0.35;
+      this.globeMaterial.specular.setHex(0x666666);
+      this.globeMaterial.shininess = 28;
+      this.globeMaterial.color.setHex(0xffffff);
+    }
+    this.globeMaterial.needsUpdate = true;
+  }
+
+  setCloudsVisible(visible) {
+    this.showClouds = Boolean(visible);
+    if (this.clouds) {
+      this.clouds.visible = this.showClouds && this.mode === "globe";
+    }
+  }
+
+  setAxesVisible(visible) {
+    this.showAxes = Boolean(visible);
+    if (this.axisHelper) {
+      this.axisHelper.visible = this.showAxes && this.mode === "globe";
+    }
+  }
 }
 
 class PinLayer {
-  constructor(layerEl, renderer) {
+  constructor(layerEl, renderer, boundsEl) {
     this.layerEl = layerEl;
     this.renderer = renderer;
+    this.boundsEl = boundsEl;
     this.nodes = new Map();
   }
 
   syncPins(entities, world) {
     if (!this.layerEl) return;
     if (this.layerEl.style.display === "none") return;
+    const bounds = this.boundsEl?.getBoundingClientRect?.();
+    const clamp = bounds || {
+      left: 0,
+      top: 0,
+      right: window.innerWidth,
+      bottom: window.innerHeight,
+    };
+    const pad = 18;
     entities.forEach((entity) => {
       const pin = world.getComponent(entity, "Pin");
       if (!pin) return;
@@ -572,12 +635,23 @@ class PinLayer {
       if (!geo || !this.renderer) return;
       const pos = this.renderer.positionForGeo(geo, this.renderer.markerAltitude + 1.5);
       const screen = this.renderer.projectToScreen(pos);
-      if (!screen || !screen.visible) {
-        node.style.opacity = "0";
-        return;
+      if (!screen) return;
+      const clampedX = Math.min(Math.max(screen.x, clamp.left + pad), clamp.right - pad);
+      const clampedY = Math.min(Math.max(screen.y, clamp.top + pad), clamp.bottom - pad);
+      const withinBounds =
+        screen.x >= clamp.left + pad &&
+        screen.x <= clamp.right - pad &&
+        screen.y >= clamp.top + pad &&
+        screen.y <= clamp.bottom - pad;
+      if (screen.visible && withinBounds) {
+        node.classList.remove("edge");
+        node.style.opacity = "1";
+        node.style.transform = `translate(${screen.x}px, ${screen.y}px) translate(-50%, -50%)`;
+      } else {
+        node.classList.add("edge");
+        node.style.opacity = "1";
+        node.style.transform = `translate(${clampedX}px, ${clampedY}px) translate(-50%, -50%)`;
       }
-      node.style.opacity = "1";
-      node.style.transform = `translate(${screen.x}px, ${screen.y}px)`;
     });
   }
 
@@ -766,12 +840,26 @@ const setupLayerToggles = () => {
   });
 };
 
-const setupViewToggles = (renderer3d) => {
-  document.querySelectorAll("[data-view-toggle]").forEach((button) => {
+const setupGlobeControls = (renderer3d) => {
+  document.querySelectorAll("[data-globe-mode]").forEach((button) => {
     button.addEventListener("click", () => {
-      const view = button.dataset.viewToggle;
-      if (!view) return;
-      renderer3d.setMode(view);
+      const mode = button.dataset.globeMode;
+      if (!mode) return;
+      renderer3d.setLightingMode(mode);
+      document.querySelectorAll("[data-globe-mode]").forEach((peer) => {
+        peer.dataset.active = peer === button ? "true" : "false";
+      });
+    });
+  });
+
+  document.querySelectorAll("[data-globe-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const key = button.dataset.globeToggle;
+      if (!key) return;
+      const next = button.getAttribute("aria-pressed") !== "true";
+      button.setAttribute("aria-pressed", next.toString());
+      if (key === "clouds") renderer3d.setCloudsVisible(next);
+      if (key === "axes") renderer3d.setAxesVisible(next);
     });
   });
 };
@@ -785,7 +873,7 @@ const main = () => {
   const renderer3d = new Renderer3D(els.map3d);
   renderer3d.init();
 
-  const pinLayer = new PinLayer(els.pinLayer, renderer3d);
+  const pinLayer = new PinLayer(els.pinLayer, renderer3d, els.board);
 
   bus.on("entities:update", (payload) => {
     syncEntities(payload, world);
@@ -858,7 +946,7 @@ const main = () => {
   setInterval(refreshPartials, 12000);
   setInterval(() => fetchEntities(bus), 20000);
   setupDockToggles();
-  setupViewToggles(renderer3d);
+  setupGlobeControls(renderer3d);
   setupLayerToggles();
 
   requestAnimationFrame(renderLoop);

@@ -39,12 +39,21 @@
           </div>
         </section>
         <section class="panel-section">
-          <h2>Layer Controls</h2>
+          <h2>Globe Layers</h2>
           <div class="panel-actions">
-            <button data-view-toggle="globe">3D Globe</button>
+            <button data-globe-mode="day" data-active="true">Day</button>
+            <button data-globe-mode="night">Night</button>
+            <button data-globe-toggle="clouds" aria-pressed="true">Clouds</button>
+            <button data-globe-toggle="axes" aria-pressed="true">Axes</button>
+          </div>
+          <div class="meta">Toggle globe lighting and debug layers.</div>
+        </section>
+        <section class="panel-section">
+          <h2>Overlays</h2>
+          <div class="panel-actions">
             <button data-layer-toggle="pins">Pins</button>
           </div>
-          <div class="meta">3D globe controls with overlays.</div>
+          <div class="meta">Toggle overlays anchored to tracked entities.</div>
         </section>
       </div>
     </aside>
@@ -54,16 +63,6 @@
         <canvas id="map-3d" data-layer="map-3d"></canvas>
         <canvas id="map-2d" data-layer="map-2d"></canvas>
         <div class="dom-layer" id="pin-layer" data-layer="pins"></div>
-      </div>
-      <div class="hud">
-        <div class="hud-card">
-          <div class="hud-title">Runtime</div>
-          <div id="runtime-stats">Entities: 0 · FPS: --</div>
-        </div>
-        <div class="hud-card">
-          <div class="hud-title">View</div>
-          <div id="camera-stats">Zoom: 1.0 · Offset: 0,0</div>
-        </div>
       </div>
     </main>
 
@@ -87,10 +86,15 @@
   </div>
 
   <div class="bottom-bar">
-    <div class="timeline">
-      <span>Timeline</span>
-      <span class="status-sep">|</span>
-      <span>Live · Playback · Alerts</span>
+    <div class="footer-stats">
+      <div class="hud-card">
+        <div class="hud-title">Runtime</div>
+        <div id="runtime-stats">Entities: 0 · FPS: --</div>
+      </div>
+      <div class="hud-card">
+        <div class="hud-title">View</div>
+        <div id="camera-stats">View: Globe · Dist: --</div>
+      </div>
     </div>
     <div class="osm-attrib">Earth textures: Solar System Scope</div>
     <div class="panel-actions">
