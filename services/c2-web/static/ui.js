@@ -373,7 +373,8 @@ const AXIS_Y = new THREE.Vector3(0, 1, 0);
 const sphereToGeo = (point) => {
   const radius = Math.max(point.length(), 1);
   const phi = Math.acos(point.y / radius);
-  const theta = Math.atan2(point.z, point.x);
+  let theta = Math.atan2(point.z, point.x);
+  if (theta < 0) theta += Math.PI * 2;
   const lat = 90 - (phi * 180) / Math.PI;
   const lon = (theta * 180) / Math.PI - 180;
   return { lat, lon };
@@ -619,7 +620,12 @@ class TileManager {
       url,
       (texture) => {
         texture.colorSpace = THREE.SRGBColorSpace;
+        texture.flipY = false;
+        texture.generateMipmaps = false;
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
         texture.anisotropy = this.renderer?.capabilities?.getMaxAnisotropy?.() || 1;
+        texture.needsUpdate = true;
         const geometry = this.buildTileGeometry(tile.bounds);
         const material = new THREE.MeshBasicMaterial({
           map: texture,
