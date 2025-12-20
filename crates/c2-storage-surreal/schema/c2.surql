@@ -13,10 +13,48 @@ DEFINE FIELD tenant_id ON asset TYPE string;
 DEFINE FIELD name ON asset TYPE string;
 DEFINE FIELD kind ON asset TYPE string;
 DEFINE FIELD status ON asset TYPE string;
+DEFINE FIELD readiness ON asset TYPE string;
+DEFINE FIELD comms_status ON asset TYPE string;
+DEFINE FIELD maintenance_state ON asset TYPE string;
+DEFINE FIELD unit_id ON asset TYPE option<string>;
+DEFINE FIELD capability_ids ON asset TYPE array<string>;
 DEFINE FIELD classification ON asset TYPE string;
 DEFINE FIELD created_at_ms ON asset TYPE int;
 DEFINE FIELD updated_at_ms ON asset TYPE int;
 DEFINE INDEX asset_tenant_created ON asset COLUMNS tenant_id, created_at_ms;
+
+DEFINE TABLE unit SCHEMAFULL;
+DEFINE FIELD tenant_id ON unit TYPE string;
+DEFINE FIELD display_name ON unit TYPE string;
+DEFINE FIELD callsign ON unit TYPE option<string>;
+DEFINE FIELD classification ON unit TYPE string;
+DEFINE FIELD readiness ON unit TYPE string;
+DEFINE FIELD comms_status ON unit TYPE string;
+DEFINE FIELD team_id ON unit TYPE option<string>;
+DEFINE FIELD capability_ids ON unit TYPE array<string>;
+DEFINE FIELD created_at_ms ON unit TYPE int;
+DEFINE FIELD updated_at_ms ON unit TYPE int;
+DEFINE INDEX unit_tenant_created ON unit COLUMNS tenant_id, created_at_ms;
+
+DEFINE TABLE team SCHEMAFULL;
+DEFINE FIELD tenant_id ON team TYPE string;
+DEFINE FIELD name ON team TYPE string;
+DEFINE FIELD callsign ON team TYPE option<string>;
+DEFINE FIELD classification ON team TYPE string;
+DEFINE FIELD created_at_ms ON team TYPE int;
+DEFINE FIELD updated_at_ms ON team TYPE int;
+DEFINE INDEX team_tenant_created ON team COLUMNS tenant_id, created_at_ms;
+
+DEFINE TABLE capability SCHEMAFULL;
+DEFINE FIELD tenant_id ON capability TYPE string;
+DEFINE FIELD code ON capability TYPE string;
+DEFINE FIELD name ON capability TYPE string;
+DEFINE FIELD category ON capability TYPE option<string>;
+DEFINE FIELD description ON capability TYPE option<string>;
+DEFINE FIELD classification ON capability TYPE string;
+DEFINE FIELD created_at_ms ON capability TYPE int;
+DEFINE FIELD updated_at_ms ON capability TYPE int;
+DEFINE INDEX capability_tenant_created ON capability COLUMNS tenant_id, created_at_ms;
 
 DEFINE TABLE incident SCHEMAFULL;
 DEFINE FIELD tenant_id ON incident TYPE string;

@@ -1,6 +1,6 @@
 # Hurl API Tests
 
-These scripts validate the HTTP API surface (health, CRUD, protobuf, streams, MCP HTTP routes).
+These scripts validate the HTTP API surface (health, CRUD for missions/assets/incidents/teams/units/capabilities, protobuf, streams, MCP HTTP routes).
 
 ## Prerequisites
 

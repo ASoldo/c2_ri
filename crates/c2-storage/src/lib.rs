@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use c2_core::{
-    Asset, AssetId, Incident, IncidentId, Mission, MissionId, Task, TaskId, TenantId,
+    Asset, AssetId, Capability, CapabilityId, Incident, IncidentId, Mission, MissionId, Task,
+    TaskId, Team, TeamId, TenantId, Unit, UnitId,
 };
 use std::fmt;
 
@@ -49,6 +50,45 @@ pub trait AssetRepository: Send + Sync {
     ) -> Result<Vec<Asset>, StorageError>;
     async fn upsert(&self, asset: Asset) -> Result<(), StorageError>;
     async fn delete(&self, id: AssetId) -> Result<(), StorageError>;
+}
+
+#[async_trait]
+pub trait UnitRepository: Send + Sync {
+    async fn get(&self, id: UnitId) -> Result<Option<Unit>, StorageError>;
+    async fn list_by_tenant(
+        &self,
+        tenant_id: TenantId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Unit>, StorageError>;
+    async fn upsert(&self, unit: Unit) -> Result<(), StorageError>;
+    async fn delete(&self, id: UnitId) -> Result<(), StorageError>;
+}
+
+#[async_trait]
+pub trait TeamRepository: Send + Sync {
+    async fn get(&self, id: TeamId) -> Result<Option<Team>, StorageError>;
+    async fn list_by_tenant(
+        &self,
+        tenant_id: TenantId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Team>, StorageError>;
+    async fn upsert(&self, team: Team) -> Result<(), StorageError>;
+    async fn delete(&self, id: TeamId) -> Result<(), StorageError>;
+}
+
+#[async_trait]
+pub trait CapabilityRepository: Send + Sync {
+    async fn get(&self, id: CapabilityId) -> Result<Option<Capability>, StorageError>;
+    async fn list_by_tenant(
+        &self,
+        tenant_id: TenantId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Capability>, StorageError>;
+    async fn upsert(&self, capability: Capability) -> Result<(), StorageError>;
+    async fn delete(&self, id: CapabilityId) -> Result<(), StorageError>;
 }
 
 #[async_trait]

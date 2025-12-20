@@ -1,9 +1,11 @@
 use async_trait::async_trait;
 use c2_core::{
-    Asset, AssetId, Incident, IncidentId, Mission, MissionId, Task, TaskId, TenantId,
+    Asset, AssetId, Capability, CapabilityId, Incident, IncidentId, Mission, MissionId, Task,
+    TaskId, Team, TeamId, TenantId, Unit, UnitId,
 };
 use c2_storage::{
-    AssetRepository, IncidentRepository, MissionRepository, StorageError, TaskRepository,
+    AssetRepository, CapabilityRepository, IncidentRepository, MissionRepository, StorageError,
+    TaskRepository, TeamRepository, UnitRepository,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
@@ -12,6 +14,9 @@ use std::env;
 
 const TABLE_MISSIONS: &str = "missions";
 const TABLE_ASSETS: &str = "assets";
+const TABLE_UNITS: &str = "units";
+const TABLE_TEAMS: &str = "teams";
+const TABLE_CAPABILITIES: &str = "capabilities";
 const TABLE_INCIDENTS: &str = "incidents";
 const TABLE_TASKS: &str = "tasks";
 
@@ -227,6 +232,261 @@ impl AssetRepository for PostgresStore {
             .execute(&self.pool)
             .await
             .map_err(map_err)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl UnitRepository for PostgresStore {
+    async fn get(&self, id: UnitId) -> Result<Option<Unit>, StorageError> {
+        let payload: Option<Value> = sqlx::query_scalar(&format!(
+            "SELECT payload FROM {} WHERE id = $1",
+            TABLE_UNITS
+        ))
+        .bind(id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        match payload {
+            Some(value) => Ok(Some(from_json(value)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn list_by_tenant(
+        &self,
+        tenant_id: TenantId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Unit>, StorageError> {
+        let payloads: Vec<Value> = sqlx::query_scalar(&format!(
+            "SELECT payload FROM {} WHERE tenant_id = $1 ORDER BY created_at_ms DESC LIMIT $2 OFFSET $3",
+            TABLE_UNITS
+        ))
+        .bind(tenant_id.as_uuid())
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        payloads
+            .into_iter()
+            .map(from_json::<Unit>)
+            .collect()
+    }
+
+    async fn upsert(&self, unit: Unit) -> Result<(), StorageError> {
+        let payload = to_json(&unit)?;
+        let readiness = enum_to_string(&unit.readiness)?;
+        let comms_status = enum_to_string(&unit.comms_status)?;
+        let classification = enum_to_string(&unit.classification)?;
+        sqlx::query(&format!(
+            "INSERT INTO {} \
+             (id, tenant_id, display_name, callsign, readiness, comms_status, classification, created_at_ms, updated_at_ms, created_at, updated_at, payload) \
+             VALUES \
+             ($1, $2, $3, $4, $5, $6, $7, $8, $9, to_timestamp($8 / 1000.0), to_timestamp($9 / 1000.0), $10) \
+             ON CONFLICT (id) DO UPDATE SET \
+             display_name = EXCLUDED.display_name, \
+             callsign = EXCLUDED.callsign, \
+             readiness = EXCLUDED.readiness, \
+             comms_status = EXCLUDED.comms_status, \
+             classification = EXCLUDED.classification, \
+             updated_at_ms = EXCLUDED.updated_at_ms, \
+             updated_at = EXCLUDED.updated_at, \
+             payload = EXCLUDED.payload",
+            TABLE_UNITS
+        ))
+        .bind(unit.id.as_uuid())
+        .bind(unit.tenant_id.as_uuid())
+        .bind(unit.display_name)
+        .bind(unit.callsign)
+        .bind(readiness)
+        .bind(comms_status)
+        .bind(classification)
+        .bind(to_i64(unit.created_at_ms)?)
+        .bind(to_i64(unit.updated_at_ms)?)
+        .bind(payload)
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn delete(&self, id: UnitId) -> Result<(), StorageError> {
+        sqlx::query(&format!("DELETE FROM {} WHERE id = $1", TABLE_UNITS))
+            .bind(id.as_uuid())
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl TeamRepository for PostgresStore {
+    async fn get(&self, id: TeamId) -> Result<Option<Team>, StorageError> {
+        let payload: Option<Value> = sqlx::query_scalar(&format!(
+            "SELECT payload FROM {} WHERE id = $1",
+            TABLE_TEAMS
+        ))
+        .bind(id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        match payload {
+            Some(value) => Ok(Some(from_json(value)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn list_by_tenant(
+        &self,
+        tenant_id: TenantId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Team>, StorageError> {
+        let payloads: Vec<Value> = sqlx::query_scalar(&format!(
+            "SELECT payload FROM {} WHERE tenant_id = $1 ORDER BY created_at_ms DESC LIMIT $2 OFFSET $3",
+            TABLE_TEAMS
+        ))
+        .bind(tenant_id.as_uuid())
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        payloads
+            .into_iter()
+            .map(from_json::<Team>)
+            .collect()
+    }
+
+    async fn upsert(&self, team: Team) -> Result<(), StorageError> {
+        let payload = to_json(&team)?;
+        let classification = enum_to_string(&team.classification)?;
+        sqlx::query(&format!(
+            "INSERT INTO {} \
+             (id, tenant_id, name, callsign, classification, created_at_ms, updated_at_ms, created_at, updated_at, payload) \
+             VALUES \
+             ($1, $2, $3, $4, $5, $6, $7, to_timestamp($6 / 1000.0), to_timestamp($7 / 1000.0), $8) \
+             ON CONFLICT (id) DO UPDATE SET \
+             name = EXCLUDED.name, \
+             callsign = EXCLUDED.callsign, \
+             classification = EXCLUDED.classification, \
+             updated_at_ms = EXCLUDED.updated_at_ms, \
+             updated_at = EXCLUDED.updated_at, \
+             payload = EXCLUDED.payload",
+            TABLE_TEAMS
+        ))
+        .bind(team.id.as_uuid())
+        .bind(team.tenant_id.as_uuid())
+        .bind(team.name)
+        .bind(team.callsign)
+        .bind(classification)
+        .bind(to_i64(team.created_at_ms)?)
+        .bind(to_i64(team.updated_at_ms)?)
+        .bind(payload)
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn delete(&self, id: TeamId) -> Result<(), StorageError> {
+        sqlx::query(&format!("DELETE FROM {} WHERE id = $1", TABLE_TEAMS))
+            .bind(id.as_uuid())
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl CapabilityRepository for PostgresStore {
+    async fn get(&self, id: CapabilityId) -> Result<Option<Capability>, StorageError> {
+        let payload: Option<Value> = sqlx::query_scalar(&format!(
+            "SELECT payload FROM {} WHERE id = $1",
+            TABLE_CAPABILITIES
+        ))
+        .bind(id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        match payload {
+            Some(value) => Ok(Some(from_json(value)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn list_by_tenant(
+        &self,
+        tenant_id: TenantId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Capability>, StorageError> {
+        let payloads: Vec<Value> = sqlx::query_scalar(&format!(
+            "SELECT payload FROM {} WHERE tenant_id = $1 ORDER BY created_at_ms DESC LIMIT $2 OFFSET $3",
+            TABLE_CAPABILITIES
+        ))
+        .bind(tenant_id.as_uuid())
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        payloads
+            .into_iter()
+            .map(from_json::<Capability>)
+            .collect()
+    }
+
+    async fn upsert(&self, capability: Capability) -> Result<(), StorageError> {
+        let payload = to_json(&capability)?;
+        let classification = enum_to_string(&capability.classification)?;
+        sqlx::query(&format!(
+            "INSERT INTO {} \
+             (id, tenant_id, code, name, classification, created_at_ms, updated_at_ms, created_at, updated_at, payload) \
+             VALUES \
+             ($1, $2, $3, $4, $5, $6, $7, to_timestamp($6 / 1000.0), to_timestamp($7 / 1000.0), $8) \
+             ON CONFLICT (id) DO UPDATE SET \
+             code = EXCLUDED.code, \
+             name = EXCLUDED.name, \
+             classification = EXCLUDED.classification, \
+             updated_at_ms = EXCLUDED.updated_at_ms, \
+             updated_at = EXCLUDED.updated_at, \
+             payload = EXCLUDED.payload",
+            TABLE_CAPABILITIES
+        ))
+        .bind(capability.id.as_uuid())
+        .bind(capability.tenant_id.as_uuid())
+        .bind(capability.code)
+        .bind(capability.name)
+        .bind(classification)
+        .bind(to_i64(capability.created_at_ms)?)
+        .bind(to_i64(capability.updated_at_ms)?)
+        .bind(payload)
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn delete(&self, id: CapabilityId) -> Result<(), StorageError> {
+        sqlx::query(&format!(
+            "DELETE FROM {} WHERE id = $1",
+            TABLE_CAPABILITIES
+        ))
+        .bind(id.as_uuid())
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
         Ok(())
     }
 }

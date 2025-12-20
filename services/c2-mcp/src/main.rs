@@ -1,7 +1,8 @@
 use c2_config::ServiceConfig;
 use c2_core::{
-    Asset, AssetId, Incident, IncidentId, Mission, MissionId, OperationalPriority,
-    SecurityClassification, Task, TaskId, TenantId, now_epoch_millis,
+    Asset, AssetId, CommsStatus, Incident, IncidentId, MaintenanceState, Mission, MissionId,
+    OperationalPriority, ReadinessState, SecurityClassification, Task, TaskId, TenantId,
+    now_epoch_millis,
 };
 use c2_identity::{Permission, Role, Subject};
 use c2_observability::{init, log_startup, ObservabilityConfig};
@@ -820,6 +821,11 @@ impl C2McpService {
             name: params.asset.name,
             kind: params.asset.kind.into(),
             status: params.asset.status.into(),
+            readiness: ReadinessState::default(),
+            comms_status: CommsStatus::default(),
+            maintenance_state: MaintenanceState::default(),
+            unit_id: None,
+            capability_ids: Vec::new(),
             classification,
             created_at_ms,
             updated_at_ms,

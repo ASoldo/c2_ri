@@ -35,6 +35,12 @@ Added
 - OPS-008 Kustomize overlays and ArgoCD application templates
 - OPS-009 Harbor registry setup and dev overlay registry wiring
 - SEC-006 Keycloak deployment values for LDAP-backed auth
+- ODM-001 Unit registry models, storage adapters, and API endpoints
+- ODM-002 Team registry models, storage adapters, and API endpoints
+- ODM-003 Capability catalog models, storage adapters, and API endpoints
+- ODM-004 Asset maintenance and readiness/comms fields across stores
+- SEC-007 Policy rules for unit/team/capability permissions
+- OPS-005 Hurl coverage for units, teams, and capabilities
 
 Changed
 - Moved observability manifests to k8s/ overlays and updated ArgoCD repo refs

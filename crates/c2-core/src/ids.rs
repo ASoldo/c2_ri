@@ -32,6 +32,8 @@ macro_rules! id_type {
 id_type!(TenantId);
 id_type!(UserId);
 id_type!(UnitId);
+id_type!(TeamId);
+id_type!(CapabilityId);
 id_type!(MissionId);
 id_type!(TaskId);
 id_type!(AssetId);

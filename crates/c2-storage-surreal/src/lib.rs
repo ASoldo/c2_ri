@@ -1,11 +1,13 @@
 use async_trait::async_trait;
 use c2_core::{
-    Asset, AssetId, AssetKind, AssetStatus, Incident, IncidentId, IncidentStatus, IncidentType,
-    Mission, MissionId, MissionStatus, OperationalPriority, SecurityClassification, Task, TaskId,
-    TaskStatus, TenantId,
+    Asset, AssetId, AssetKind, AssetStatus, Capability, CapabilityId, CommsStatus, Incident,
+    IncidentId, IncidentStatus, IncidentType, MaintenanceState, Mission, MissionId, MissionStatus,
+    OperationalPriority, ReadinessState, SecurityClassification, Task, TaskId, TaskStatus, Team,
+    TeamId, TenantId, Unit, UnitId,
 };
 use c2_storage::{
-    AssetRepository, IncidentRepository, MissionRepository, StorageError, TaskRepository,
+    AssetRepository, CapabilityRepository, IncidentRepository, MissionRepository, StorageError,
+    TaskRepository, TeamRepository, UnitRepository,
 };
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -19,6 +21,9 @@ use uuid::Uuid;
 
 const TABLE_MISSION: &str = "mission";
 const TABLE_ASSET: &str = "asset";
+const TABLE_UNIT: &str = "unit";
+const TABLE_TEAM: &str = "team";
+const TABLE_CAPABILITY: &str = "capability";
 const TABLE_INCIDENT: &str = "incident";
 const TABLE_TASK: &str = "task";
 const SURREAL_SCHEMA: &str = include_str!("../schema/c2.surql");
@@ -113,6 +118,16 @@ struct SurrealAssetRecord {
     name: String,
     kind: AssetKind,
     status: AssetStatus,
+    #[serde(default)]
+    readiness: ReadinessState,
+    #[serde(default)]
+    comms_status: CommsStatus,
+    #[serde(default)]
+    maintenance_state: MaintenanceState,
+    #[serde(default)]
+    unit_id: Option<String>,
+    #[serde(default)]
+    capability_ids: Vec<String>,
     classification: SecurityClassification,
     created_at_ms: u64,
     updated_at_ms: u64,
@@ -124,6 +139,94 @@ struct SurrealAssetWrite {
     name: String,
     kind: AssetKind,
     status: AssetStatus,
+    readiness: ReadinessState,
+    comms_status: CommsStatus,
+    maintenance_state: MaintenanceState,
+    unit_id: Option<String>,
+    capability_ids: Vec<String>,
+    classification: SecurityClassification,
+    created_at_ms: u64,
+    updated_at_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct SurrealUnitRecord {
+    id: Thing,
+    tenant_id: String,
+    display_name: String,
+    #[serde(default)]
+    callsign: Option<String>,
+    classification: SecurityClassification,
+    #[serde(default)]
+    readiness: ReadinessState,
+    #[serde(default)]
+    comms_status: CommsStatus,
+    #[serde(default)]
+    team_id: Option<String>,
+    #[serde(default)]
+    capability_ids: Vec<String>,
+    created_at_ms: u64,
+    updated_at_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct SurrealUnitWrite {
+    tenant_id: String,
+    display_name: String,
+    callsign: Option<String>,
+    classification: SecurityClassification,
+    readiness: ReadinessState,
+    comms_status: CommsStatus,
+    team_id: Option<String>,
+    capability_ids: Vec<String>,
+    created_at_ms: u64,
+    updated_at_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct SurrealTeamRecord {
+    id: Thing,
+    tenant_id: String,
+    name: String,
+    #[serde(default)]
+    callsign: Option<String>,
+    classification: SecurityClassification,
+    created_at_ms: u64,
+    updated_at_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct SurrealTeamWrite {
+    tenant_id: String,
+    name: String,
+    callsign: Option<String>,
+    classification: SecurityClassification,
+    created_at_ms: u64,
+    updated_at_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct SurrealCapabilityRecord {
+    id: Thing,
+    tenant_id: String,
+    code: String,
+    name: String,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    classification: SecurityClassification,
+    created_at_ms: u64,
+    updated_at_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct SurrealCapabilityWrite {
+    tenant_id: String,
+    code: String,
+    name: String,
+    category: Option<String>,
+    description: Option<String>,
     classification: SecurityClassification,
     created_at_ms: u64,
     updated_at_ms: u64,
@@ -366,6 +469,204 @@ impl AssetRepository for SurrealStore {
 }
 
 #[async_trait]
+impl UnitRepository for SurrealStore {
+    async fn get(&self, id: UnitId) -> Result<Option<Unit>, StorageError> {
+        let record: Option<SurrealUnitRecord> = self
+            .db
+            .select((TABLE_UNIT, id.to_string()))
+            .await
+            .map_err(map_err)?;
+        match record {
+            Some(record) => Ok(Some(record.try_into()?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn list_by_tenant(
+        &self,
+        tenant_id: TenantId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Unit>, StorageError> {
+        #[derive(Serialize)]
+        struct Bindings {
+            tenant_id: String,
+            limit: usize,
+            offset: usize,
+        }
+
+        let mut response = self
+            .db
+            .query(
+                "SELECT * FROM unit WHERE tenant_id = $tenant_id ORDER BY created_at_ms DESC LIMIT $limit START $offset",
+            )
+            .bind(Bindings {
+                tenant_id: tenant_id.to_string(),
+                limit,
+                offset,
+            })
+            .await
+            .map_err(map_err)?;
+
+        let records: Vec<SurrealUnitRecord> = response.take(0).map_err(map_err)?;
+        records.into_iter().map(Unit::try_from).collect()
+    }
+
+    async fn upsert(&self, unit: Unit) -> Result<(), StorageError> {
+        let record = SurrealUnitWrite::from(&unit);
+        let _: Option<SurrealUnitRecord> = self
+            .db
+            .upsert((TABLE_UNIT, unit.id.to_string()))
+            .content(record)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn delete(&self, id: UnitId) -> Result<(), StorageError> {
+        let _: Option<SurrealUnitRecord> = self
+            .db
+            .delete((TABLE_UNIT, id.to_string()))
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl TeamRepository for SurrealStore {
+    async fn get(&self, id: TeamId) -> Result<Option<Team>, StorageError> {
+        let record: Option<SurrealTeamRecord> = self
+            .db
+            .select((TABLE_TEAM, id.to_string()))
+            .await
+            .map_err(map_err)?;
+        match record {
+            Some(record) => Ok(Some(record.try_into()?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn list_by_tenant(
+        &self,
+        tenant_id: TenantId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Team>, StorageError> {
+        #[derive(Serialize)]
+        struct Bindings {
+            tenant_id: String,
+            limit: usize,
+            offset: usize,
+        }
+
+        let mut response = self
+            .db
+            .query(
+                "SELECT * FROM team WHERE tenant_id = $tenant_id ORDER BY created_at_ms DESC LIMIT $limit START $offset",
+            )
+            .bind(Bindings {
+                tenant_id: tenant_id.to_string(),
+                limit,
+                offset,
+            })
+            .await
+            .map_err(map_err)?;
+
+        let records: Vec<SurrealTeamRecord> = response.take(0).map_err(map_err)?;
+        records.into_iter().map(Team::try_from).collect()
+    }
+
+    async fn upsert(&self, team: Team) -> Result<(), StorageError> {
+        let record = SurrealTeamWrite::from(&team);
+        let _: Option<SurrealTeamRecord> = self
+            .db
+            .upsert((TABLE_TEAM, team.id.to_string()))
+            .content(record)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn delete(&self, id: TeamId) -> Result<(), StorageError> {
+        let _: Option<SurrealTeamRecord> = self
+            .db
+            .delete((TABLE_TEAM, id.to_string()))
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl CapabilityRepository for SurrealStore {
+    async fn get(&self, id: CapabilityId) -> Result<Option<Capability>, StorageError> {
+        let record: Option<SurrealCapabilityRecord> = self
+            .db
+            .select((TABLE_CAPABILITY, id.to_string()))
+            .await
+            .map_err(map_err)?;
+        match record {
+            Some(record) => Ok(Some(record.try_into()?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn list_by_tenant(
+        &self,
+        tenant_id: TenantId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Capability>, StorageError> {
+        #[derive(Serialize)]
+        struct Bindings {
+            tenant_id: String,
+            limit: usize,
+            offset: usize,
+        }
+
+        let mut response = self
+            .db
+            .query(
+                "SELECT * FROM capability WHERE tenant_id = $tenant_id ORDER BY created_at_ms DESC LIMIT $limit START $offset",
+            )
+            .bind(Bindings {
+                tenant_id: tenant_id.to_string(),
+                limit,
+                offset,
+            })
+            .await
+            .map_err(map_err)?;
+
+        let records: Vec<SurrealCapabilityRecord> = response.take(0).map_err(map_err)?;
+        records
+            .into_iter()
+            .map(Capability::try_from)
+            .collect()
+    }
+
+    async fn upsert(&self, capability: Capability) -> Result<(), StorageError> {
+        let record = SurrealCapabilityWrite::from(&capability);
+        let _: Option<SurrealCapabilityRecord> = self
+            .db
+            .upsert((TABLE_CAPABILITY, capability.id.to_string()))
+            .content(record)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn delete(&self, id: CapabilityId) -> Result<(), StorageError> {
+        let _: Option<SurrealCapabilityRecord> = self
+            .db
+            .delete((TABLE_CAPABILITY, id.to_string()))
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
 impl IncidentRepository for SurrealStore {
     async fn get(&self, id: IncidentId) -> Result<Option<Incident>, StorageError> {
         let record: Option<SurrealIncidentRecord> = self
@@ -567,12 +868,26 @@ impl TryFrom<SurrealAssetRecord> for Asset {
     type Error = StorageError;
 
     fn try_from(value: SurrealAssetRecord) -> Result<Self, Self::Error> {
+        let unit_id = match value.unit_id {
+            Some(raw) => Some(UnitId::from_uuid(parse_uuid(&raw, "unit_id")?)),
+            None => None,
+        };
+        let capability_ids = value
+            .capability_ids
+            .into_iter()
+            .map(|raw| parse_uuid(&raw, "capability_id").map(CapabilityId::from_uuid))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Asset {
             id: AssetId::from_uuid(thing_uuid(&value.id)?),
             tenant_id: TenantId::from_uuid(parse_uuid(&value.tenant_id, "tenant_id")?),
             name: value.name,
             kind: value.kind,
             status: value.status,
+            readiness: value.readiness,
+            comms_status: value.comms_status,
+            maintenance_state: value.maintenance_state,
+            unit_id,
+            capability_ids,
             classification: value.classification,
             created_at_ms: value.created_at_ms,
             updated_at_ms: value.updated_at_ms,
@@ -587,6 +902,127 @@ impl From<&Asset> for SurrealAssetWrite {
             name: value.name.clone(),
             kind: value.kind,
             status: value.status,
+            readiness: value.readiness,
+            comms_status: value.comms_status,
+            maintenance_state: value.maintenance_state,
+            unit_id: value.unit_id.map(|id| id.to_string()),
+            capability_ids: value
+                .capability_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            classification: value.classification,
+            created_at_ms: value.created_at_ms,
+            updated_at_ms: value.updated_at_ms,
+        }
+    }
+}
+
+impl TryFrom<SurrealUnitRecord> for Unit {
+    type Error = StorageError;
+
+    fn try_from(value: SurrealUnitRecord) -> Result<Self, Self::Error> {
+        let team_id = match value.team_id {
+            Some(raw) => Some(TeamId::from_uuid(parse_uuid(&raw, "team_id")?)),
+            None => None,
+        };
+        let capability_ids = value
+            .capability_ids
+            .into_iter()
+            .map(|raw| parse_uuid(&raw, "capability_id").map(CapabilityId::from_uuid))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Unit {
+            id: UnitId::from_uuid(thing_uuid(&value.id)?),
+            tenant_id: TenantId::from_uuid(parse_uuid(&value.tenant_id, "tenant_id")?),
+            classification: value.classification,
+            callsign: value.callsign,
+            display_name: value.display_name,
+            readiness: value.readiness,
+            comms_status: value.comms_status,
+            team_id,
+            capability_ids,
+            created_at_ms: value.created_at_ms,
+            updated_at_ms: value.updated_at_ms,
+        })
+    }
+}
+
+impl From<&Unit> for SurrealUnitWrite {
+    fn from(value: &Unit) -> Self {
+        Self {
+            tenant_id: value.tenant_id.to_string(),
+            display_name: value.display_name.clone(),
+            callsign: value.callsign.clone(),
+            classification: value.classification,
+            readiness: value.readiness,
+            comms_status: value.comms_status,
+            team_id: value.team_id.map(|id| id.to_string()),
+            capability_ids: value
+                .capability_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            created_at_ms: value.created_at_ms,
+            updated_at_ms: value.updated_at_ms,
+        }
+    }
+}
+
+impl TryFrom<SurrealTeamRecord> for Team {
+    type Error = StorageError;
+
+    fn try_from(value: SurrealTeamRecord) -> Result<Self, Self::Error> {
+        Ok(Team {
+            id: TeamId::from_uuid(thing_uuid(&value.id)?),
+            tenant_id: TenantId::from_uuid(parse_uuid(&value.tenant_id, "tenant_id")?),
+            name: value.name,
+            callsign: value.callsign,
+            classification: value.classification,
+            created_at_ms: value.created_at_ms,
+            updated_at_ms: value.updated_at_ms,
+        })
+    }
+}
+
+impl From<&Team> for SurrealTeamWrite {
+    fn from(value: &Team) -> Self {
+        Self {
+            tenant_id: value.tenant_id.to_string(),
+            name: value.name.clone(),
+            callsign: value.callsign.clone(),
+            classification: value.classification,
+            created_at_ms: value.created_at_ms,
+            updated_at_ms: value.updated_at_ms,
+        }
+    }
+}
+
+impl TryFrom<SurrealCapabilityRecord> for Capability {
+    type Error = StorageError;
+
+    fn try_from(value: SurrealCapabilityRecord) -> Result<Self, Self::Error> {
+        Ok(Capability {
+            id: CapabilityId::from_uuid(thing_uuid(&value.id)?),
+            tenant_id: TenantId::from_uuid(parse_uuid(&value.tenant_id, "tenant_id")?),
+            code: value.code,
+            name: value.name,
+            category: value.category,
+            description: value.description,
+            classification: value.classification,
+            created_at_ms: value.created_at_ms,
+            updated_at_ms: value.updated_at_ms,
+        })
+    }
+}
+
+impl From<&Capability> for SurrealCapabilityWrite {
+    fn from(value: &Capability) -> Self {
+        Self {
+            tenant_id: value.tenant_id.to_string(),
+            code: value.code.clone(),
+            name: value.name.clone(),
+            category: value.category.clone(),
+            description: value.description.clone(),
             classification: value.classification,
             created_at_ms: value.created_at_ms,
             updated_at_ms: value.updated_at_ms,

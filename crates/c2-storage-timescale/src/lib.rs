@@ -1,9 +1,11 @@
 use async_trait::async_trait;
 use c2_core::{
-    Asset, AssetId, Incident, IncidentId, Mission, MissionId, Task, TaskId, TenantId,
+    Asset, AssetId, Capability, CapabilityId, Incident, IncidentId, Mission, MissionId, Task,
+    TaskId, Team, TeamId, TenantId, Unit, UnitId,
 };
 use c2_storage::{
-    AssetRepository, IncidentRepository, MissionRepository, StorageError, TaskRepository,
+    AssetRepository, CapabilityRepository, IncidentRepository, MissionRepository, StorageError,
+    TaskRepository, TeamRepository, UnitRepository,
 };
 use c2_storage_postgres::{PostgresConfig, PostgresStore};
 use sqlx::PgPool;
@@ -114,6 +116,78 @@ impl AssetRepository for TimescaleStore {
 
     async fn delete(&self, id: AssetId) -> Result<(), StorageError> {
         AssetRepository::delete(&self.inner, id).await
+    }
+}
+
+#[async_trait]
+impl UnitRepository for TimescaleStore {
+    async fn get(&self, id: UnitId) -> Result<Option<Unit>, StorageError> {
+        UnitRepository::get(&self.inner, id).await
+    }
+
+    async fn list_by_tenant(
+        &self,
+        tenant_id: TenantId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Unit>, StorageError> {
+        UnitRepository::list_by_tenant(&self.inner, tenant_id, limit, offset).await
+    }
+
+    async fn upsert(&self, unit: Unit) -> Result<(), StorageError> {
+        UnitRepository::upsert(&self.inner, unit).await
+    }
+
+    async fn delete(&self, id: UnitId) -> Result<(), StorageError> {
+        UnitRepository::delete(&self.inner, id).await
+    }
+}
+
+#[async_trait]
+impl TeamRepository for TimescaleStore {
+    async fn get(&self, id: TeamId) -> Result<Option<Team>, StorageError> {
+        TeamRepository::get(&self.inner, id).await
+    }
+
+    async fn list_by_tenant(
+        &self,
+        tenant_id: TenantId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Team>, StorageError> {
+        TeamRepository::list_by_tenant(&self.inner, tenant_id, limit, offset).await
+    }
+
+    async fn upsert(&self, team: Team) -> Result<(), StorageError> {
+        TeamRepository::upsert(&self.inner, team).await
+    }
+
+    async fn delete(&self, id: TeamId) -> Result<(), StorageError> {
+        TeamRepository::delete(&self.inner, id).await
+    }
+}
+
+#[async_trait]
+impl CapabilityRepository for TimescaleStore {
+    async fn get(&self, id: CapabilityId) -> Result<Option<Capability>, StorageError> {
+        CapabilityRepository::get(&self.inner, id).await
+    }
+
+    async fn list_by_tenant(
+        &self,
+        tenant_id: TenantId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Capability>, StorageError> {
+        CapabilityRepository::list_by_tenant(&self.inner, tenant_id, limit, offset).await
+    }
+
+    async fn upsert(&self, capability: Capability) -> Result<(), StorageError> {
+        CapabilityRepository::upsert(&self.inner, capability).await
+    }
+
+    async fn delete(&self, id: CapabilityId) -> Result<(), StorageError> {
+        CapabilityRepository::delete(&self.inner, id).await
     }
 }
 

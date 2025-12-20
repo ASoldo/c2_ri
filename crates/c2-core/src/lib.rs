@@ -6,11 +6,13 @@ pub mod time;
 
 pub use classification::SecurityClassification;
 pub use domain::{
-    Asset, AssetKind, AssetStatus, Incident, IncidentStatus, IncidentType, Mission, MissionStatus,
-    OperationalPriority, Task, TaskStatus, Unit,
+    Asset, AssetKind, AssetStatus, Capability, CommsStatus, Incident, IncidentStatus,
+    IncidentType, MaintenanceState, Mission, MissionStatus, OperationalPriority, ReadinessState,
+    Task, TaskStatus, Team, Unit,
 };
 pub use error::{C2Error, C2Result, ErrorCode};
 pub use ids::{
-    AssetId, CorrelationId, IncidentId, MessageId, MissionId, TaskId, TenantId, UnitId, UserId,
+    AssetId, CapabilityId, CorrelationId, IncidentId, MessageId, MissionId, TaskId, TeamId,
+    TenantId, UnitId, UserId,
 };
 pub use time::{now_epoch_millis, EpochMillis};

@@ -26,6 +26,9 @@ IDs are stable and used to track design, implementation, and changelog entries.
 | SEC-004 | Data classification enforcement for records | Command, Ops | P0 | c2-api, c2-worker | c2-core | Planned |
 | SEC-005 | Immutable audit log pipeline | Compliance | P1 | c2-worker | c2-storage, c2-messaging | Planned |
 | SEC-006 | SSO and LDAP federation (Keycloak) | Ops | P0 | c2-api, c2-gateway | c2-identity | In progress |
+| SEC-007 | Resource-level authorization enforcement | Command, Ops | P0 | c2-api, c2-worker | c2-policy | Planned |
+| SEC-008 | Tamper-evident audit log hashing | Compliance | P1 | c2-worker | c2-storage, c2-core | Planned |
+| SEC-009 | Retention policies and legal hold controls | Compliance | P1 | c2-worker | c2-storage | Planned |
 
 ## Command and Mission Management
 
@@ -36,6 +39,18 @@ IDs are stable and used to track design, implementation, and changelog entries.
 | CMD-003 | Asset registry and readiness state | Ops | P0 | c2-api, c2-web | c2-core, c2-storage | In progress |
 | CMD-004 | Incident intake and response tracking | Ops, Field | P0 | c2-api, c2-web | c2-core, c2-storage | In progress |
 | CMD-005 | Command approvals and escalation workflows | Command | P1 | c2-api, c2-web | c2-policy | Planned |
+| CMD-006 | Incident escalation runbooks and playbooks | Command, Ops | P1 | c2-api, c2-web | c2-core, c2-policy | Planned |
+
+## Operational Data Model
+
+| ID | Capability | Primary Users | Priority | Services | Crates | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| ODM-001 | Unit registry with readiness state | Ops | P0 | c2-api, c2-web | c2-core, c2-storage | In progress |
+| ODM-002 | Team and detachment registry | Command, Ops | P0 | c2-api, c2-web | c2-core, c2-storage | In progress |
+| ODM-003 | Capability catalog and capability tagging | Command, Ops | P1 | c2-api, c2-web | c2-core, c2-storage | In progress |
+| ODM-004 | Asset maintenance lifecycle and scheduling fields | Ops | P0 | c2-api, c2-worker | c2-core, c2-storage | In progress |
+| ODM-005 | Comms status and link health | Ops, Field | P0 | c2-api, c2-worker | c2-core, c2-storage | In progress |
+| ODM-006 | Operational readiness scoring and posture | Command, Ops | P1 | c2-api, c2-worker | c2-core, c2-storage | Planned |
 
 ## Situational Awareness and Geo
 
@@ -46,6 +61,8 @@ IDs are stable and used to track design, implementation, and changelog entries.
 | SA-003 | Multi-layer map overlays and AOI regions | Command, Analyst | P1 | c2-web | c2-geo | Planned |
 | SA-004 | Sensor and telemetry feed normalization | Analyst | P0 | c2-worker | c2-messaging, c2-storage | Planned |
 | SA-005 | Operational timeline playback | Command, Analyst | P1 | c2-web | c2-storage | Planned |
+| SA-006 | Track history storage and time-series queries | Command, Analyst | P0 | c2-worker | c2-geo, c2-storage-timescale | Planned |
+| SA-007 | Geospatial track ingest and replay streams | Command, Field | P0 | c2-worker | c2-geo, c2-messaging | Planned |
 
 ## Messaging and Data Movement
 
@@ -79,6 +96,11 @@ IDs are stable and used to track design, implementation, and changelog entries.
 | ID | Capability | Primary Users | Priority | Services | Crates | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | UI-001 | Operator web console shell and Tera templating | Command, Ops | P0 | c2-web | c2-config | In progress |
+| UI-002 | Mission dashboards and role-based panels | Command, Ops | P0 | c2-web | c2-config | Planned |
+| UI-003 | Alerts, notifications, and escalation panels | Command, Ops | P0 | c2-web | c2-config | Planned |
+| UI-004 | Playbooks, runbooks, and checklists | Ops | P1 | c2-web | c2-config | Planned |
+| UI-005 | Role-based layouts and access scoping | Command, Ops | P1 | c2-web | c2-config | Planned |
+| UI-006 | Reporting, exports, and templated briefs | Command | P1 | c2-web | c2-config | Planned |
 
 ## Operations and Continuity
 
@@ -93,6 +115,9 @@ IDs are stable and used to track design, implementation, and changelog entries.
 | OPS-008 | GitOps deployment overlays with ArgoCD and Kustomize | Ops | P0 | All | k8s | In progress |
 | OPS-009 | Harbor registry integration for on-prem image distribution | Ops | P0 | All | k8s | In progress |
 | OPS-006 | Kubernetes operator and CRD deployment controller | Ops | P0 | c2-operator | c2-operator | In progress |
+| OPS-010 | Edge sync and conflict resolution | Field | P0 | c2-worker | c2-storage, c2-messaging | Planned |
+| OPS-011 | Multi-cluster HA and failover orchestration | Ops | P1 | c2-gateway | c2-config | Planned |
+| OPS-012 | Disaster recovery runbooks and restore validation | Ops | P1 | c2-worker | c2-storage | Planned |
 
 ## Interoperability and Integration
 
@@ -103,6 +128,9 @@ IDs are stable and used to track design, implementation, and changelog entries.
 | INT-003 | Export controls and data sharing policies | Command | P1 | c2-api | c2-policy | Planned |
 | INT-004 | Protobuf API payloads | Integrator | P1 | c2-api | c2-proto | In progress |
 | INT-005 | MCP integration routes | Integrator | P1 | c2-api, c2-mcp | c2-policy | In progress |
+| INT-006 | Public safety standards adapters (ICS/NIMS) | Integrator | P1 | c2-worker | c2-messaging | Planned |
+| INT-007 | Military standards adapters (STANAG/JC3IEDM) | Integrator | P1 | c2-worker | c2-messaging | Planned |
+| INT-008 | Radio/dispatch and CAD integration | Integrator | P1 | c2-worker | c2-messaging | Planned |
 
 ## Analytics and Reporting
 

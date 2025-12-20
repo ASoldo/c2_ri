@@ -1,5 +1,7 @@
 use crate::classification::SecurityClassification;
-use crate::ids::{AssetId, IncidentId, MissionId, TaskId, TenantId, UnitId};
+use crate::ids::{
+    AssetId, CapabilityId, IncidentId, MissionId, TaskId, TeamId, TenantId, UnitId,
+};
 use crate::time::EpochMillis;
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +42,52 @@ pub enum AssetStatus {
     Degraded,
     Maintenance,
     Lost,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadinessState {
+    Ready,
+    Limited,
+    Degraded,
+    Unavailable,
+}
+
+impl Default for ReadinessState {
+    fn default() -> Self {
+        Self::Ready
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommsStatus {
+    Online,
+    Intermittent,
+    Offline,
+    Unknown,
+}
+
+impl Default for CommsStatus {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceState {
+    None,
+    Scheduled,
+    InProgress,
+    Deferred,
+    Complete,
+}
+
+impl Default for MaintenanceState {
+    fn default() -> Self {
+        Self::None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,6 +160,16 @@ pub struct Asset {
     pub name: String,
     pub kind: AssetKind,
     pub status: AssetStatus,
+    #[serde(default)]
+    pub readiness: ReadinessState,
+    #[serde(default)]
+    pub comms_status: CommsStatus,
+    #[serde(default)]
+    pub maintenance_state: MaintenanceState,
+    #[serde(default)]
+    pub unit_id: Option<UnitId>,
+    #[serde(default)]
+    pub capability_ids: Vec<CapabilityId>,
     pub classification: SecurityClassification,
     pub created_at_ms: EpochMillis,
     pub updated_at_ms: EpochMillis,
@@ -121,8 +179,41 @@ pub struct Asset {
 pub struct Unit {
     pub id: UnitId,
     pub tenant_id: TenantId,
+    pub classification: SecurityClassification,
     pub callsign: Option<String>,
     pub display_name: String,
+    #[serde(default)]
+    pub readiness: ReadinessState,
+    #[serde(default)]
+    pub comms_status: CommsStatus,
+    #[serde(default)]
+    pub team_id: Option<TeamId>,
+    #[serde(default)]
+    pub capability_ids: Vec<CapabilityId>,
+    pub created_at_ms: EpochMillis,
+    pub updated_at_ms: EpochMillis,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Team {
+    pub id: TeamId,
+    pub tenant_id: TenantId,
+    pub name: String,
+    pub callsign: Option<String>,
+    pub classification: SecurityClassification,
+    pub created_at_ms: EpochMillis,
+    pub updated_at_ms: EpochMillis,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Capability {
+    pub id: CapabilityId,
+    pub tenant_id: TenantId,
+    pub code: String,
+    pub name: String,
+    pub category: Option<String>,
+    pub description: Option<String>,
+    pub classification: SecurityClassification,
     pub created_at_ms: EpochMillis,
     pub updated_at_ms: EpochMillis,
 }

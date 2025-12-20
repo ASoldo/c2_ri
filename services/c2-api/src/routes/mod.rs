@@ -1,4 +1,5 @@
 pub mod health;
+pub mod capabilities;
 pub mod assets;
 pub mod common;
 pub mod incidents;
@@ -7,7 +8,9 @@ pub mod mcp;
 pub mod protobuf;
 pub mod sse;
 pub mod status;
+pub mod teams;
 pub mod tasks;
+pub mod units;
 pub mod ws;
 
 use actix_web::web;
@@ -23,6 +26,18 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(assets::get_asset)
         .service(assets::upsert_asset)
         .service(assets::delete_asset)
+        .service(units::list_units)
+        .service(units::get_unit)
+        .service(units::upsert_unit)
+        .service(units::delete_unit)
+        .service(teams::list_teams)
+        .service(teams::get_team)
+        .service(teams::upsert_team)
+        .service(teams::delete_team)
+        .service(capabilities::list_capabilities)
+        .service(capabilities::get_capability)
+        .service(capabilities::upsert_capability)
+        .service(capabilities::delete_capability)
         .service(incidents::list_incidents)
         .service(incidents::get_incident)
         .service(incidents::upsert_incident)
