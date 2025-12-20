@@ -1,14 +1,18 @@
 use actix_web::{error::ErrorInternalServerError, get, web, Error, HttpResponse};
-use tera::Context;
-
 use crate::state::AppState;
+use crate::api::UiSnapshot;
+use crate::render::{build_context, UiTemplateData};
 
 #[get("/")]
 pub async fn index(state: web::Data<AppState>) -> Result<HttpResponse, Error> {
-    let mut context = Context::new();
-    context.insert("service_name", &state.config.service_name);
-    context.insert("environment", &state.config.environment.to_string());
-
+    let status = state.api.status().await.ok();
+    let snapshot = state
+        .api
+        .snapshot()
+        .await
+        .unwrap_or_else(|_| UiSnapshot::empty());
+    let data = UiTemplateData::from_state(&state, status, snapshot);
+    let context = build_context(&data);
     let body = state
         .tera
         .render("index.html", &context)

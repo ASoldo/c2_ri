@@ -77,7 +77,7 @@ pub struct ApiClient {
     list_limit: usize,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StatusResponse {
     pub service: String,
     pub environment: String,
@@ -118,6 +118,35 @@ pub struct UiSnapshot {
     pub missions: MissionSummary,
     pub assets: AssetSummary,
     pub incidents: IncidentSummary,
+}
+
+impl UiSnapshot {
+    pub fn empty() -> Self {
+        Self {
+            timestamp_ms: now_epoch_millis(),
+            missions: MissionSummary {
+                total: 0,
+                active: 0,
+                planned: 0,
+                suspended: 0,
+                completed: 0,
+                aborted: 0,
+            },
+            assets: AssetSummary {
+                total: 0,
+                ready: 0,
+                degraded: 0,
+                maintenance: 0,
+                lost: 0,
+            },
+            incidents: IncidentSummary {
+                total: 0,
+                active: 0,
+                responding: 0,
+                resolved: 0,
+            },
+        }
+    }
 }
 
 impl ApiClient {

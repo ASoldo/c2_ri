@@ -7,7 +7,8 @@ use futures_util::stream::unfold;
 use serde::Serialize;
 use std::time::{Duration, Instant};
 
-use crate::api::ApiClient;
+use crate::api::{ApiClient, UiSnapshot};
+use crate::render::{build_context, UiTemplateData};
 use crate::state::AppState;
 
 #[get("/ui/status")]
@@ -43,19 +44,31 @@ pub async fn sse(state: web::Data<AppState>) -> HttpResponse {
             .body("{\"error\":\"missing C2_UI_* auth configuration\"}");
     }
     let api = state.api.clone();
+    let tera = state.tera.clone();
+    let service_name = state.config.service_name.clone();
+    let environment = state.config.environment.to_string();
     let ticker = interval(api.poll_interval());
-    let stream = unfold((ticker, api), |(mut ticker, api)| async move {
-        ticker.tick().await;
-        let payload = match api.snapshot().await {
-            Ok(snapshot) => build_sse_event("snapshot", &snapshot),
-            Err(err) => {
-                let error = StreamError {
-                    message: err.message,
-                };
-                build_sse_event("error", &error)
-            }
-        };
-        Some((Ok::<Bytes, actix_web::Error>(Bytes::from(payload)), (ticker, api)))
+    let stream = unfold((ticker, api), move |(mut ticker, api)| {
+        let tera = tera.clone();
+        let service_name = service_name.clone();
+        let environment = environment.clone();
+        async move {
+            ticker.tick().await;
+            let snapshot = api.snapshot().await.unwrap_or_else(|_| UiSnapshot::empty());
+            let payload = match render_partials(&tera, &service_name, &environment, &snapshot) {
+                Ok(partials) => build_sse_event(
+                    "partials",
+                    &PartialsPayload { fragments: partials },
+                ),
+                Err(err) => {
+                    let error = StreamError {
+                        message: err,
+                    };
+                    build_sse_event("error", &error)
+                }
+            };
+            Some((Ok::<Bytes, actix_web::Error>(Bytes::from(payload)), (ticker, api)))
+        }
     });
 
     HttpResponse::Ok()
@@ -76,18 +89,44 @@ pub async fn ws_route(
             .content_type("application/json")
             .body("{\"error\":\"missing C2_UI_* auth configuration\"}"));
     }
-    let session = UiWsSession::new(state.api.clone());
+    let session = UiWsSession::new(
+        state.api.clone(),
+        state.tera.clone(),
+        state.config.service_name.clone(),
+        state.config.environment.to_string(),
+    );
     ws::start(session, &req, stream)
 }
 
 fn build_sse_event<T: Serialize>(event: &str, payload: &T) -> String {
     let data = serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string());
-    format!("event: {event}\ndata: {data}\n\n")
+    let mut output = String::new();
+    output.push_str("event: ");
+    output.push_str(event);
+    output.push('\n');
+    for line in data.lines() {
+        output.push_str("data: ");
+        output.push_str(line);
+        output.push('\n');
+    }
+    output.push('\n');
+    output
 }
 
 #[derive(Debug, Serialize)]
 struct StreamError {
     message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PartialFragment {
+    target: &'static str,
+    html: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PartialsPayload {
+    fragments: Vec<PartialFragment>,
 }
 
 #[derive(Debug, Serialize)]
@@ -98,15 +137,21 @@ struct WsEnvelope<'a, T: Serialize> {
 
 struct UiWsSession {
     api: ApiClient,
+    tera: tera::Tera,
+    service_name: String,
+    environment: String,
     last_heartbeat: Instant,
     poll_interval: Duration,
 }
 
 impl UiWsSession {
-    fn new(api: ApiClient) -> Self {
+    fn new(api: ApiClient, tera: tera::Tera, service_name: String, environment: String) -> Self {
         let poll_interval = api.poll_interval();
         Self {
             api,
+            tera,
+            service_name,
+            environment,
             last_heartbeat: Instant::now(),
             poll_interval,
         }
@@ -125,35 +170,76 @@ impl UiWsSession {
     fn start_updates(&self, ctx: &mut ws::WebsocketContext<Self>) {
         ctx.run_interval(self.poll_interval, |actor, ctx| {
             let api = actor.api.clone();
-            let fut = async move { api.snapshot().await };
+            let tera = actor.tera.clone();
+            let service_name = actor.service_name.clone();
+            let environment = actor.environment.clone();
+            let fut = async move { api.snapshot().await.unwrap_or_else(|_| UiSnapshot::empty()) };
             ctx.spawn(
                 actix::fut::wrap_future(fut).map(
-                    |result, _actor, ctx: &mut ws::WebsocketContext<UiWsSession>| match result {
-                    Ok(snapshot) => {
-                        let envelope = WsEnvelope {
-                            kind: "snapshot",
-                            payload: snapshot,
-                        };
-                        if let Ok(text) = serde_json::to_string(&envelope) {
-                            ctx.text(text);
+                    move |snapshot, _actor, ctx: &mut ws::WebsocketContext<UiWsSession>| {
+                        match render_partials(&tera, &service_name, &environment, &snapshot) {
+                            Ok(partials) => {
+                                let envelope = WsEnvelope {
+                                    kind: "partials",
+                                    payload: PartialsPayload { fragments: partials },
+                                };
+                                if let Ok(text) = serde_json::to_string(&envelope) {
+                                    ctx.text(text);
+                                }
+                            }
+                            Err(err) => {
+                                let envelope = WsEnvelope {
+                                    kind: "error",
+                                    payload: StreamError { message: err },
+                                };
+                                if let Ok(text) = serde_json::to_string(&envelope) {
+                                    ctx.text(text);
+                                }
+                            }
                         }
-                    }
-                    Err(err) => {
-                        let envelope = WsEnvelope {
-                            kind: "error",
-                            payload: StreamError {
-                                message: err.message,
-                            },
-                        };
-                        if let Ok(text) = serde_json::to_string(&envelope) {
-                            ctx.text(text);
-                        }
-                    }
-                },
+                    },
                 ),
             );
         });
     }
+}
+
+fn render_partials(
+    tera: &tera::Tera,
+    service_name: &str,
+    environment: &str,
+    snapshot: &UiSnapshot,
+) -> Result<Vec<PartialFragment>, String> {
+    let data = UiTemplateData {
+        service_name: service_name.to_string(),
+        environment: environment.to_string(),
+        status: None,
+        snapshot: snapshot.clone(),
+    };
+    let context = build_context(&data);
+    let mission_feed = tera
+        .render("partials/mission_feed.html", &context)
+        .map_err(|err| err.to_string())?;
+    let incidents = tera
+        .render("partials/incidents.html", &context)
+        .map_err(|err| err.to_string())?;
+    let assets = tera
+        .render("partials/assets.html", &context)
+        .map_err(|err| err.to_string())?;
+    Ok(vec![
+        PartialFragment {
+            target: "mission-feed-panel",
+            html: mission_feed,
+        },
+        PartialFragment {
+            target: "incident-panel",
+            html: incidents,
+        },
+        PartialFragment {
+            target: "asset-panel",
+            html: assets,
+        },
+    ])
 }
 
 impl Actor for UiWsSession {

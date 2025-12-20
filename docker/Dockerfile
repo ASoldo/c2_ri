@@ -45,6 +45,7 @@ WORKDIR /app
 
 COPY --from=builder /app/bin/${BIN} /app/bin/app
 COPY --from=builder /app/services/c2-web/templates /app/templates
+COPY --from=builder /app/services/c2-web/static /app/static
 
 ENV C2_DATA_DIR=/var/lib/c2
 ENV C2_WEB_TEMPLATES_DIR=/app/templates

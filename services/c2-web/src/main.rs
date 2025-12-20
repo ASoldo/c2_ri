@@ -1,7 +1,9 @@
 mod api;
+mod render;
 mod routes;
 mod state;
 
+use actix_files::Files;
 use actix_web::{web, App, HttpServer};
 use c2_config::ServiceConfig;
 use c2_observability::{init, log_startup, ObservabilityConfig};
@@ -9,6 +11,7 @@ use api::ApiClient;
 use state::AppState;
 use std::env;
 use std::io;
+use std::path::Path;
 use tera::Tera;
 
 #[actix_web::main]
@@ -27,12 +30,23 @@ async fn main() -> io::Result<()> {
         env::var("C2_WEB_TEMPLATES_DIR").unwrap_or_else(|_| "templates".to_string());
     let template_glob = format!("{}/**/*", template_root);
     let tera = Tera::new(&template_glob).expect("Failed to load templates");
+    let static_root = env::var("C2_WEB_STATIC_DIR").unwrap_or_else(|_| "static".to_string());
+    let static_root = if Path::new(&static_root).exists() {
+        static_root
+    } else {
+        "services/c2-web/static".to_string()
+    };
     let bind_addr = config.bind_addr.clone();
     let api = ApiClient::from_env()
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err.message))?;
     let state = web::Data::new(AppState { config, tera, api });
 
-    HttpServer::new(move || App::new().app_data(state.clone()).configure(routes::configure))
+    HttpServer::new(move || {
+        App::new()
+            .app_data(state.clone())
+            .service(Files::new("/static", static_root.clone()).prefer_utf8(true))
+            .configure(routes::configure)
+    })
         .bind(bind_addr)?
         .run()
         .await

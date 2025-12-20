@@ -68,6 +68,7 @@ Optional overrides:
 - `C2_API_BASE_URL=http://c2-api:8080`
 - `C2_UI_POLL_INTERVAL_MS=2000`
 - `C2_UI_LIST_LIMIT=200`
+- `C2_WEB_STATIC_DIR=services/c2-web/static`
 
 ## Metrics (Prometheus)
 

@@ -20,22 +20,19 @@
 
 <main>
   <section class="card">
-    <h2>Live Mission Feed</h2>
-    <p>Streaming mission state changes, asset health, and command approvals.</p>
-    <div class="highlight" id="mission-feed">Awaiting telemetry link</div>
-    <div class="meta" id="mission-meta">Connect to live services to populate panels.</div>
+    <div id="mission-feed-panel" data-partial="/partials/mission-feed">
+      {% include "partials/mission_feed.html" %}
+    </div>
   </section>
   <section class="card">
-    <h2>Priority Incidents</h2>
-    <p>First responder incidents and defense escalations are routed here.</p>
-    <div class="highlight" id="incident-count">0 active escalations</div>
-    <div class="meta" id="incident-meta">No incident telemetry yet.</div>
+    <div id="incident-panel" data-partial="/partials/incidents">
+      {% include "partials/incidents.html" %}
+    </div>
   </section>
   <section class="card">
-    <h2>Asset Readiness</h2>
-    <p>Quick view of active units and their readiness posture.</p>
-    <div class="highlight" id="asset-readiness">24 ready · 3 degraded</div>
-    <div class="meta" id="asset-meta">Telemetry link pending.</div>
+    <div id="asset-panel" data-partial="/partials/assets">
+      {% include "partials/assets.html" %}
+    </div>
   </section>
 </main>
 
