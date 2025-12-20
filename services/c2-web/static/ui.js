@@ -752,7 +752,8 @@ class Renderer3D {
 
   focusOnGeo(geo) {
     if (!this.camera || !this.controls) return;
-    const targetPos = geoToSphere(geo, this.globeRadius).normalize();
+    const target = geoToSphere(geo, this.globeRadius);
+    const targetPos = new THREE.Vector3(target.x, target.y, target.z).normalize();
     const distance = this.globeRadius * 2.6;
     const destination = targetPos.multiplyScalar(distance);
     this.focusTween = {
