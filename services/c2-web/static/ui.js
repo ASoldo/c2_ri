@@ -639,7 +639,31 @@ class TileManager {
     const phiLength = ((lonEast - lonWest) * Math.PI) / 180;
     const thetaStart = ((90 - latNorth) * Math.PI) / 180;
     const thetaLength = ((latNorth - latSouth) * Math.PI) / 180;
-    return new THREE.SphereGeometry(this.radius, 12, 12, phiStart, phiLength, thetaStart, thetaLength);
+    const geometry = new THREE.SphereGeometry(
+      this.radius,
+      12,
+      12,
+      phiStart,
+      phiLength,
+      thetaStart,
+      thetaLength,
+    );
+    const pos = geometry.getAttribute("position");
+    const uv = new Float32Array(pos.count * 2);
+    const lonSpan = lonEast - lonWest;
+    const latSpan = latNorth - latSouth;
+    for (let i = 0; i < pos.count; i += 1) {
+      this.tmpVec.set(pos.getX(i), pos.getY(i), pos.getZ(i));
+      const geo = sphereToGeo(this.tmpVec);
+      let u = (geo.lon - lonWest) / lonSpan;
+      let v = (latNorth - geo.lat) / latSpan;
+      u = Math.min(1, Math.max(0, u));
+      v = Math.min(1, Math.max(0, v));
+      uv[i * 2] = u;
+      uv[i * 2 + 1] = v;
+    }
+    geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+    return geometry;
   }
 }
 
