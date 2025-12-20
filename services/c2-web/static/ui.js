@@ -1275,7 +1275,7 @@ const main = () => {
   renderer3d.init();
 
   const pinLayer = new PinLayer(els.pinLayer, renderer3d, els.board);
-  const edgeLayer = new EdgeLayer(els.edgeLayer, renderer3d, els.board, (action, entityId) => {
+  const edgeLayer = new EdgeLayer(els.edgeLayer, renderer3d, null, (action, entityId) => {
     if (action === "focus") {
       const entity = Number(entityId);
       const geo = world.getComponent(entity, "Geo");

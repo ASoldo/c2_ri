@@ -397,14 +397,16 @@ body {
   width: 52px;
   height: 64px;
   right: -26px;
-  border-radius: 0 999px 999px 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
 }
 
 .dock.right[data-state="closed"] .dock-toggle {
   width: 52px;
   height: 64px;
   left: -26px;
-  border-radius: 999px 0 0 999px;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
 .layer-toggle {
