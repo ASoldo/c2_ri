@@ -343,6 +343,7 @@ class BoardView {
 }
 
 const clampLat = (lat) => Math.max(-85.05112878, Math.min(85.05112878, lat));
+const TWO_PI = Math.PI * 2;
 
 const tileXForLon = (lon, zoom) => {
   const n = 2 ** zoom;
@@ -350,10 +351,14 @@ const tileXForLon = (lon, zoom) => {
   return Math.max(0, Math.min(n - 1, x));
 };
 
+const mercatorYForLat = (lat) => {
+  const rad = (clampLat(lat) * Math.PI) / 180;
+  return (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2;
+};
+
 const tileYForLat = (lat, zoom) => {
   const n = 2 ** zoom;
-  const rad = (clampLat(lat) * Math.PI) / 180;
-  const value = (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2;
+  const value = mercatorYForLat(lat);
   const y = Math.floor(value * n);
   return Math.max(0, Math.min(n - 1, y));
 };
@@ -374,9 +379,19 @@ const sphereToGeo = (point) => {
   const radius = Math.max(point.length(), 1);
   const phi = Math.acos(point.y / radius);
   let theta = Math.atan2(point.z, point.x);
-  if (theta < 0) theta += Math.PI * 2;
+  if (theta < 0) theta += TWO_PI;
   const lat = 90 - (phi * 180) / Math.PI;
   const lon = (theta * 180) / Math.PI - 180;
+  return { lat, lon };
+};
+
+const sphereToGeoTile = (point) => {
+  const radius = Math.max(point.length(), 1);
+  const theta = Math.acos(point.y / radius);
+  let phi = Math.atan2(point.z, -point.x);
+  if (phi < 0) phi += TWO_PI;
+  const lat = 90 - (theta * 180) / Math.PI;
+  const lon = (phi * 180) / Math.PI - 180;
   return { lat, lon };
 };
 
@@ -583,7 +598,7 @@ class TileManager {
     if (this.rotationY) {
       this.tmpPoint.applyAxisAngle(AXIS_Y, -this.rotationY);
     }
-    return sphereToGeo(this.tmpPoint);
+    return sphereToGeoTile(this.tmpPoint);
   }
 
   raySphereIntersect(ray, radius) {
@@ -667,28 +682,41 @@ class TileManager {
     const latSouth = bounds.latSouth;
     const lonWest = bounds.lonWest;
     const lonEast = bounds.lonEast;
+    const lonSpan = Math.abs(lonEast - lonWest);
+    const latSpan = Math.abs(latNorth - latSouth);
+    const widthSegments = Math.min(128, Math.max(12, Math.round(lonSpan / 2)));
+    const heightSegments = Math.min(96, Math.max(10, Math.round(latSpan / 2)));
     const phiStart = ((lonWest + 180) * Math.PI) / 180;
     const phiLength = ((lonEast - lonWest) * Math.PI) / 180;
     const thetaStart = ((90 - latNorth) * Math.PI) / 180;
     const thetaLength = ((latNorth - latSouth) * Math.PI) / 180;
     const geometry = new THREE.SphereGeometry(
       this.radius,
-      12,
-      12,
+      widthSegments,
+      heightSegments,
       phiStart,
       phiLength,
       thetaStart,
       thetaLength,
     );
-    const pos = geometry.getAttribute("position");
-    const uv = new Float32Array(pos.count * 2);
-    const lonSpan = lonEast - lonWest;
-    const latSpan = latNorth - latSouth;
-    for (let i = 0; i < pos.count; i += 1) {
-      this.tmpVec.set(pos.getX(i), pos.getY(i), pos.getZ(i));
-      const geo = sphereToGeo(this.tmpVec);
-      let u = (geo.lon - lonWest) / lonSpan;
-      let v = (latNorth - geo.lat) / latSpan;
+    const baseUv = geometry.getAttribute("uv");
+    const uv = new Float32Array(baseUv.count * 2);
+    const xWest = (lonWest + 180) / 360;
+    const xEast = (lonEast + 180) / 360;
+    const yNorth = mercatorYForLat(latNorth);
+    const ySouth = mercatorYForLat(latSouth);
+    const xSpan = xEast - xWest;
+    const ySpan = ySouth - yNorth;
+    for (let i = 0; i < baseUv.count; i += 1) {
+      const uBase = baseUv.getX(i);
+      const vBase = baseUv.getY(i);
+      const phi = phiStart + uBase * phiLength;
+      const theta = thetaStart + (1 - vBase) * thetaLength;
+      const lat = 90 - (theta * 180) / Math.PI;
+      const xNorm = phi / TWO_PI;
+      const yNorm = mercatorYForLat(lat);
+      let u = (xNorm - xWest) / xSpan;
+      let v = (yNorm - yNorth) / ySpan;
       u = Math.min(1, Math.max(0, u));
       v = Math.min(1, Math.max(0, v));
       uv[i * 2] = u;
