@@ -308,6 +308,7 @@ class Renderer3D {
     this.trails = [];
     this.lastCameraVec = null;
     this.lastTrailAt = 0;
+    this.focusTween = null;
     this.tmp = new THREE.Object3D();
     this.tmpVec = new THREE.Vector3();
     this.tmpVec2 = new THREE.Vector3();
@@ -582,6 +583,7 @@ class Renderer3D {
       this.clouds.rotation.y += 0.00025;
     }
     this.updateTrails();
+    this.updateFocus();
     this.controls?.update();
     this.renderer.render(this.scene, this.camera);
   }
@@ -746,6 +748,32 @@ class Renderer3D {
       }
       return true;
     });
+  }
+
+  focusOnGeo(geo) {
+    if (!this.camera || !this.controls) return;
+    const targetPos = geoToSphere(geo, this.globeRadius).normalize();
+    const distance = this.globeRadius * 2.6;
+    const destination = targetPos.multiplyScalar(distance);
+    this.focusTween = {
+      start: performance.now(),
+      duration: 1200,
+      from: this.camera.position.clone(),
+      to: destination,
+    };
+    this.controls.target.set(0, 0, 0);
+  }
+
+  updateFocus() {
+    if (!this.focusTween || !this.camera) return;
+    const now = performance.now();
+    const elapsed = now - this.focusTween.start;
+    const t = Math.min(1, elapsed / this.focusTween.duration);
+    const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    this.camera.position.lerpVectors(this.focusTween.from, this.focusTween.to, eased);
+    if (t >= 1) {
+      this.focusTween = null;
+    }
   }
 }
 
@@ -993,12 +1021,13 @@ const collapseLabel = (label) => {
 };
 
 class EdgeLayer {
-  constructor(layerEl, renderer, boundsEl) {
+  constructor(layerEl, renderer, boundsEl, onAction) {
     this.layerEl = layerEl;
     this.renderer = renderer;
     this.boundsEl = boundsEl;
     this.nodes = new Map();
     this.active = null;
+    this.onAction = onAction;
   }
 
   bind() {
@@ -1011,7 +1040,7 @@ class EdgeLayer {
         if (marker) {
           const action = actionButton.dataset.action;
           const entityId = marker.dataset.entity;
-          console.info("edge action", { action, entityId });
+          this.onAction?.(action, entityId);
           marker.dataset.open = "false";
           this.active = null;
         }
@@ -1101,10 +1130,6 @@ class EdgeLayer {
 
       let dx = screen.x - centerX;
       let dy = screen.y - centerY;
-      if (screen.behind) {
-        dx = -dx;
-        dy = -dy;
-      }
       const safeDx = Math.abs(dx) < 1 ? 1 : dx;
       const safeDy = Math.abs(dy) < 1 ? 1 : dy;
       const scale = Math.min(edgeX / Math.abs(safeDx), edgeY / Math.abs(safeDy));
@@ -1191,7 +1216,15 @@ const main = () => {
   renderer3d.init();
 
   const pinLayer = new PinLayer(els.pinLayer, renderer3d, els.board);
-  const edgeLayer = new EdgeLayer(els.edgeLayer, renderer3d, els.board);
+  const edgeLayer = new EdgeLayer(els.edgeLayer, renderer3d, els.board, (action, entityId) => {
+    if (action === "focus") {
+      const entity = Number(entityId);
+      const geo = world.getComponent(entity, "Geo");
+      if (geo) renderer3d.focusOnGeo(geo);
+    } else {
+      console.info("edge action", { action, entityId });
+    }
+  });
   edgeLayer.bind();
 
   bus.on("entities:update", (payload) => {
