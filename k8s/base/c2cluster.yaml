@@ -14,7 +14,7 @@ spec:
     metricsPort: 9090
   database:
     surreal:
-      endpoint: "ws://surrealdb.c2-system.svc.cluster.local:8000"
+      endpoint: "surrealdb.c2-system.svc.cluster.local:8000"
       namespace: "c2"
       database: "operations"
       username: "root"

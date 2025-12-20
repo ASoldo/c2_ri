@@ -9,7 +9,7 @@ use c2_storage::{
 };
 use serde::{Deserialize, Serialize};
 use std::env;
-use surrealdb::engine::remote::ws::{Client, Ws};
+use surrealdb::engine::remote::ws::{Client, Ws, Wss};
 use surrealdb::opt::auth::Root;
 use surrealdb::sql::{Id, Thing};
 use surrealdb::Surreal;
@@ -38,7 +38,7 @@ pub struct SurrealConfig {
 impl SurrealConfig {
     pub fn from_env() -> Self {
         Self {
-            endpoint: env_var("C2_SURREAL_ENDPOINT", "ws://127.0.0.1:8000".to_string()),
+            endpoint: env_var("C2_SURREAL_ENDPOINT", "127.0.0.1:8000".to_string()),
             namespace: env_var("C2_SURREAL_NAMESPACE", "c2".to_string()),
             database: env_var("C2_SURREAL_DATABASE", "operations".to_string()),
             username: env_var("C2_SURREAL_USERNAME", "root".to_string()),
@@ -54,6 +54,33 @@ impl SurrealConfig {
 pub struct SurrealStore {
     #[allow(dead_code)]
     db: Surreal<Client>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SurrealScheme {
+    Ws,
+    Wss,
+}
+
+fn normalize_endpoint(raw: &str) -> Result<(SurrealScheme, String), StorageError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(StorageError::new("C2_SURREAL_ENDPOINT is empty"));
+    }
+    if let Some(stripped) = trimmed.strip_prefix("ws://") {
+        return Ok((SurrealScheme::Ws, stripped.to_string()));
+    }
+    if let Some(stripped) = trimmed.strip_prefix("wss://") {
+        return Ok((SurrealScheme::Wss, stripped.to_string()));
+    }
+    if let Some((scheme, rest)) = trimmed.split_once("://") {
+        warn!(
+            scheme = scheme,
+            "Unsupported SurrealDB endpoint scheme, defaulting to ws"
+        );
+        return Ok((SurrealScheme::Ws, rest.to_string()));
+    }
+    Ok((SurrealScheme::Ws, trimmed.to_string()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -152,9 +179,11 @@ struct SurrealTaskWrite {
 
 impl SurrealStore {
     pub async fn connect(config: &SurrealConfig) -> Result<Self, StorageError> {
-        let db = Surreal::new::<Ws>(&config.endpoint)
-            .await
-            .map_err(map_err)?;
+        let (scheme, endpoint) = normalize_endpoint(&config.endpoint)?;
+        let db = match scheme {
+            SurrealScheme::Ws => Surreal::new::<Ws>(&endpoint).await.map_err(map_err)?,
+            SurrealScheme::Wss => Surreal::new::<Wss>(&endpoint).await.map_err(map_err)?,
+        };
         db.signin(Root {
             username: &config.username,
             password: &config.password,

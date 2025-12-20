@@ -10,7 +10,7 @@ surreal start --log info --user root --pass root --bind 0.0.0.0:8000 memory
 
 Default env vars (override as needed):
 
-- `C2_SURREAL_ENDPOINT=ws://127.0.0.1:8000`
+- `C2_SURREAL_ENDPOINT=127.0.0.1:8000`
 - `C2_SURREAL_NAMESPACE=c2`
 - `C2_SURREAL_DATABASE=operations`
 - `C2_SURREAL_USERNAME=root`
