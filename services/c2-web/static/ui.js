@@ -401,8 +401,7 @@ const TWO_PI = Math.PI * 2;
 
 const tileXForLon = (lon, zoom) => {
   const n = 2 ** zoom;
-  const x = Math.floor(((lon + 180) / 360) * n);
-  return Math.max(0, Math.min(n - 1, x));
+  return Math.floor(((lon + 180) / 360) * n);
 };
 
 const mercatorYForLat = (lat) => {
@@ -708,14 +707,15 @@ class TileManager {
         tileXForLon(startLon, zoom),
         tileXForLon(endLon, zoom),
       ]);
+      const wrapX = (value) => ((value % n) + n) % n;
       ranges.forEach(([start, end]) => {
         for (let x = start - 1; x <= end + 1; x += 1) {
-          if (x < 0 || x >= n) continue;
+          const wrappedX = wrapX(x);
           for (let y = yMin; y <= yMax; y += 1) {
-            const key = `${zoom}/${x}/${y}`;
+            const key = `${zoom}/${wrappedX}/${y}`;
             if (tiles.has(key)) continue;
-            const bounds = tileBounds(x, y, zoom);
-            const tile = { key, x, y, zoom, bounds };
+            const bounds = tileBounds(wrappedX, y, zoom);
+            const tile = { key, x: wrappedX, y, zoom, bounds };
             tiles.set(key, tile);
             const dist = (x - center.x) ** 2 + (y - center.y) ** 2;
             keys.push({ key, dist, tile });
@@ -1569,8 +1569,8 @@ class Renderer3D {
       minZoom: WEATHER_CONFIG.minZoom,
       maxZoom: WEATHER_CONFIG.maxZoom,
       opacity: this.weatherOpacity,
-      renderOrder: 14,
-      depthTest: true,
+      renderOrder: 50,
+      depthTest: false,
       depthWrite: false,
       polygonOffsetFactor: -6,
       polygonOffsetUnits: -6,
