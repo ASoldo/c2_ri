@@ -874,7 +874,8 @@ class TileManager {
           side: THREE.FrontSide,
         });
         material.depthTest = this.provider.depthTest ?? true;
-        material.depthWrite = this.provider.depthWrite ?? false;
+        material.depthWrite =
+          this.provider.depthWrite ?? (!material.transparent && material.depthTest);
         if (Number.isFinite(this.provider.alphaTest)) {
           material.alphaTest = this.provider.alphaTest;
         }
@@ -1170,21 +1171,21 @@ class Renderer3D {
     this.axisHelper = new THREE.AxesHelper(this.globeRadius * 1.6);
     this.axisHelper.visible = true;
     this.axisHelper.setColors(0xff0000, 0x00ff00, 0x0000ff);
-    this.axisHelper.renderOrder = 2000;
-    if (this.axisHelper.material) {
-      const materials = Array.isArray(this.axisHelper.material)
-        ? this.axisHelper.material
-        : [this.axisHelper.material];
+    this.axisHelper.renderOrder = 10000;
+    this.axisHelper.traverse((child) => {
+      if (!child || !child.material) return;
+      child.renderOrder = 10000;
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
       materials.forEach((material) => {
         if (!material) return;
         material.depthTest = false;
         material.depthWrite = false;
       });
-    }
+    });
     this.scene.add(this.axisHelper);
 
     this.gridLines = this.buildLatLonGrid(this.globeRadius + 0.6, 20, 10);
-    this.gridLines.renderOrder = 2000;
+    this.gridLines.renderOrder = 10000;
     this.scene.add(this.gridLines);
 
     this.setLightingMode("day");
@@ -1668,7 +1669,9 @@ class Renderer3D {
     });
     material.depthTest = false;
     material.depthWrite = false;
-    return new THREE.LineSegments(geometry, material);
+    const line = new THREE.LineSegments(geometry, material);
+    line.renderOrder = 10000;
+    return line;
   }
 
   recordCameraTrail() {
