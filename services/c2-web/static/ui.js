@@ -879,9 +879,15 @@ class TileManager {
         if (Number.isFinite(this.provider.alphaTest)) {
           material.alphaTest = this.provider.alphaTest;
         }
-        material.polygonOffset = true;
-        material.polygonOffsetFactor = -3;
-        material.polygonOffsetUnits = -3;
+        const offsetFactor = Number.isFinite(this.provider.polygonOffsetFactor)
+          ? this.provider.polygonOffsetFactor
+          : -3;
+        const offsetUnits = Number.isFinite(this.provider.polygonOffsetUnits)
+          ? this.provider.polygonOffsetUnits
+          : -3;
+        material.polygonOffset = offsetFactor !== 0 || offsetUnits !== 0;
+        material.polygonOffsetFactor = offsetFactor;
+        material.polygonOffsetUnits = offsetUnits;
         const mesh = new THREE.Mesh(geometry, material);
         mesh.renderOrder = this.provider.renderOrder ?? 10;
         geometry.computeBoundingSphere();
@@ -1171,10 +1177,10 @@ class Renderer3D {
     this.axisHelper = new THREE.AxesHelper(this.globeRadius * 1.6);
     this.axisHelper.visible = true;
     this.axisHelper.setColors(0xff0000, 0x00ff00, 0x0000ff);
-    this.axisHelper.renderOrder = 10000;
+    this.axisHelper.renderOrder = 10020;
     this.axisHelper.traverse((child) => {
       if (!child || !child.material) return;
-      child.renderOrder = 10000;
+      child.renderOrder = 10020;
       const materials = Array.isArray(child.material) ? child.material : [child.material];
       materials.forEach((material) => {
         if (!material) return;
@@ -1185,7 +1191,7 @@ class Renderer3D {
     this.scene.add(this.axisHelper);
 
     this.gridLines = this.buildLatLonGrid(this.globeRadius + 0.6, 20, 10);
-    this.gridLines.renderOrder = 10000;
+    this.gridLines.renderOrder = 10010;
     this.scene.add(this.gridLines);
 
     this.setLightingMode("day");
@@ -1563,7 +1569,11 @@ class Renderer3D {
       minZoom: WEATHER_CONFIG.minZoom,
       maxZoom: WEATHER_CONFIG.maxZoom,
       opacity: this.weatherOpacity,
-      renderOrder: 12,
+      renderOrder: 14,
+      depthTest: true,
+      depthWrite: false,
+      polygonOffsetFactor: -6,
+      polygonOffsetUnits: -6,
       updateIntervalMs: WEATHER_CONFIG.updateIntervalMs,
       params: {
         field: this.weatherField,
@@ -1667,10 +1677,10 @@ class Renderer3D {
       transparent: true,
       opacity: 0.45,
     });
-    material.depthTest = false;
+    material.depthTest = true;
     material.depthWrite = false;
     const line = new THREE.LineSegments(geometry, material);
-    line.renderOrder = 10000;
+    line.renderOrder = 10010;
     return line;
   }
 
