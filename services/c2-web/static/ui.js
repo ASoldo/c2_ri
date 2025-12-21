@@ -1972,7 +1972,7 @@ class FlightPinLayer {
       let node = this.nodes.get(entity);
       if (!node) {
         node = document.createElement("div");
-        node.className = "flight-pin";
+        node.className = "pin flight-pin";
         node.innerHTML = `
           <span class="flight-icon" aria-hidden="true"></span>
           <span class="flight-label"></span>
@@ -2020,7 +2020,7 @@ class FlightPinLayer {
         screen.y <= clamp.bottom - pad;
       if (screen.visible && withinBounds) {
         node.style.opacity = "1";
-        node.style.pointerEvents = "auto";
+        node.style.pointerEvents = "none";
         node.style.transform = `translate(${screen.x}px, ${screen.y}px) translate(-50%, -50%)`;
       } else {
         node.style.opacity = "0";
@@ -2084,15 +2084,15 @@ class FlightTrailLayer {
     this.group.add(line);
 
     const stalkMaterial = new THREE.LineBasicMaterial({
-      color: 0x22d3ee,
+      color: 0xf97316,
       transparent: true,
-      opacity: 0.5,
+      opacity: 0.7,
     });
     stalkMaterial.depthTest = true;
     stalkMaterial.depthWrite = false;
     const stalkGeometry = new THREE.BufferGeometry();
     const stalk = new THREE.Line(stalkGeometry, stalkMaterial);
-    stalk.renderOrder = 34;
+    stalk.renderOrder = 58;
     stalk.frustumCulled = true;
     this.group.add(stalk);
 
