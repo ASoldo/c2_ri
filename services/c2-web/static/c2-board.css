@@ -172,6 +172,10 @@ body {
   z-index: 3;
 }
 
+.dom-layer .pin {
+  pointer-events: auto;
+}
+
 .edge-layer {
   position: absolute;
   inset: 0;

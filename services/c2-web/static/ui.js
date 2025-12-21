@@ -1975,6 +1975,12 @@ class FlightPinLayer {
         node.className = "pin";
         node.dataset.kind = "flight";
         node.dataset.entity = entity;
+        node.addEventListener("click", (event) => {
+          event.stopPropagation();
+          const label = node.dataset.label || "Flight";
+          const entityId = node.dataset.entity;
+          this.popup?.openFor(node, entityId, label);
+        });
         this.layerEl.appendChild(node);
         this.nodes.set(entity, node);
       }

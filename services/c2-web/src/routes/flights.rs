@@ -113,16 +113,17 @@ pub async fn flights(
     let sample_limit = limit.min(state.flight_sample_count);
 
     let now = std::time::Instant::now();
+    let mut cached_payload: Option<FlightSnapshot> = None;
+    let mut cached_age: Option<std::time::Duration> = None;
     if let Ok(cache) = state.flight_cache.lock() {
-        if let (Some(payload), Some(last_fetch)) = (&cache.payload, cache.last_fetch) {
-            if now.duration_since(last_fetch) < state.flight_cache_ttl {
-                return Ok(HttpResponse::Ok().json(payload));
-            }
-            if now.duration_since(last_fetch) < state.flight_min_interval {
-                let mut cached = payload.clone();
-                cached.source = "cache".to_string();
-                return Ok(HttpResponse::Ok().json(cached));
-            }
+        cached_payload = cache.payload.clone();
+        cached_age = cache.last_fetch.map(|last_fetch| now.duration_since(last_fetch));
+    }
+    if let (Some(payload), Some(age)) = (&cached_payload, cached_age) {
+        if age < state.flight_min_interval {
+            let mut cached = payload.clone();
+            cached.source = "cache".to_string();
+            return Ok(HttpResponse::Ok().json(cached));
         }
     }
 
@@ -175,13 +176,6 @@ pub async fn flights(
         }
         Ok(response) => {
             tracing::warn!(status = %response.status(), "flight provider error");
-            if let Ok(cache) = state.flight_cache.lock() {
-                if let Some(payload) = &cache.payload {
-                    let mut cached = payload.clone();
-                    cached.source = "cache".to_string();
-                    return Ok(HttpResponse::Ok().json(cached));
-                }
-            }
             if state.flight_sample_enabled {
                 let flights = if let Some((lat, lon)) = center_hint {
                     sample_flights_near(now_epoch_millis(), sample_limit, lat, lon)
@@ -194,22 +188,19 @@ pub async fn flights(
                     timestamp_ms: now_epoch_millis(),
                     flights,
                 }
+            } else if let (Some(payload), Some(age)) = (&cached_payload, cached_age) {
+                if age < state.flight_cache_ttl {
+                    let mut cached = payload.clone();
+                    cached.source = "cache".to_string();
+                    return Ok(HttpResponse::Ok().json(cached));
+                }
+                return Ok(HttpResponse::build(actix_web::http::StatusCode::BAD_GATEWAY).finish());
             } else {
-                return Ok(HttpResponse::build(
-                    actix_web::http::StatusCode::BAD_GATEWAY,
-                )
-                .finish());
+                return Ok(HttpResponse::build(actix_web::http::StatusCode::BAD_GATEWAY).finish());
             }
         }
         Err(err) => {
             tracing::warn!(error = %err, "flight provider request failed");
-            if let Ok(cache) = state.flight_cache.lock() {
-                if let Some(payload) = &cache.payload {
-                    let mut cached = payload.clone();
-                    cached.source = "cache".to_string();
-                    return Ok(HttpResponse::Ok().json(cached));
-                }
-            }
             if state.flight_sample_enabled {
                 let flights = if let Some((lat, lon)) = center_hint {
                     sample_flights_near(now_epoch_millis(), sample_limit, lat, lon)
@@ -222,11 +213,15 @@ pub async fn flights(
                     timestamp_ms: now_epoch_millis(),
                     flights,
                 }
+            } else if let (Some(payload), Some(age)) = (&cached_payload, cached_age) {
+                if age < state.flight_cache_ttl {
+                    let mut cached = payload.clone();
+                    cached.source = "cache".to_string();
+                    return Ok(HttpResponse::Ok().json(cached));
+                }
+                return Ok(HttpResponse::build(actix_web::http::StatusCode::BAD_GATEWAY).finish());
             } else {
-                return Ok(HttpResponse::build(
-                    actix_web::http::StatusCode::BAD_GATEWAY,
-                )
-                .finish());
+                return Ok(HttpResponse::build(actix_web::http::StatusCode::BAD_GATEWAY).finish());
             }
         }
     };
