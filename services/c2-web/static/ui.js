@@ -14,9 +14,11 @@ const els = {
   map2d: document.getElementById("map-2d"),
   map3d: document.getElementById("map-3d"),
   pinLayer: document.getElementById("pin-layer"),
+  flightLayer: document.getElementById("flight-layer"),
   edgeLayer: document.getElementById("edge-layer"),
   dockLeft: document.getElementById("dock-left"),
   dockRight: document.getElementById("dock-right"),
+  flightProviderLabel: document.getElementById("flight-provider-label"),
 };
 
 const partialEls = Array.from(document.querySelectorAll("[data-partial]"));
@@ -142,6 +144,57 @@ const buildWeatherConfig = () => {
 };
 
 const WEATHER_CONFIG = buildWeatherConfig();
+
+const DEFAULT_FLIGHT_CONFIG = {
+  enabled: true,
+  provider: "opensky",
+  updateIntervalMs: 5000,
+  minIntervalMs: 3500,
+  maxFlights: 80,
+  trailPoints: 24,
+  trailMaxAgeMs: 240000,
+  spanMinDeg: 8,
+  spanMaxDeg: 60,
+  altitudeScale: 0.08,
+  source: "OpenSky",
+  sample: true,
+};
+
+const buildFlightConfig = () => {
+  const config = window.C2_FLIGHT_CONFIG || {};
+  return {
+    enabled: config.enabled !== undefined ? Boolean(config.enabled) : DEFAULT_FLIGHT_CONFIG.enabled,
+    provider: config.provider || DEFAULT_FLIGHT_CONFIG.provider,
+    updateIntervalMs: Number.isFinite(config.updateIntervalMs)
+      ? config.updateIntervalMs
+      : DEFAULT_FLIGHT_CONFIG.updateIntervalMs,
+    minIntervalMs: Number.isFinite(config.minIntervalMs)
+      ? config.minIntervalMs
+      : DEFAULT_FLIGHT_CONFIG.minIntervalMs,
+    maxFlights: Number.isFinite(config.maxFlights)
+      ? config.maxFlights
+      : DEFAULT_FLIGHT_CONFIG.maxFlights,
+    trailPoints: Number.isFinite(config.trailPoints)
+      ? config.trailPoints
+      : DEFAULT_FLIGHT_CONFIG.trailPoints,
+    trailMaxAgeMs: Number.isFinite(config.trailMaxAgeMs)
+      ? config.trailMaxAgeMs
+      : DEFAULT_FLIGHT_CONFIG.trailMaxAgeMs,
+    spanMinDeg: Number.isFinite(config.spanMinDeg)
+      ? config.spanMinDeg
+      : DEFAULT_FLIGHT_CONFIG.spanMinDeg,
+    spanMaxDeg: Number.isFinite(config.spanMaxDeg)
+      ? config.spanMaxDeg
+      : DEFAULT_FLIGHT_CONFIG.spanMaxDeg,
+    altitudeScale: Number.isFinite(config.altitudeScale)
+      ? config.altitudeScale
+      : DEFAULT_FLIGHT_CONFIG.altitudeScale,
+    source: config.source || DEFAULT_FLIGHT_CONFIG.source,
+    sample: config.sample !== undefined ? Boolean(config.sample) : DEFAULT_FLIGHT_CONFIG.sample,
+  };
+};
+
+const FLIGHT_CONFIG = buildFlightConfig();
 
 const setDot = (state) => {
   if (!els.apiDot) return;
@@ -1434,6 +1487,15 @@ class Renderer3D {
     return { x, y, visible, behind };
   }
 
+  geoFromScreen(x, y) {
+    if (!this.camera || !this.tileManager || !this.size.width || !this.size.height) {
+      return null;
+    }
+    const ndcX = (x / this.size.width) * 2 - 1;
+    const ndcY = -(y / this.size.height) * 2 + 1;
+    return this.tileManager.sampleGeo(this.camera, ndcX, ndcY);
+  }
+
   setInstances(points) {
     if (!this.instances) return;
     this.instances.count = points.length;
@@ -1815,6 +1877,8 @@ class PinLayer {
     entities.forEach((entity) => {
       const pin = world.getComponent(entity, "Pin");
       if (!pin) return;
+      const meta = world.getComponent(entity, "Meta");
+      if (meta?.kind === "flight") return;
       let node = this.nodes.get(entity);
       if (!node) {
         node = document.createElement("div");
@@ -1861,6 +1925,281 @@ class PinLayer {
         this.nodes.delete(entity);
       }
     }
+  }
+}
+
+class FlightPinLayer {
+  constructor(layerEl, renderer, boundsEl, popup) {
+    this.layerEl = layerEl;
+    this.renderer = renderer;
+    this.boundsEl = boundsEl;
+    this.popup = popup;
+    this.nodes = new Map();
+    this.bind();
+  }
+
+  bind() {
+    if (!this.layerEl) return;
+    this.layerEl.addEventListener("click", (event) => {
+      const pin = event.target.closest(".flight-pin");
+      if (!pin) return;
+      event.stopPropagation();
+      const label = pin.dataset.label || "Flight";
+      const entityId = pin.dataset.entity;
+      this.popup?.openFor(pin, entityId, label);
+    });
+  }
+
+  setVisible(visible) {
+    if (!this.layerEl) return;
+    this.layerEl.style.display = visible ? "block" : "none";
+  }
+
+  syncPins(entities, world) {
+    if (!this.layerEl || !this.renderer) return;
+    if (this.layerEl.style.display === "none") return;
+    const bounds = this.boundsEl?.getBoundingClientRect?.();
+    const clamp = bounds || {
+      left: 0,
+      top: 0,
+      right: window.innerWidth,
+      bottom: window.innerHeight,
+    };
+    const pad = 22;
+    entities.forEach((entity) => {
+      const flight = world.getComponent(entity, "Flight");
+      if (!flight) return;
+      let node = this.nodes.get(entity);
+      if (!node) {
+        node = document.createElement("div");
+        node.className = "flight-pin";
+        node.innerHTML = `
+          <span class="flight-icon" aria-hidden="true"></span>
+          <span class="flight-label"></span>
+        `;
+        node.dataset.entity = entity;
+        this.layerEl.appendChild(node);
+        this.nodes.set(entity, node);
+      }
+      const label = formatFlightLabel(flight);
+      node.dataset.label = label;
+      const details = formatFlightDetails(flight);
+      if (details) {
+        node.dataset.details = details;
+        node.title = `${label} · ${details}`;
+      } else {
+        node.dataset.details = "";
+        node.title = label;
+      }
+      node.dataset.status = flight.on_ground ? "ground" : "airborne";
+      const labelEl = node.querySelector(".flight-label");
+      if (labelEl) labelEl.textContent = label;
+      const heading = Number.isFinite(flight.heading_deg) ? flight.heading_deg : 0;
+      node.style.setProperty("--heading", `${heading}deg`);
+      const geo = world.getComponent(entity, "Geo");
+      if (!geo) return;
+      const altitudeKm = Number.isFinite(flight.altitude_m)
+        ? flight.altitude_m / 1000
+        : 8;
+      const altitude = Math.min(
+        8,
+        Math.max(0.6, altitudeKm * FLIGHT_CONFIG.altitudeScale),
+      );
+      const pos = this.renderer.positionForGeo(
+        geo,
+        this.renderer.markerAltitude + altitude,
+      );
+      const screen = this.renderer.projectToScreen(pos);
+      if (!screen) return;
+      const clampedX = Math.min(Math.max(screen.x, clamp.left + pad), clamp.right - pad);
+      const clampedY = Math.min(Math.max(screen.y, clamp.top + pad), clamp.bottom - pad);
+      const withinBounds =
+        screen.x >= clamp.left + pad &&
+        screen.x <= clamp.right - pad &&
+        screen.y >= clamp.top + pad &&
+        screen.y <= clamp.bottom - pad;
+      if (screen.visible && withinBounds) {
+        node.style.opacity = "1";
+        node.style.pointerEvents = "auto";
+        node.style.transform = `translate(${screen.x}px, ${screen.y}px) translate(-50%, -50%)`;
+      } else {
+        node.style.opacity = "0";
+        node.style.pointerEvents = "none";
+        node.style.transform = `translate(${clampedX}px, ${clampedY}px) translate(-50%, -50%)`;
+        if (this.popup?.active === node) this.popup.closeMenu();
+      }
+    });
+  }
+
+  prune(world) {
+    for (const [entity, node] of this.nodes.entries()) {
+      if (!world.entities.has(entity)) {
+        node.remove();
+        this.nodes.delete(entity);
+      }
+    }
+  }
+}
+
+class FlightTrailLayer {
+  constructor(renderer) {
+    this.renderer = renderer;
+    this.group = new THREE.Group();
+    this.group.renderOrder = 40;
+    this.group.visible = false;
+    this.tracks = new Map();
+    if (this.renderer?.scene) {
+      this.renderer.scene.add(this.group);
+    }
+  }
+
+  setVisible(visible) {
+    this.group.visible = visible;
+  }
+
+  altitudeForFlight(flight) {
+    const altitudeKm = Number.isFinite(flight.altitude_m)
+      ? flight.altitude_m / 1000
+      : 8;
+    return Math.min(
+      8,
+      Math.max(0.6, altitudeKm * FLIGHT_CONFIG.altitudeScale),
+    );
+  }
+
+  ensureTrack(flight) {
+    let track = this.tracks.get(flight.id);
+    if (track) return track;
+    const material = new THREE.LineBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.75,
+    });
+    material.depthTest = true;
+    material.depthWrite = false;
+    const geometry = new THREE.BufferGeometry();
+    const line = new THREE.Line(geometry, material);
+    line.renderOrder = 35;
+    line.frustumCulled = true;
+    this.group.add(line);
+
+    const stalkMaterial = new THREE.LineBasicMaterial({
+      color: 0x22d3ee,
+      transparent: true,
+      opacity: 0.5,
+    });
+    stalkMaterial.depthTest = true;
+    stalkMaterial.depthWrite = false;
+    const stalkGeometry = new THREE.BufferGeometry();
+    const stalk = new THREE.Line(stalkGeometry, stalkMaterial);
+    stalk.renderOrder = 34;
+    stalk.frustumCulled = true;
+    this.group.add(stalk);
+
+    track = {
+      line,
+      stalk,
+      points: [],
+      lastSeen: performance.now(),
+    };
+    this.tracks.set(flight.id, track);
+    return track;
+  }
+
+  updateTrackGeometry(track) {
+    const points = track.points.map((point) =>
+      this.renderer.positionForGeo(
+        { lat: point.lat, lon: point.lon },
+        this.renderer.markerAltitude + point.altitude,
+      ),
+    );
+    track.line.geometry.setFromPoints(points);
+    track.line.geometry.computeBoundingSphere();
+  }
+
+  updateStalk(track, flight) {
+    if (!flight) return;
+    const ground = this.renderer.positionForGeo(
+      { lat: flight.lat, lon: flight.lon },
+      this.renderer.markerAltitude,
+    );
+    const tip = this.renderer.positionForGeo(
+      { lat: flight.lat, lon: flight.lon },
+      this.renderer.markerAltitude + this.altitudeForFlight(flight),
+    );
+    track.stalk.geometry.setFromPoints([ground, tip]);
+    track.stalk.geometry.computeBoundingSphere();
+  }
+
+  ingest(flights) {
+    if (!this.renderer) return;
+    const now = performance.now();
+    const seen = new Set();
+    flights.forEach((flight) => {
+      if (!Number.isFinite(flight.lat) || !Number.isFinite(flight.lon)) return;
+      const track = this.ensureTrack(flight);
+      const altitude = this.altitudeForFlight(flight);
+      const last = track.points[track.points.length - 1];
+      if (
+        !last ||
+        Math.abs(last.lat - flight.lat) > 0.08 ||
+        Math.abs(last.lon - flight.lon) > 0.08
+      ) {
+        track.points.push({ lat: flight.lat, lon: flight.lon, altitude });
+        if (track.points.length > FLIGHT_CONFIG.trailPoints) {
+          track.points.splice(0, track.points.length - FLIGHT_CONFIG.trailPoints);
+        }
+        this.updateTrackGeometry(track);
+      }
+      this.updateStalk(track, flight);
+      track.lastSeen = now;
+      seen.add(flight.id);
+    });
+
+    for (const [id, track] of this.tracks.entries()) {
+      if (seen.has(id)) continue;
+      if (now - track.lastSeen > FLIGHT_CONFIG.trailMaxAgeMs) {
+        this.group.remove(track.line);
+        this.group.remove(track.stalk);
+        track.line.geometry.dispose();
+        track.stalk.geometry.dispose();
+        this.tracks.delete(id);
+      }
+    }
+  }
+}
+
+class FlightOverlay {
+  constructor(renderer, world, layerEl, edgeLayer) {
+    this.renderer = renderer;
+    this.world = world;
+    this.visible = false;
+    this.pinLayer = new FlightPinLayer(layerEl, renderer, els.board, edgeLayer);
+    this.trails = new FlightTrailLayer(renderer);
+    this.lastSnapshot = null;
+    this.pinLayer.setVisible(false);
+    this.trails.setVisible(false);
+  }
+
+  setVisible(visible) {
+    this.visible = visible;
+    this.pinLayer.setVisible(visible);
+    this.trails.setVisible(visible && this.renderer?.mode === "globe");
+  }
+
+  ingest(snapshot) {
+    if (!snapshot) return;
+    this.lastSnapshot = snapshot;
+    syncFlights(snapshot, this.world);
+    this.trails.ingest(snapshot.flights || []);
+  }
+
+  sync() {
+    if (!this.visible) return;
+    const flights = this.world.query(["Geo", "Flight"]);
+    this.pinLayer.syncPins(flights, this.world);
+    this.pinLayer.prune(this.world);
+    this.trails.setVisible(this.visible && this.renderer?.mode === "globe");
   }
 }
 
@@ -1957,6 +2296,37 @@ const colorForIncident = (incident) => {
   }
 };
 
+const colorForFlight = (flight) => {
+  if (flight?.on_ground) return "#94a3b8";
+  return "#38bdf8";
+};
+
+const formatFlightLabel = (flight) => {
+  if (!flight) return "FL";
+  const callsign = flight.callsign?.trim?.();
+  if (callsign) return callsign;
+  const id = flight.id?.split?.(":").pop?.();
+  return id || "FL";
+};
+
+const formatFlightDetails = (flight) => {
+  if (!flight) return "";
+  const parts = [];
+  if (Number.isFinite(flight.altitude_m)) {
+    const meters = Math.round(flight.altitude_m);
+    const feet = Math.round(meters * 3.28084);
+    parts.push(`${meters} m (${feet} ft)`);
+  }
+  if (Number.isFinite(flight.velocity_mps)) {
+    const knots = Math.round(flight.velocity_mps * 1.94384);
+    parts.push(`${knots} kt`);
+  }
+  if (Number.isFinite(flight.heading_deg)) {
+    parts.push(`${Math.round(flight.heading_deg)}°`);
+  }
+  return parts.join(" · ");
+};
+
 const syncEntities = (payload, world) => {
   if (!payload) return;
   const seen = new Set();
@@ -2013,6 +2383,41 @@ const syncEntities = (payload, world) => {
   }
 };
 
+const syncFlights = (payload, world) => {
+  if (!payload || !Array.isArray(payload.flights)) return;
+  const seen = new Set();
+  const index = world.flightIndex || new Map();
+  world.flightIndex = index;
+
+  payload.flights.forEach((flight) => {
+    if (!Number.isFinite(flight.lat) || !Number.isFinite(flight.lon)) return;
+    const key = flight.id || `${flight.callsign || "flight"}:${flight.lat}:${flight.lon}`;
+    let entity = index.get(key);
+    if (!entity) {
+      entity = world.createEntity();
+      index.set(key, entity);
+    }
+    seen.add(entity);
+    world.addComponent(entity, "Geo", { lat: flight.lat, lon: flight.lon });
+    world.addComponent(entity, "Flight", flight);
+    world.addComponent(entity, "Renderable", { color: colorForFlight(flight) });
+    world.addComponent(entity, "Meta", { kind: "flight", data: flight });
+    world.addComponent(entity, "Pin", {
+      label: formatFlightLabel(flight),
+      icon: "/static/assets/plane.png",
+      heading: flight.heading_deg,
+      status: flight.on_ground ? "ground" : "airborne",
+    });
+  });
+
+  for (const [key, entity] of index.entries()) {
+    if (!seen.has(entity)) {
+      index.delete(key);
+      world.removeEntity(entity);
+    }
+  }
+};
+
 const edgeSymbolFor = (meta) => {
   if (!meta) return "?";
   switch (meta.kind) {
@@ -2024,6 +2429,8 @@ const edgeSymbolFor = (meta) => {
       return "M";
     case "incident":
       return "I";
+    case "flight":
+      return "FL";
     default:
       return "?";
   }
@@ -2110,8 +2517,11 @@ class EdgeLayer {
     this.active.classList.add("selected");
     if (entityId) this.active.dataset.entity = entityId;
     const safeLabel = label || "Entity";
+    const details = node.dataset.details || "";
+    const detailsHtml = details ? `<div class="edge-popup-meta">${details}</div>` : "";
     this.popup.innerHTML = `
       <div class="edge-popup-title">${safeLabel}</div>
+      ${detailsHtml}
       <div class="edge-popup-actions">
         <button data-action="focus">Focus</button>
         <button data-action="details">Details</button>
@@ -2197,8 +2607,11 @@ class EdgeLayer {
       node.style.pointerEvents = "auto";
       node.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
       node.classList.toggle("occluded", screen.behind);
+      node.classList.toggle("edge-marker--flight", meta.kind === "flight");
       const symbol = collapseLabel(pin.label) || edgeSymbolFor(meta);
       node.querySelector(".edge-symbol").textContent = symbol;
+      const details = meta.kind === "flight" ? formatFlightDetails(meta.data) : "";
+      node.dataset.details = details || "";
       node.title = pin.label || meta.data?.name || meta.data?.summary || meta.kind;
       node.dataset.label = node.title;
     });
@@ -2306,6 +2719,82 @@ const setupWeatherControls = (renderer3d) => {
   }
 };
 
+const clampFlightLat = (lat) => Math.max(-85, Math.min(85, lat));
+const clampFlightLon = (lon) => Math.max(-180, Math.min(180, lon));
+
+const computeFlightBounds = (renderer3d) => {
+  if (!renderer3d || renderer3d.mode !== "globe") return null;
+  const center = renderer3d.geoFromScreen(
+    renderer3d.size.width / 2,
+    renderer3d.size.height / 2,
+  );
+  if (!center) return null;
+  const distance = renderer3d.camera?.position?.length?.() || renderer3d.defaultDistance;
+  const denom = Math.max(1, renderer3d.defaultDistance - renderer3d.globeRadius);
+  const ratio = Math.max(
+    0.15,
+    Math.min(1, (distance - renderer3d.globeRadius) / denom),
+  );
+  const span =
+    FLIGHT_CONFIG.spanMinDeg +
+    (FLIGHT_CONFIG.spanMaxDeg - FLIGHT_CONFIG.spanMinDeg) * ratio;
+  const half = span / 2;
+  return {
+    lamin: clampFlightLat(center.lat - half),
+    lamax: clampFlightLat(center.lat + half),
+    lomin: clampFlightLon(center.lon - half),
+    lomax: clampFlightLon(center.lon + half),
+  };
+};
+
+const fetchFlights = async (renderer3d, bus, overlay) => {
+  if (!FLIGHT_CONFIG.enabled || !overlay?.visible) return;
+  if (!renderer3d || renderer3d.mode !== "globe") return;
+  const bounds = computeFlightBounds(renderer3d);
+  const params = new URLSearchParams();
+  if (bounds) {
+    params.set("lamin", bounds.lamin.toFixed(4));
+    params.set("lomin", bounds.lomin.toFixed(4));
+    params.set("lamax", bounds.lamax.toFixed(4));
+    params.set("lomax", bounds.lomax.toFixed(4));
+  }
+  params.set("limit", FLIGHT_CONFIG.maxFlights.toString());
+  try {
+    const response = await fetch(`/ui/flights?${params.toString()}`, {
+      cache: "no-store",
+    });
+    if (!response.ok) return;
+    const payload = await response.json();
+    bus.emit("flights:update", payload);
+  } catch {
+    // ignore flight fetch errors
+  }
+};
+
+const setupFlightControls = (renderer3d, bus, overlay) => {
+  const panel = document.getElementById("flight-panel");
+  if (!panel || !FLIGHT_CONFIG.enabled) {
+    if (panel) panel.style.display = "none";
+    return;
+  }
+  if (els.flightProviderLabel) {
+    const providerName = FLIGHT_CONFIG.source || FLIGHT_CONFIG.provider;
+    els.flightProviderLabel.textContent = `Live flight tracks via ${providerName}.`;
+  }
+  const toggle = document.querySelector("[data-flight-toggle]");
+  if (toggle) {
+    toggle.setAttribute("aria-pressed", "false");
+    toggle.addEventListener("click", () => {
+      const next = toggle.getAttribute("aria-pressed") !== "true";
+      toggle.setAttribute("aria-pressed", next.toString());
+      overlay?.setVisible(next);
+      if (next) {
+        fetchFlights(renderer3d, bus, overlay);
+      }
+    });
+  }
+};
+
 const setupTileProviders = (renderer3d) => {
   const select = document.getElementById("tile-provider");
   if (!select) return;
@@ -2359,14 +2848,19 @@ const main = () => {
   });
   edgeLayer.bind();
   const pinLayer = new PinLayer(els.pinLayer, renderer3d, els.board, edgeLayer);
+  const flightOverlay = new FlightOverlay(renderer3d, world, els.flightLayer, edgeLayer);
 
   bus.on("entities:update", (payload) => {
     syncEntities(payload, world);
+  });
+  bus.on("flights:update", (payload) => {
+    flightOverlay.ingest(payload);
   });
 
   setupTileProviders(renderer3d);
   setupGlobeControls(renderer3d);
   setupWeatherControls(renderer3d);
+  setupFlightControls(renderer3d, bus, flightOverlay);
 
   const renderLoop = (() => {
     let lastFpsSample = performance.now();
@@ -2387,7 +2881,13 @@ const main = () => {
 
       board.drawGrid();
 
-      const entities3d = world.query(["Geo", "Renderable"]);
+      const entities3d = world
+        .query(["Geo", "Renderable"])
+        .filter((entity) => {
+          const meta = world.getComponent(entity, "Meta");
+          if (meta?.kind === "flight" && !flightOverlay.visible) return false;
+          return true;
+        });
       const points = entities3d.map((entity) => {
         const geo = world.getComponent(entity, "Geo");
         const renderable = world.getComponent(entity, "Renderable") || {};
@@ -2400,6 +2900,7 @@ const main = () => {
       const entitiesPins = world.query(["Geo", "Pin"]);
       pinLayer.syncPins(entitiesPins, world);
       pinLayer.prune(world);
+      flightOverlay.sync();
       edgeLayer.syncEdges(entities3d, world);
       edgeLayer.prune(world);
 
@@ -2449,6 +2950,9 @@ const main = () => {
   setInterval(updateStatus, 15000);
   setInterval(refreshPartials, 12000);
   setInterval(() => fetchEntities(bus), 20000);
+  if (FLIGHT_CONFIG.enabled) {
+    setInterval(() => fetchFlights(renderer3d, bus, flightOverlay), FLIGHT_CONFIG.updateIntervalMs);
+  }
   setupDockToggles();
   setupLayerToggles();
 

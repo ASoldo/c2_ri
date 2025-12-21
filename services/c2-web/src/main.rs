@@ -1,4 +1,5 @@
 mod api;
+mod flights;
 mod render;
 mod routes;
 mod state;
@@ -13,6 +14,7 @@ use state::AppState;
 use std::env;
 use std::io;
 use std::path::Path;
+use std::time::Duration;
 use tera::Tera;
 
 #[actix_web::main]
@@ -139,6 +141,81 @@ async fn main() -> io::Result<()> {
         "source": "NASA GIBS",
     })
     .to_string();
+    let flight_enabled = env::var("C2_WEB_FLIGHT_ENABLED")
+        .ok()
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            !(value == "0" || value == "false" || value == "no" || value == "off")
+        })
+        .unwrap_or(true);
+    let flight_provider =
+        env::var("C2_WEB_FLIGHT_PROVIDER").unwrap_or_else(|_| "opensky".to_string());
+    let flight_base_url = env::var("C2_WEB_FLIGHT_BASE_URL")
+        .unwrap_or_else(|_| "https://opensky-network.org/api/states/all".to_string());
+    let flight_username = env::var("C2_WEB_FLIGHT_USER").ok();
+    let flight_password = env::var("C2_WEB_FLIGHT_PASS").ok();
+    let flight_update_ms = env::var("C2_WEB_FLIGHT_UPDATE_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(5000);
+    let flight_min_interval_ms = env::var("C2_WEB_FLIGHT_MIN_INTERVAL_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(3500);
+    let flight_cache_ttl_ms = env::var("C2_WEB_FLIGHT_CACHE_TTL_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(6000);
+    let flight_max_flights = env::var("C2_WEB_FLIGHT_MAX")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(80);
+    let flight_trail_points = env::var("C2_WEB_FLIGHT_TRAIL_POINTS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(24);
+    let flight_trail_max_age_ms = env::var("C2_WEB_FLIGHT_TRAIL_MAX_AGE_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(240_000);
+    let flight_span_min_deg = env::var("C2_WEB_FLIGHT_SPAN_MIN_DEG")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(8.0);
+    let flight_span_max_deg = env::var("C2_WEB_FLIGHT_SPAN_MAX_DEG")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(60.0);
+    let flight_altitude_scale = env::var("C2_WEB_FLIGHT_ALTITUDE_SCALE")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(0.08);
+    let flight_sample_enabled = env::var("C2_WEB_FLIGHT_SAMPLE_ENABLED")
+        .ok()
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            !(value == "0" || value == "false" || value == "no" || value == "off")
+        })
+        .unwrap_or(true);
+    let flight_sample_count = env::var("C2_WEB_FLIGHT_SAMPLE_COUNT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(5);
+    let flight_config_json = serde_json::json!({
+        "enabled": flight_enabled,
+        "provider": flight_provider.clone(),
+        "updateIntervalMs": flight_update_ms,
+        "minIntervalMs": flight_min_interval_ms,
+        "maxFlights": flight_max_flights,
+        "trailPoints": flight_trail_points,
+        "trailMaxAgeMs": flight_trail_max_age_ms,
+        "spanMinDeg": flight_span_min_deg,
+        "spanMaxDeg": flight_span_max_deg,
+        "altitudeScale": flight_altitude_scale,
+        "source": "OpenSky",
+        "sample": flight_sample_enabled,
+    })
+    .to_string();
     let state = web::Data::new(AppState {
         config,
         tera,
@@ -156,6 +233,18 @@ async fn main() -> io::Result<()> {
         weather_default_format,
         weather_min_zoom,
         weather_max_zoom,
+        flight_config_json: Some(flight_config_json),
+        flight_enabled,
+        flight_provider,
+        flight_base_url,
+        flight_username,
+        flight_password,
+        flight_min_interval: Duration::from_millis(flight_min_interval_ms),
+        flight_cache_ttl: Duration::from_millis(flight_cache_ttl_ms),
+        flight_max_flights: flight_max_flights.max(1),
+        flight_sample_enabled,
+        flight_sample_count: flight_sample_count.max(1),
+        flight_cache: std::sync::Mutex::new(flights::FlightCache::new()),
     });
 
     HttpServer::new(move || {
