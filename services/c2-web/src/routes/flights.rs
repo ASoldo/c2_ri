@@ -35,7 +35,7 @@ fn parse_opensky(value: serde_json::Value, provider: &str, limit: usize) -> Flig
         .and_then(|v| v.as_i64())
         .map(|t| t as u64 * 1000)
         .unwrap_or(now_ms);
-    let mut flights = Vec::new();
+    let mut records = Vec::new();
     if let Some(states) = value.get("states").and_then(|v| v.as_array()) {
         for (idx, state) in states.iter().enumerate() {
             let Some(values) = state.as_array() else { continue };
@@ -70,7 +70,7 @@ fn parse_opensky(value: serde_json::Value, provider: &str, limit: usize) -> Flig
                 format!("{provider}:unknown-{idx}")
             };
 
-            flights.push(FlightState {
+            records.push(FlightState {
                 id,
                 callsign,
                 origin_country: origin,
@@ -83,7 +83,7 @@ fn parse_opensky(value: serde_json::Value, provider: &str, limit: usize) -> Flig
                 last_contact,
             });
 
-            if flights.len() >= limit {
+            if records.len() >= limit {
                 break;
             }
         }
@@ -93,7 +93,7 @@ fn parse_opensky(value: serde_json::Value, provider: &str, limit: usize) -> Flig
         provider: provider.to_string(),
         source: "live".to_string(),
         timestamp_ms: time,
-        flights,
+        flights: records,
     }
 }
 
