@@ -2225,7 +2225,7 @@ class FlightSpriteLayer {
     const ratio = this.renderer.defaultDistance
       ? distance / this.renderer.defaultDistance
       : 1;
-    const base = this.renderer.globeRadius * 0.06;
+    const base = this.renderer.globeRadius * 0.035;
     return Math.min(18, Math.max(4, base * ratio));
   }
 
