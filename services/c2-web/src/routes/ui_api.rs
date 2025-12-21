@@ -251,6 +251,7 @@ fn render_partials(
         tile_config_json: None,
         weather_config_json: None,
         flight_config_json: None,
+        satellite_config_json: None,
     };
     let context = build_context(&data);
     let mission_feed = tera

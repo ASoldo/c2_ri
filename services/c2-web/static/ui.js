@@ -15,10 +15,12 @@ const els = {
   map3d: document.getElementById("map-3d"),
   pinLayer: document.getElementById("pin-layer"),
   flightLayer: document.getElementById("flight-layer"),
+  satelliteLayer: document.getElementById("satellite-layer"),
   edgeLayer: document.getElementById("edge-layer"),
   dockLeft: document.getElementById("dock-left"),
   dockRight: document.getElementById("dock-right"),
   flightProviderLabel: document.getElementById("flight-provider-label"),
+  satelliteProviderLabel: document.getElementById("satellite-provider-label"),
 };
 
 const partialEls = Array.from(document.querySelectorAll("[data-partial]"));
@@ -195,6 +197,46 @@ const buildFlightConfig = () => {
 };
 
 const FLIGHT_CONFIG = buildFlightConfig();
+
+const DEFAULT_SATELLITE_CONFIG = {
+  enabled: true,
+  provider: "celestrak",
+  updateIntervalMs: 8000,
+  maxSatellites: 120,
+  altitudeScale: 0.018,
+  altitudeMin: 4,
+  altitudeMax: 90,
+  source: "CelesTrak",
+  sample: true,
+};
+
+const buildSatelliteConfig = () => {
+  const config = window.C2_SATELLITE_CONFIG || {};
+  return {
+    enabled:
+      config.enabled !== undefined ? Boolean(config.enabled) : DEFAULT_SATELLITE_CONFIG.enabled,
+    provider: config.provider || DEFAULT_SATELLITE_CONFIG.provider,
+    updateIntervalMs: Number.isFinite(config.updateIntervalMs)
+      ? config.updateIntervalMs
+      : DEFAULT_SATELLITE_CONFIG.updateIntervalMs,
+    maxSatellites: Number.isFinite(config.maxSatellites)
+      ? config.maxSatellites
+      : DEFAULT_SATELLITE_CONFIG.maxSatellites,
+    altitudeScale: Number.isFinite(config.altitudeScale)
+      ? config.altitudeScale
+      : DEFAULT_SATELLITE_CONFIG.altitudeScale,
+    altitudeMin: Number.isFinite(config.altitudeMin)
+      ? config.altitudeMin
+      : DEFAULT_SATELLITE_CONFIG.altitudeMin,
+    altitudeMax: Number.isFinite(config.altitudeMax)
+      ? config.altitudeMax
+      : DEFAULT_SATELLITE_CONFIG.altitudeMax,
+    source: config.source || DEFAULT_SATELLITE_CONFIG.source,
+    sample: config.sample !== undefined ? Boolean(config.sample) : DEFAULT_SATELLITE_CONFIG.sample,
+  };
+};
+
+const SATELLITE_CONFIG = buildSatelliteConfig();
 
 const setDot = (state) => {
   if (!els.apiDot) return;
@@ -1878,7 +1920,7 @@ class PinLayer {
       const pin = world.getComponent(entity, "Pin");
       if (!pin) return;
       const meta = world.getComponent(entity, "Meta");
-      if (meta?.kind === "flight") return;
+      if (meta?.kind === "flight" || meta?.kind === "satellite") return;
       let node = this.nodes.get(entity);
       if (!node) {
         node = document.createElement("div");
@@ -2350,6 +2392,232 @@ class FlightOverlay {
   }
 }
 
+class SatellitePinLayer {
+  constructor(layerEl, renderer, boundsEl, popup) {
+    this.layerEl = layerEl;
+    this.renderer = renderer;
+    this.boundsEl = boundsEl;
+    this.popup = popup;
+    this.nodes = new Map();
+    this.bind();
+  }
+
+  bind() {
+    if (!this.layerEl) return;
+    this.layerEl.addEventListener("click", (event) => {
+      const pin = event.target.closest('.pin[data-kind="satellite"]');
+      if (!pin) return;
+      event.stopPropagation();
+      const label = pin.dataset.label || "Satellite";
+      const entityId = pin.dataset.entity;
+      this.popup?.openFor(pin, entityId, label);
+    });
+  }
+
+  setVisible(visible) {
+    if (!this.layerEl) return;
+    this.layerEl.style.display = visible ? "block" : "none";
+  }
+
+  syncPins(entities, world) {
+    if (!this.layerEl || !this.renderer) return;
+    if (this.layerEl.style.display === "none") return;
+    const bounds = this.boundsEl?.getBoundingClientRect?.();
+    const clamp = bounds || {
+      left: 0,
+      top: 0,
+      right: window.innerWidth,
+      bottom: window.innerHeight,
+    };
+    const pad = 22;
+    entities.forEach((entity) => {
+      const satellite = world.getComponent(entity, "Satellite");
+      if (!satellite) return;
+      let node = this.nodes.get(entity);
+      if (!node) {
+        node = document.createElement("div");
+        node.className = "pin";
+        node.dataset.kind = "satellite";
+        node.dataset.entity = entity;
+        node.addEventListener("click", (event) => {
+          event.stopPropagation();
+          const label = node.dataset.label || "Satellite";
+          const entityId = node.dataset.entity;
+          this.popup?.openFor(node, entityId, label);
+        });
+        this.layerEl.appendChild(node);
+        this.nodes.set(entity, node);
+      }
+      const label = formatSatelliteLabel(satellite);
+      node.dataset.label = label;
+      const details = formatSatelliteDetails(satellite);
+      if (details) {
+        node.dataset.details = details;
+        node.title = `${label} · ${details}`;
+      } else {
+        node.dataset.details = "";
+        node.title = label;
+      }
+      node.dataset.orbit = orbitBandForSatellite(satellite);
+      node.textContent = label;
+      const geo = world.getComponent(entity, "Geo");
+      if (!geo) return;
+      const altitude = altitudeForSatellite(satellite);
+      const pos = this.renderer.positionForGeo(
+        geo,
+        this.renderer.markerAltitude + altitude,
+      );
+      const screen = this.renderer.projectToScreen(pos);
+      if (!screen) return;
+      const clampedX = Math.min(Math.max(screen.x, clamp.left + pad), clamp.right - pad);
+      const clampedY = Math.min(Math.max(screen.y, clamp.top + pad), clamp.bottom - pad);
+      const withinBounds =
+        screen.x >= clamp.left + pad &&
+        screen.x <= clamp.right - pad &&
+        screen.y >= clamp.top + pad &&
+        screen.y <= clamp.bottom - pad;
+      if (screen.visible && withinBounds) {
+        node.style.opacity = "1";
+        node.style.pointerEvents = "auto";
+        node.style.transform = `translate(${screen.x}px, ${screen.y}px) translate(-50%, -50%)`;
+      } else {
+        node.style.opacity = "0";
+        node.style.pointerEvents = "none";
+        node.style.transform = `translate(${clampedX}px, ${clampedY}px) translate(-50%, -50%)`;
+        if (this.popup?.active === node) this.popup.closeMenu();
+      }
+    });
+  }
+
+  prune(world) {
+    for (const [entity, node] of this.nodes.entries()) {
+      if (!world.entities.has(entity)) {
+        node.remove();
+        this.nodes.delete(entity);
+      }
+    }
+  }
+}
+
+class SatelliteMeshLayer {
+  constructor(renderer) {
+    this.renderer = renderer;
+    this.group = new THREE.Group();
+    this.group.renderOrder = 48;
+    this.group.visible = false;
+    this.meshes = new Map();
+    this.texture = null;
+    this.initTexture();
+    if (this.renderer?.scene) {
+      this.renderer.scene.add(this.group);
+    }
+  }
+
+  initTexture() {
+    const loader = new THREE.TextureLoader();
+    this.texture = loader.load("/static/assets/satellite.svg");
+    this.texture.colorSpace = THREE.SRGBColorSpace;
+    this.texture.anisotropy =
+      this.renderer?.renderer?.capabilities?.getMaxAnisotropy?.() || 1;
+  }
+
+  setVisible(visible) {
+    this.group.visible = visible;
+  }
+
+  scaleForDistance() {
+    const distance = this.renderer?.camera?.position?.length?.() || this.renderer.defaultDistance;
+    const ratio = this.renderer.defaultDistance
+      ? distance / this.renderer.defaultDistance
+      : 1;
+    const base = this.renderer.globeRadius * 0.022;
+    return Math.min(14, Math.max(3, base * ratio));
+  }
+
+  ensureMesh(entity) {
+    let mesh = this.meshes.get(entity);
+    if (mesh) return mesh;
+    const material = new THREE.SpriteMaterial({
+      map: this.texture,
+      color: new THREE.Color(0xffffff),
+      transparent: true,
+      opacity: 0.95,
+      depthTest: true,
+      depthWrite: false,
+    });
+    material.alphaTest = 0.12;
+    mesh = new THREE.Sprite(material);
+    mesh.renderOrder = 65;
+    this.group.add(mesh);
+    this.meshes.set(entity, mesh);
+    return mesh;
+  }
+
+  sync(entities, world) {
+    if (!this.renderer) return;
+    const seen = new Set();
+    const scale = this.scaleForDistance();
+    entities.forEach((entity) => {
+      const satellite = world.getComponent(entity, "Satellite");
+      if (!satellite) return;
+      const mesh = this.ensureMesh(entity);
+      const geo = world.getComponent(entity, "Geo");
+      if (!geo) return;
+      const altitude = altitudeForSatellite(satellite);
+      const pos = this.renderer.positionForGeo(
+        geo,
+        this.renderer.markerAltitude + altitude,
+      );
+      mesh.position.set(pos.x, pos.y, pos.z);
+      mesh.scale.set(scale, scale, scale);
+      mesh.material.color.set(colorForSatellite(satellite));
+      seen.add(entity);
+    });
+
+    for (const [entity, mesh] of this.meshes.entries()) {
+      if (!seen.has(entity)) {
+        this.group.remove(mesh);
+        mesh.material.dispose();
+        this.meshes.delete(entity);
+      }
+    }
+  }
+}
+
+class SatelliteOverlay {
+  constructor(renderer, world, layerEl, edgeLayer) {
+    this.renderer = renderer;
+    this.world = world;
+    this.visible = false;
+    this.pinLayer = new SatellitePinLayer(layerEl, renderer, els.board, edgeLayer);
+    this.meshes = new SatelliteMeshLayer(renderer);
+    this.lastSnapshot = null;
+    this.pinLayer.setVisible(false);
+    this.meshes.setVisible(false);
+  }
+
+  setVisible(visible) {
+    this.visible = visible;
+    this.pinLayer.setVisible(visible);
+    this.meshes.setVisible(visible && this.renderer?.mode === "globe");
+  }
+
+  ingest(snapshot) {
+    if (!snapshot) return;
+    this.lastSnapshot = snapshot;
+    syncSatellites(snapshot, this.world);
+  }
+
+  sync() {
+    if (!this.visible) return;
+    const satellites = this.world.query(["Geo", "Satellite"]);
+    this.pinLayer.syncPins(satellites, this.world);
+    this.pinLayer.prune(this.world);
+    this.meshes.setVisible(this.visible && this.renderer?.mode === "globe");
+    this.meshes.sync(satellites, this.world);
+  }
+}
+
 const hashString = (value) => {
   let hash = 2166136261;
   for (let i = 0; i < value.length; i += 1) {
@@ -2474,6 +2742,65 @@ const formatFlightDetails = (flight) => {
   return parts.join(" · ");
 };
 
+const orbitBandForSatellite = (satellite) => {
+  const altitude = satellite?.altitude_km;
+  if (!Number.isFinite(altitude)) return "unknown";
+  if (altitude < 2000) return "leo";
+  if (altitude < 35786) return "meo";
+  return "geo";
+};
+
+const colorForSatellite = (satellite) => {
+  switch (orbitBandForSatellite(satellite)) {
+    case "leo":
+      return "#facc15";
+    case "meo":
+      return "#38bdf8";
+    case "geo":
+      return "#a3e635";
+    default:
+      return "#f59e0b";
+  }
+};
+
+const altitudeForSatellite = (satellite) => {
+  const altitudeKm = Number.isFinite(satellite?.altitude_km)
+    ? satellite.altitude_km
+    : 550;
+  const scaled = altitudeKm * SATELLITE_CONFIG.altitudeScale;
+  return Math.min(
+    SATELLITE_CONFIG.altitudeMax,
+    Math.max(SATELLITE_CONFIG.altitudeMin, scaled),
+  );
+};
+
+const formatSatelliteLabel = (satellite) => {
+  if (!satellite) return "SAT";
+  const name = satellite.name?.trim?.();
+  if (name) return name;
+  if (Number.isFinite(satellite.norad_id)) return `SAT-${satellite.norad_id}`;
+  const id = satellite.id?.split?.(":").pop?.();
+  return id || "SAT";
+};
+
+const formatSatelliteDetails = (satellite) => {
+  if (!satellite) return "";
+  const parts = [];
+  if (Number.isFinite(satellite.altitude_km)) {
+    parts.push(`${Math.round(satellite.altitude_km)} km`);
+  }
+  if (Number.isFinite(satellite.velocity_kms)) {
+    parts.push(`${satellite.velocity_kms.toFixed(2)} km/s`);
+  }
+  if (Number.isFinite(satellite.inclination_deg)) {
+    parts.push(`${Math.round(satellite.inclination_deg)}° inc`);
+  }
+  if (Number.isFinite(satellite.period_min)) {
+    parts.push(`${Math.round(satellite.period_min)} min`);
+  }
+  return parts.join(" · ");
+};
+
 const syncEntities = (payload, world) => {
   if (!payload) return;
   const seen = new Set();
@@ -2565,6 +2892,40 @@ const syncFlights = (payload, world) => {
   }
 };
 
+const syncSatellites = (payload, world) => {
+  if (!payload || !Array.isArray(payload.satellites)) return;
+  const seen = new Set();
+  const index = world.satelliteIndex || new Map();
+  world.satelliteIndex = index;
+
+  payload.satellites.forEach((satellite) => {
+    if (!Number.isFinite(satellite.lat) || !Number.isFinite(satellite.lon)) return;
+    const key =
+      satellite.id ||
+      `${satellite.norad_id || "sat"}:${satellite.lat}:${satellite.lon}`;
+    let entity = index.get(key);
+    if (!entity) {
+      entity = world.createEntity();
+      index.set(key, entity);
+    }
+    seen.add(entity);
+    world.addComponent(entity, "Geo", { lat: satellite.lat, lon: satellite.lon });
+    world.addComponent(entity, "Satellite", satellite);
+    world.addComponent(entity, "Renderable", { color: colorForSatellite(satellite) });
+    world.addComponent(entity, "Meta", { kind: "satellite", data: satellite });
+    world.addComponent(entity, "Pin", {
+      label: formatSatelliteLabel(satellite),
+    });
+  });
+
+  for (const [key, entity] of index.entries()) {
+    if (!seen.has(entity)) {
+      index.delete(key);
+      world.removeEntity(entity);
+    }
+  }
+};
+
 const edgeSymbolFor = (meta) => {
   if (!meta) return "?";
   switch (meta.kind) {
@@ -2578,6 +2939,8 @@ const edgeSymbolFor = (meta) => {
       return "I";
     case "flight":
       return "FL";
+    case "satellite":
+      return "SAT";
     default:
       return "?";
   }
@@ -2755,9 +3118,15 @@ class EdgeLayer {
       node.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
       node.classList.toggle("occluded", screen.behind);
       node.classList.toggle("edge-marker--flight", meta.kind === "flight");
+      node.classList.toggle("edge-marker--satellite", meta.kind === "satellite");
       const symbol = collapseLabel(pin.label) || edgeSymbolFor(meta);
       node.querySelector(".edge-symbol").textContent = symbol;
-      const details = meta.kind === "flight" ? formatFlightDetails(meta.data) : "";
+      const details =
+        meta.kind === "flight"
+          ? formatFlightDetails(meta.data)
+          : meta.kind === "satellite"
+            ? formatSatelliteDetails(meta.data)
+            : "";
       node.dataset.details = details || "";
       node.title = pin.label || meta.data?.name || meta.data?.summary || meta.kind;
       node.dataset.label = node.title;
@@ -2918,6 +3287,23 @@ const fetchFlights = async (renderer3d, bus, overlay) => {
   }
 };
 
+const fetchSatellites = async (renderer3d, bus, overlay) => {
+  if (!SATELLITE_CONFIG.enabled || !overlay?.visible) return;
+  if (!renderer3d || renderer3d.mode !== "globe") return;
+  const params = new URLSearchParams();
+  params.set("limit", SATELLITE_CONFIG.maxSatellites.toString());
+  try {
+    const response = await fetch(`/ui/satellites?${params.toString()}`, {
+      cache: "no-store",
+    });
+    if (!response.ok) return;
+    const payload = await response.json();
+    bus.emit("satellites:update", payload);
+  } catch {
+    // ignore satellite fetch errors
+  }
+};
+
 const setupFlightControls = (renderer3d, bus, overlay) => {
   const panel = document.getElementById("flight-panel");
   if (!panel || !FLIGHT_CONFIG.enabled) {
@@ -2937,6 +3323,30 @@ const setupFlightControls = (renderer3d, bus, overlay) => {
       overlay?.setVisible(next);
       if (next) {
         fetchFlights(renderer3d, bus, overlay);
+      }
+    });
+  }
+};
+
+const setupSatelliteControls = (renderer3d, bus, overlay) => {
+  const panel = document.getElementById("satellite-panel");
+  if (!panel || !SATELLITE_CONFIG.enabled) {
+    if (panel) panel.style.display = "none";
+    return;
+  }
+  if (els.satelliteProviderLabel) {
+    const providerName = SATELLITE_CONFIG.source || SATELLITE_CONFIG.provider;
+    els.satelliteProviderLabel.textContent = `Live satellite tracks via ${providerName}.`;
+  }
+  const toggle = document.querySelector("[data-satellite-toggle]");
+  if (toggle) {
+    toggle.setAttribute("aria-pressed", "false");
+    toggle.addEventListener("click", () => {
+      const next = toggle.getAttribute("aria-pressed") !== "true";
+      toggle.setAttribute("aria-pressed", next.toString());
+      overlay?.setVisible(next);
+      if (next) {
+        fetchSatellites(renderer3d, bus, overlay);
       }
     });
   }
@@ -2996,6 +3406,12 @@ const main = () => {
   edgeLayer.bind();
   const pinLayer = new PinLayer(els.pinLayer, renderer3d, els.board, edgeLayer);
   const flightOverlay = new FlightOverlay(renderer3d, world, els.flightLayer, edgeLayer);
+  const satelliteOverlay = new SatelliteOverlay(
+    renderer3d,
+    world,
+    els.satelliteLayer,
+    edgeLayer,
+  );
 
   bus.on("entities:update", (payload) => {
     syncEntities(payload, world);
@@ -3003,11 +3419,15 @@ const main = () => {
   bus.on("flights:update", (payload) => {
     flightOverlay.ingest(payload);
   });
+  bus.on("satellites:update", (payload) => {
+    satelliteOverlay.ingest(payload);
+  });
 
   setupTileProviders(renderer3d);
   setupGlobeControls(renderer3d);
   setupWeatherControls(renderer3d);
   setupFlightControls(renderer3d, bus, flightOverlay);
+  setupSatelliteControls(renderer3d, bus, satelliteOverlay);
 
   const renderLoop = (() => {
     let lastFpsSample = performance.now();
@@ -3033,6 +3453,7 @@ const main = () => {
         .filter((entity) => {
           const meta = world.getComponent(entity, "Meta");
           if (meta?.kind === "flight" && !flightOverlay.visible) return false;
+          if (meta?.kind === "satellite" && !satelliteOverlay.visible) return false;
           return true;
         });
       const points = entities3d.map((entity) => {
@@ -3048,6 +3469,7 @@ const main = () => {
       pinLayer.syncPins(entitiesPins, world);
       pinLayer.prune(world);
       flightOverlay.sync();
+      satelliteOverlay.sync();
       edgeLayer.syncEdges(entities3d, world);
       edgeLayer.prune(world);
 
@@ -3099,6 +3521,12 @@ const main = () => {
   setInterval(() => fetchEntities(bus), 20000);
   if (FLIGHT_CONFIG.enabled) {
     setInterval(() => fetchFlights(renderer3d, bus, flightOverlay), FLIGHT_CONFIG.updateIntervalMs);
+  }
+  if (SATELLITE_CONFIG.enabled) {
+    setInterval(
+      () => fetchSatellites(renderer3d, bus, satelliteOverlay),
+      SATELLITE_CONFIG.updateIntervalMs,
+    );
   }
   setupDockToggles();
   setupLayerToggles();

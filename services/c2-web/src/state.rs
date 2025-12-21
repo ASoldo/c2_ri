@@ -7,6 +7,7 @@ use tera::Tera;
 
 use crate::api::ApiClient;
 use crate::flights::FlightCache;
+use crate::satellites::SatelliteCache;
 use crate::tiles::TileProvider;
 
 pub struct AppState {
@@ -38,4 +39,14 @@ pub struct AppState {
     pub flight_sample_enabled: bool,
     pub flight_sample_count: usize,
     pub flight_cache: Mutex<FlightCache>,
+    pub satellite_config_json: Option<String>,
+    pub satellite_enabled: bool,
+    pub satellite_provider: String,
+    pub satellite_base_url: String,
+    pub satellite_min_interval: Duration,
+    pub satellite_cache_ttl: Duration,
+    pub satellite_max: usize,
+    pub satellite_sample_enabled: bool,
+    pub satellite_sample_count: usize,
+    pub satellite_cache: Mutex<SatelliteCache>,
 }

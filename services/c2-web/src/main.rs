@@ -1,5 +1,6 @@
 mod api;
 mod flights;
+mod satellites;
 mod render;
 mod routes;
 mod state;
@@ -216,6 +217,71 @@ async fn main() -> io::Result<()> {
         "sample": flight_sample_enabled,
     })
     .to_string();
+    let satellite_enabled = env::var("C2_WEB_SAT_ENABLED")
+        .ok()
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            !(value == "0" || value == "false" || value == "no" || value == "off")
+        })
+        .unwrap_or(true);
+    let satellite_provider =
+        env::var("C2_WEB_SAT_PROVIDER").unwrap_or_else(|_| "celestrak".to_string());
+    let satellite_base_url = env::var("C2_WEB_SAT_BASE_URL").unwrap_or_else(|_| {
+        "https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=json".to_string()
+    });
+    let satellite_source_label =
+        env::var("C2_WEB_SAT_SOURCE").unwrap_or_else(|_| "CelesTrak".to_string());
+    let satellite_update_ms = env::var("C2_WEB_SAT_UPDATE_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(8000);
+    let satellite_min_interval_ms = env::var("C2_WEB_SAT_MIN_INTERVAL_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(6000);
+    let satellite_cache_ttl_ms = env::var("C2_WEB_SAT_CACHE_TTL_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(30000);
+    let satellite_max = env::var("C2_WEB_SAT_MAX")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(120);
+    let satellite_altitude_scale = env::var("C2_WEB_SAT_ALTITUDE_SCALE")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(0.018);
+    let satellite_altitude_min = env::var("C2_WEB_SAT_ALTITUDE_MIN")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(4.0);
+    let satellite_altitude_max = env::var("C2_WEB_SAT_ALTITUDE_MAX")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(90.0);
+    let satellite_sample_enabled = env::var("C2_WEB_SAT_SAMPLE_ENABLED")
+        .ok()
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            !(value == "0" || value == "false" || value == "no" || value == "off")
+        })
+        .unwrap_or(true);
+    let satellite_sample_count = env::var("C2_WEB_SAT_SAMPLE_COUNT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(6);
+    let satellite_config_json = serde_json::json!({
+        "enabled": satellite_enabled,
+        "provider": satellite_provider.clone(),
+        "updateIntervalMs": satellite_update_ms,
+        "maxSatellites": satellite_max,
+        "altitudeScale": satellite_altitude_scale,
+        "altitudeMin": satellite_altitude_min,
+        "altitudeMax": satellite_altitude_max,
+        "source": satellite_source_label,
+        "sample": satellite_sample_enabled,
+    })
+    .to_string();
     let state = web::Data::new(AppState {
         config,
         tera,
@@ -245,6 +311,16 @@ async fn main() -> io::Result<()> {
         flight_sample_enabled,
         flight_sample_count: flight_sample_count.max(1),
         flight_cache: std::sync::Mutex::new(flights::FlightCache::new()),
+        satellite_config_json: Some(satellite_config_json),
+        satellite_enabled,
+        satellite_provider,
+        satellite_base_url,
+        satellite_min_interval: Duration::from_millis(satellite_min_interval_ms),
+        satellite_cache_ttl: Duration::from_millis(satellite_cache_ttl_ms),
+        satellite_max: satellite_max.max(1),
+        satellite_sample_enabled,
+        satellite_sample_count: satellite_sample_count.max(1),
+        satellite_cache: std::sync::Mutex::new(satellites::SatelliteCache::new()),
     });
 
     HttpServer::new(move || {
