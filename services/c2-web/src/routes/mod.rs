@@ -5,6 +5,7 @@ pub mod ui_api;
 pub mod ui;
 pub mod flights;
 pub mod satellites;
+pub mod ships;
 
 use actix_web::web;
 
@@ -18,6 +19,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(ui_api::ws_route)
         .service(flights::flights)
         .service(satellites::satellites)
+        .service(ships::ships)
         .service(tiles::weather_tile)
         .service(tiles::tile)
         .service(partials::mission_feed)

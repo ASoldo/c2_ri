@@ -1,6 +1,7 @@
 mod api;
 mod flights;
 mod satellites;
+mod ships;
 mod render;
 mod routes;
 mod state;
@@ -282,6 +283,71 @@ async fn main() -> io::Result<()> {
         "sample": satellite_sample_enabled,
     })
     .to_string();
+    let ship_enabled = env::var("C2_WEB_SHIP_ENABLED")
+        .ok()
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            !(value == "0" || value == "false" || value == "no" || value == "off")
+        })
+        .unwrap_or(true);
+    let ship_provider =
+        env::var("C2_WEB_SHIP_PROVIDER").unwrap_or_else(|_| "arcgis".to_string());
+    let ship_base_url = env::var("C2_WEB_SHIP_BASE_URL").unwrap_or_else(|_| {
+        "https://services.arcgis.com/hRUr1F8lE8Jq2uJo/arcgis/rest/services/ShipPositions/FeatureServer/0/query".to_string()
+    });
+    let ship_source_label =
+        env::var("C2_WEB_SHIP_SOURCE").unwrap_or_else(|_| "ArcGIS ShipPositions".to_string());
+    let ship_update_ms = env::var("C2_WEB_SHIP_UPDATE_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(9000);
+    let ship_min_interval_ms = env::var("C2_WEB_SHIP_MIN_INTERVAL_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(7000);
+    let ship_cache_ttl_ms = env::var("C2_WEB_SHIP_CACHE_TTL_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(45000);
+    let ship_max = env::var("C2_WEB_SHIP_MAX")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(200);
+    let ship_span_min_deg = env::var("C2_WEB_SHIP_SPAN_MIN_DEG")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(6.0);
+    let ship_span_max_deg = env::var("C2_WEB_SHIP_SPAN_MAX_DEG")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(70.0);
+    let ship_altitude = env::var("C2_WEB_SHIP_ALTITUDE")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(0.6);
+    let ship_sample_enabled = env::var("C2_WEB_SHIP_SAMPLE_ENABLED")
+        .ok()
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            !(value == "0" || value == "false" || value == "no" || value == "off")
+        })
+        .unwrap_or(true);
+    let ship_sample_count = env::var("C2_WEB_SHIP_SAMPLE_COUNT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(8);
+    let ship_config_json = serde_json::json!({
+        "enabled": ship_enabled,
+        "provider": ship_provider.clone(),
+        "updateIntervalMs": ship_update_ms,
+        "maxShips": ship_max,
+        "spanMinDeg": ship_span_min_deg,
+        "spanMaxDeg": ship_span_max_deg,
+        "altitude": ship_altitude,
+        "source": ship_source_label,
+        "sample": ship_sample_enabled,
+    })
+    .to_string();
     let state = web::Data::new(AppState {
         config,
         tera,
@@ -321,6 +387,16 @@ async fn main() -> io::Result<()> {
         satellite_sample_enabled,
         satellite_sample_count: satellite_sample_count.max(1),
         satellite_cache: std::sync::Mutex::new(satellites::SatelliteCache::new()),
+        ship_config_json: Some(ship_config_json),
+        ship_enabled,
+        ship_provider,
+        ship_base_url,
+        ship_min_interval: Duration::from_millis(ship_min_interval_ms),
+        ship_cache_ttl: Duration::from_millis(ship_cache_ttl_ms),
+        ship_max_ships: ship_max.max(1),
+        ship_sample_enabled,
+        ship_sample_count: ship_sample_count.max(1),
+        ship_cache: std::sync::Mutex::new(ships::ShipCache::new()),
     });
 
     HttpServer::new(move || {

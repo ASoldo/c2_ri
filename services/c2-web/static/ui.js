@@ -16,11 +16,13 @@ const els = {
   pinLayer: document.getElementById("pin-layer"),
   flightLayer: document.getElementById("flight-layer"),
   satelliteLayer: document.getElementById("satellite-layer"),
+  shipLayer: document.getElementById("ship-layer"),
   edgeLayer: document.getElementById("edge-layer"),
   dockLeft: document.getElementById("dock-left"),
   dockRight: document.getElementById("dock-right"),
   flightProviderLabel: document.getElementById("flight-provider-label"),
   satelliteProviderLabel: document.getElementById("satellite-provider-label"),
+  shipProviderLabel: document.getElementById("ship-provider-label"),
 };
 
 const partialEls = Array.from(document.querySelectorAll("[data-partial]"));
@@ -237,6 +239,43 @@ const buildSatelliteConfig = () => {
 };
 
 const SATELLITE_CONFIG = buildSatelliteConfig();
+
+const DEFAULT_SHIP_CONFIG = {
+  enabled: true,
+  provider: "arcgis",
+  updateIntervalMs: 9000,
+  maxShips: 200,
+  spanMinDeg: 6,
+  spanMaxDeg: 70,
+  altitude: 0.6,
+  source: "ArcGIS ShipPositions",
+  sample: true,
+};
+
+const buildShipConfig = () => {
+  const config = window.C2_SHIP_CONFIG || {};
+  return {
+    enabled: config.enabled !== undefined ? Boolean(config.enabled) : DEFAULT_SHIP_CONFIG.enabled,
+    provider: config.provider || DEFAULT_SHIP_CONFIG.provider,
+    updateIntervalMs: Number.isFinite(config.updateIntervalMs)
+      ? config.updateIntervalMs
+      : DEFAULT_SHIP_CONFIG.updateIntervalMs,
+    maxShips: Number.isFinite(config.maxShips)
+      ? config.maxShips
+      : DEFAULT_SHIP_CONFIG.maxShips,
+    spanMinDeg: Number.isFinite(config.spanMinDeg)
+      ? config.spanMinDeg
+      : DEFAULT_SHIP_CONFIG.spanMinDeg,
+    spanMaxDeg: Number.isFinite(config.spanMaxDeg)
+      ? config.spanMaxDeg
+      : DEFAULT_SHIP_CONFIG.spanMaxDeg,
+    altitude: Number.isFinite(config.altitude) ? config.altitude : DEFAULT_SHIP_CONFIG.altitude,
+    source: config.source || DEFAULT_SHIP_CONFIG.source,
+    sample: config.sample !== undefined ? Boolean(config.sample) : DEFAULT_SHIP_CONFIG.sample,
+  };
+};
+
+const SHIP_CONFIG = buildShipConfig();
 
 const setDot = (state) => {
   if (!els.apiDot) return;
@@ -1920,7 +1959,7 @@ class PinLayer {
       const pin = world.getComponent(entity, "Pin");
       if (!pin) return;
       const meta = world.getComponent(entity, "Meta");
-      if (meta?.kind === "flight" || meta?.kind === "satellite") return;
+      if (meta?.kind === "flight" || meta?.kind === "satellite" || meta?.kind === "ship") return;
       let node = this.nodes.get(entity);
       if (!node) {
         node = document.createElement("div");
@@ -2618,6 +2657,236 @@ class SatelliteOverlay {
   }
 }
 
+class ShipPinLayer {
+  constructor(layerEl, renderer, boundsEl, popup) {
+    this.layerEl = layerEl;
+    this.renderer = renderer;
+    this.boundsEl = boundsEl;
+    this.popup = popup;
+    this.nodes = new Map();
+    this.bind();
+  }
+
+  bind() {
+    if (!this.layerEl) return;
+    this.layerEl.addEventListener("click", (event) => {
+      const pin = event.target.closest('.pin[data-kind="ship"]');
+      if (!pin) return;
+      event.stopPropagation();
+      const label = pin.dataset.label || "Ship";
+      const entityId = pin.dataset.entity;
+      this.popup?.openFor(pin, entityId, label);
+    });
+  }
+
+  setVisible(visible) {
+    if (!this.layerEl) return;
+    this.layerEl.style.display = visible ? "block" : "none";
+  }
+
+  syncPins(entities, world) {
+    if (!this.layerEl || !this.renderer) return;
+    if (this.layerEl.style.display === "none") return;
+    const bounds = this.boundsEl?.getBoundingClientRect?.();
+    const clamp = bounds || {
+      left: 0,
+      top: 0,
+      right: window.innerWidth,
+      bottom: window.innerHeight,
+    };
+    const pad = 22;
+    entities.forEach((entity) => {
+      const ship = world.getComponent(entity, "Ship");
+      if (!ship) return;
+      let node = this.nodes.get(entity);
+      if (!node) {
+        node = document.createElement("div");
+        node.className = "pin";
+        node.dataset.kind = "ship";
+        node.dataset.entity = entity;
+        node.addEventListener("click", (event) => {
+          event.stopPropagation();
+          const label = node.dataset.label || "Ship";
+          const entityId = node.dataset.entity;
+          this.popup?.openFor(node, entityId, label);
+        });
+        this.layerEl.appendChild(node);
+        this.nodes.set(entity, node);
+      }
+      const label = formatShipLabel(ship);
+      node.dataset.label = label;
+      const details = formatShipDetails(ship);
+      if (details) {
+        node.dataset.details = details;
+        node.title = `${label} · ${details}`;
+      } else {
+        node.dataset.details = "";
+        node.title = label;
+      }
+      node.dataset.vessel = vesselGroupForShip(ship);
+      node.textContent = label;
+      const geo = world.getComponent(entity, "Geo");
+      if (!geo) return;
+      const pos = this.renderer.positionForGeo(
+        geo,
+        this.renderer.markerAltitude + altitudeForShip(ship),
+      );
+      const screen = this.renderer.projectToScreen(pos);
+      if (!screen) return;
+      const clampedX = Math.min(Math.max(screen.x, clamp.left + pad), clamp.right - pad);
+      const clampedY = Math.min(Math.max(screen.y, clamp.top + pad), clamp.bottom - pad);
+      const withinBounds =
+        screen.x >= clamp.left + pad &&
+        screen.x <= clamp.right - pad &&
+        screen.y >= clamp.top + pad &&
+        screen.y <= clamp.bottom - pad;
+      if (screen.visible && withinBounds) {
+        node.style.opacity = "1";
+        node.style.pointerEvents = "auto";
+        node.style.transform = `translate(${screen.x}px, ${screen.y}px) translate(-50%, -50%)`;
+      } else {
+        node.style.opacity = "0";
+        node.style.pointerEvents = "none";
+        node.style.transform = `translate(${clampedX}px, ${clampedY}px) translate(-50%, -50%)`;
+        if (this.popup?.active === node) this.popup.closeMenu();
+      }
+    });
+  }
+
+  prune(world) {
+    for (const [entity, node] of this.nodes.entries()) {
+      if (!world.entities.has(entity)) {
+        node.remove();
+        this.nodes.delete(entity);
+      }
+    }
+  }
+}
+
+class ShipMeshLayer {
+  constructor(renderer) {
+    this.renderer = renderer;
+    this.group = new THREE.Group();
+    this.group.renderOrder = 50;
+    this.group.visible = false;
+    this.meshes = new Map();
+    this.texture = null;
+    this.initTexture();
+    if (this.renderer?.scene) {
+      this.renderer.scene.add(this.group);
+    }
+  }
+
+  initTexture() {
+    const loader = new THREE.TextureLoader();
+    this.texture = loader.load("/static/assets/ship.svg");
+    this.texture.colorSpace = THREE.SRGBColorSpace;
+    this.texture.anisotropy =
+      this.renderer?.renderer?.capabilities?.getMaxAnisotropy?.() || 1;
+  }
+
+  setVisible(visible) {
+    this.group.visible = visible;
+  }
+
+  scaleForDistance() {
+    const distance = this.renderer?.camera?.position?.length?.() || this.renderer.defaultDistance;
+    const ratio = this.renderer.defaultDistance
+      ? distance / this.renderer.defaultDistance
+      : 1;
+    const base = this.renderer.globeRadius * 0.026;
+    return Math.min(16, Math.max(3, base * ratio));
+  }
+
+  ensureMesh(entity) {
+    let mesh = this.meshes.get(entity);
+    if (mesh) return mesh;
+    const material = new THREE.SpriteMaterial({
+      map: this.texture,
+      color: new THREE.Color(0xffffff),
+      transparent: true,
+      opacity: 0.96,
+      depthTest: true,
+      depthWrite: false,
+    });
+    material.alphaTest = 0.12;
+    mesh = new THREE.Sprite(material);
+    mesh.renderOrder = 68;
+    this.group.add(mesh);
+    this.meshes.set(entity, mesh);
+    return mesh;
+  }
+
+  sync(entities, world) {
+    if (!this.renderer) return;
+    const seen = new Set();
+    const scale = this.scaleForDistance();
+    entities.forEach((entity) => {
+      const ship = world.getComponent(entity, "Ship");
+      if (!ship) return;
+      const mesh = this.ensureMesh(entity);
+      const geo = world.getComponent(entity, "Geo");
+      if (!geo) return;
+      const pos = this.renderer.positionForGeo(
+        geo,
+        this.renderer.markerAltitude + altitudeForShip(ship),
+      );
+      mesh.position.set(pos.x, pos.y, pos.z);
+      mesh.scale.set(scale, scale, scale);
+      mesh.material.color.set(colorForShip(ship));
+      const heading = Number.isFinite(ship.heading_deg)
+        ? ship.heading_deg
+        : ship.course_deg;
+      if (Number.isFinite(heading)) {
+        mesh.material.rotation = -THREE.MathUtils.degToRad(heading);
+      }
+      seen.add(entity);
+    });
+
+    for (const [entity, mesh] of this.meshes.entries()) {
+      if (!seen.has(entity)) {
+        this.group.remove(mesh);
+        mesh.material.dispose();
+        this.meshes.delete(entity);
+      }
+    }
+  }
+}
+
+class ShipOverlay {
+  constructor(renderer, world, layerEl, edgeLayer) {
+    this.renderer = renderer;
+    this.world = world;
+    this.visible = false;
+    this.pinLayer = new ShipPinLayer(layerEl, renderer, els.board, edgeLayer);
+    this.meshes = new ShipMeshLayer(renderer);
+    this.lastSnapshot = null;
+    this.pinLayer.setVisible(false);
+    this.meshes.setVisible(false);
+  }
+
+  setVisible(visible) {
+    this.visible = visible;
+    this.pinLayer.setVisible(visible);
+    this.meshes.setVisible(visible && this.renderer?.mode === "globe");
+  }
+
+  ingest(snapshot) {
+    if (!snapshot) return;
+    this.lastSnapshot = snapshot;
+    syncShips(snapshot, this.world);
+  }
+
+  sync() {
+    if (!this.visible) return;
+    const ships = this.world.query(["Geo", "Ship"]);
+    this.pinLayer.syncPins(ships, this.world);
+    this.pinLayer.prune(this.world);
+    this.meshes.setVisible(this.visible && this.renderer?.mode === "globe");
+    this.meshes.sync(ships, this.world);
+  }
+}
+
 const hashString = (value) => {
   let hash = 2166136261;
   for (let i = 0; i < value.length; i += 1) {
@@ -2801,6 +3070,68 @@ const formatSatelliteDetails = (satellite) => {
   return parts.join(" · ");
 };
 
+const vesselGroupForShip = (ship) => {
+  const value = ship?.vessel_type;
+  if (!Number.isFinite(value)) return "unknown";
+  if (value >= 80 && value < 90) return "tanker";
+  if (value >= 70 && value < 80) return "cargo";
+  if (value >= 60 && value < 70) return "passenger";
+  if (value >= 30 && value < 40) return "fishing";
+  return "other";
+};
+
+const colorForShip = (ship) => {
+  switch (vesselGroupForShip(ship)) {
+    case "cargo":
+      return "#38bdf8";
+    case "tanker":
+      return "#f97316";
+    case "passenger":
+      return "#a3e635";
+    case "fishing":
+      return "#facc15";
+    case "other":
+      return "#22c55e";
+    default:
+      return "#94a3b8";
+  }
+};
+
+const altitudeForShip = () =>
+  Number.isFinite(SHIP_CONFIG.altitude) ? SHIP_CONFIG.altitude : 0.6;
+
+const formatShipLabel = (ship) => {
+  if (!ship) return "SHIP";
+  const name = ship.name?.trim?.();
+  if (name) return name;
+  const callsign = ship.callsign?.trim?.();
+  if (callsign) return callsign;
+  if (Number.isFinite(ship.mmsi)) return `MMSI ${ship.mmsi}`;
+  const id = ship.id?.split?.(":").pop?.();
+  return id || "SHIP";
+};
+
+const formatShipDetails = (ship) => {
+  if (!ship) return "";
+  const parts = [];
+  if (Number.isFinite(ship.speed_knots)) {
+    parts.push(`${ship.speed_knots.toFixed(1)} kt`);
+  }
+  const heading = Number.isFinite(ship.heading_deg)
+    ? ship.heading_deg
+    : ship.course_deg;
+  if (Number.isFinite(heading)) {
+    parts.push(`${Math.round(heading)}°`);
+  }
+  if (ship.destination) {
+    parts.push(ship.destination.trim());
+  }
+  if (Number.isFinite(ship.draught_m)) {
+    parts.push(`${ship.draught_m.toFixed(1)} m`);
+  }
+  return parts.join(" · ");
+};
+
 const syncEntities = (payload, world) => {
   if (!payload) return;
   const seen = new Set();
@@ -2926,6 +3257,36 @@ const syncSatellites = (payload, world) => {
   }
 };
 
+const syncShips = (payload, world) => {
+  if (!payload || !Array.isArray(payload.ships)) return;
+  const seen = new Set();
+  const index = world.shipIndex || new Map();
+  world.shipIndex = index;
+
+  payload.ships.forEach((ship) => {
+    if (!Number.isFinite(ship.lat) || !Number.isFinite(ship.lon)) return;
+    const key = ship.id || `${ship.mmsi || "ship"}:${ship.lat}:${ship.lon}`;
+    let entity = index.get(key);
+    if (!entity) {
+      entity = world.createEntity();
+      index.set(key, entity);
+    }
+    seen.add(entity);
+    world.addComponent(entity, "Geo", { lat: ship.lat, lon: ship.lon });
+    world.addComponent(entity, "Ship", ship);
+    world.addComponent(entity, "Renderable", { color: colorForShip(ship) });
+    world.addComponent(entity, "Meta", { kind: "ship", data: ship });
+    world.addComponent(entity, "Pin", { label: formatShipLabel(ship) });
+  });
+
+  for (const [key, entity] of index.entries()) {
+    if (!seen.has(entity)) {
+      index.delete(key);
+      world.removeEntity(entity);
+    }
+  }
+};
+
 const edgeSymbolFor = (meta) => {
   if (!meta) return "?";
   switch (meta.kind) {
@@ -2941,6 +3302,8 @@ const edgeSymbolFor = (meta) => {
       return "FL";
     case "satellite":
       return "SAT";
+    case "ship":
+      return "SH";
     default:
       return "?";
   }
@@ -3119,6 +3482,7 @@ class EdgeLayer {
       node.classList.toggle("occluded", screen.behind);
       node.classList.toggle("edge-marker--flight", meta.kind === "flight");
       node.classList.toggle("edge-marker--satellite", meta.kind === "satellite");
+      node.classList.toggle("edge-marker--ship", meta.kind === "ship");
       const symbol = collapseLabel(pin.label) || edgeSymbolFor(meta);
       node.querySelector(".edge-symbol").textContent = symbol;
       const details =
@@ -3126,6 +3490,8 @@ class EdgeLayer {
           ? formatFlightDetails(meta.data)
           : meta.kind === "satellite"
             ? formatSatelliteDetails(meta.data)
+            : meta.kind === "ship"
+              ? formatShipDetails(meta.data)
             : "";
       node.dataset.details = details || "";
       node.title = pin.label || meta.data?.name || meta.data?.summary || meta.kind;
@@ -3237,6 +3603,8 @@ const setupWeatherControls = (renderer3d) => {
 
 const clampFlightLat = (lat) => Math.max(-85, Math.min(85, lat));
 const clampFlightLon = (lon) => Math.max(-180, Math.min(180, lon));
+const clampShipLat = (lat) => Math.max(-85, Math.min(85, lat));
+const clampShipLon = (lon) => Math.max(-180, Math.min(180, lon));
 
 const computeFlightBounds = (renderer3d) => {
   if (!renderer3d || renderer3d.mode !== "globe") return null;
@@ -3260,6 +3628,30 @@ const computeFlightBounds = (renderer3d) => {
     lamax: clampFlightLat(center.lat + half),
     lomin: clampFlightLon(center.lon - half),
     lomax: clampFlightLon(center.lon + half),
+  };
+};
+
+const computeShipBounds = (renderer3d) => {
+  if (!renderer3d || renderer3d.mode !== "globe") return null;
+  const center = renderer3d.geoFromScreen(
+    renderer3d.size.width / 2,
+    renderer3d.size.height / 2,
+  );
+  if (!center) return null;
+  const distance = renderer3d.camera?.position?.length?.() || renderer3d.defaultDistance;
+  const denom = Math.max(1, renderer3d.defaultDistance - renderer3d.globeRadius);
+  const ratio = Math.max(
+    0.15,
+    Math.min(1, (distance - renderer3d.globeRadius) / denom),
+  );
+  const span =
+    SHIP_CONFIG.spanMinDeg + (SHIP_CONFIG.spanMaxDeg - SHIP_CONFIG.spanMinDeg) * ratio;
+  const half = span / 2;
+  return {
+    lamin: clampShipLat(center.lat - half),
+    lamax: clampShipLat(center.lat + half),
+    lomin: clampShipLon(center.lon - half),
+    lomax: clampShipLon(center.lon + half),
   };
 };
 
@@ -3301,6 +3693,30 @@ const fetchSatellites = async (renderer3d, bus, overlay) => {
     bus.emit("satellites:update", payload);
   } catch {
     // ignore satellite fetch errors
+  }
+};
+
+const fetchShips = async (renderer3d, bus, overlay) => {
+  if (!SHIP_CONFIG.enabled || !overlay?.visible) return;
+  if (!renderer3d || renderer3d.mode !== "globe") return;
+  const bounds = computeShipBounds(renderer3d);
+  const params = new URLSearchParams();
+  if (bounds) {
+    params.set("lamin", bounds.lamin.toFixed(4));
+    params.set("lomin", bounds.lomin.toFixed(4));
+    params.set("lamax", bounds.lamax.toFixed(4));
+    params.set("lomax", bounds.lomax.toFixed(4));
+  }
+  params.set("limit", SHIP_CONFIG.maxShips.toString());
+  try {
+    const response = await fetch(`/ui/ships?${params.toString()}`, {
+      cache: "no-store",
+    });
+    if (!response.ok) return;
+    const payload = await response.json();
+    bus.emit("ships:update", payload);
+  } catch {
+    // ignore ship fetch errors
   }
 };
 
@@ -3347,6 +3763,30 @@ const setupSatelliteControls = (renderer3d, bus, overlay) => {
       overlay?.setVisible(next);
       if (next) {
         fetchSatellites(renderer3d, bus, overlay);
+      }
+    });
+  }
+};
+
+const setupShipControls = (renderer3d, bus, overlay) => {
+  const panel = document.getElementById("ship-panel");
+  if (!panel || !SHIP_CONFIG.enabled) {
+    if (panel) panel.style.display = "none";
+    return;
+  }
+  if (els.shipProviderLabel) {
+    const providerName = SHIP_CONFIG.source || SHIP_CONFIG.provider;
+    els.shipProviderLabel.textContent = `Live vessel tracks via ${providerName}.`;
+  }
+  const toggle = document.querySelector("[data-ship-toggle]");
+  if (toggle) {
+    toggle.setAttribute("aria-pressed", "false");
+    toggle.addEventListener("click", () => {
+      const next = toggle.getAttribute("aria-pressed") !== "true";
+      toggle.setAttribute("aria-pressed", next.toString());
+      overlay?.setVisible(next);
+      if (next) {
+        fetchShips(renderer3d, bus, overlay);
       }
     });
   }
@@ -3412,6 +3852,7 @@ const main = () => {
     els.satelliteLayer,
     edgeLayer,
   );
+  const shipOverlay = new ShipOverlay(renderer3d, world, els.shipLayer, edgeLayer);
 
   bus.on("entities:update", (payload) => {
     syncEntities(payload, world);
@@ -3422,12 +3863,16 @@ const main = () => {
   bus.on("satellites:update", (payload) => {
     satelliteOverlay.ingest(payload);
   });
+  bus.on("ships:update", (payload) => {
+    shipOverlay.ingest(payload);
+  });
 
   setupTileProviders(renderer3d);
   setupGlobeControls(renderer3d);
   setupWeatherControls(renderer3d);
   setupFlightControls(renderer3d, bus, flightOverlay);
   setupSatelliteControls(renderer3d, bus, satelliteOverlay);
+  setupShipControls(renderer3d, bus, shipOverlay);
 
   const renderLoop = (() => {
     let lastFpsSample = performance.now();
@@ -3454,6 +3899,7 @@ const main = () => {
           const meta = world.getComponent(entity, "Meta");
           if (meta?.kind === "flight" && !flightOverlay.visible) return false;
           if (meta?.kind === "satellite" && !satelliteOverlay.visible) return false;
+          if (meta?.kind === "ship" && !shipOverlay.visible) return false;
           return true;
         });
       const points = entities3d.map((entity) => {
@@ -3470,6 +3916,7 @@ const main = () => {
       pinLayer.prune(world);
       flightOverlay.sync();
       satelliteOverlay.sync();
+      shipOverlay.sync();
       edgeLayer.syncEdges(entities3d, world);
       edgeLayer.prune(world);
 
@@ -3527,6 +3974,9 @@ const main = () => {
       () => fetchSatellites(renderer3d, bus, satelliteOverlay),
       SATELLITE_CONFIG.updateIntervalMs,
     );
+  }
+  if (SHIP_CONFIG.enabled) {
+    setInterval(() => fetchShips(renderer3d, bus, shipOverlay), SHIP_CONFIG.updateIntervalMs);
   }
   setupDockToggles();
   setupLayerToggles();

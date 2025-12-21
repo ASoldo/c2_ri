@@ -83,6 +83,13 @@
           </div>
           <div class="meta" id="satellite-provider-label">Live satellite tracks via CelesTrak.</div>
         </section>
+        <section class="panel-section" id="ship-panel">
+          <h2>Maritime</h2>
+          <div class="panel-actions">
+            <button data-ship-toggle="overlay" aria-pressed="false">Ships</button>
+          </div>
+          <div class="meta" id="ship-provider-label">Live vessel tracks via ArcGIS.</div>
+        </section>
         <section class="panel-section">
           <h2>Overlays</h2>
           <div class="panel-actions">
@@ -100,6 +107,7 @@
         <div class="dom-layer" id="pin-layer" data-layer="pins"></div>
         <div class="dom-layer flight-layer" id="flight-layer" data-layer="flights"></div>
         <div class="dom-layer satellite-layer" id="satellite-layer" data-layer="satellites"></div>
+        <div class="dom-layer ship-layer" id="ship-layer" data-layer="ships"></div>
         <div class="edge-layer" id="edge-layer" data-layer="edges"></div>
       </div>
       <div class="crosshair" id="crosshair" aria-hidden="true"></div>

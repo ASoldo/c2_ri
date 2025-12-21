@@ -31,6 +31,11 @@
     window.C2_SATELLITE_CONFIG = {{ satellite_config_json | safe }};
   </script>
   {% endif %}
+  {% if ship_config_json and ship_config_json != "" %}
+  <script>
+    window.C2_SHIP_CONFIG = {{ ship_config_json | safe }};
+  </script>
+  {% endif %}
   <script type="module" src="/static/ui.js"></script>
 </body>
 </html>
