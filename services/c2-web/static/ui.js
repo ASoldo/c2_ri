@@ -871,9 +871,9 @@ class TileManager {
           transparent: opacity < 0.999 || this.provider.transparent === true,
           opacity,
           color: new THREE.Color(0xffffff),
-          side: THREE.DoubleSide,
+          side: THREE.FrontSide,
         });
-        material.depthTest = this.provider.depthTest ?? false;
+        material.depthTest = this.provider.depthTest ?? true;
         material.depthWrite = this.provider.depthWrite ?? false;
         if (Number.isFinite(this.provider.alphaTest)) {
           material.alphaTest = this.provider.alphaTest;
@@ -1085,6 +1085,7 @@ class Renderer3D {
     this.globeMaterial = new THREE.MeshPhongMaterial({
       map: this.dayMap,
       color: new THREE.Color(0xffffff),
+      side: THREE.FrontSide,
       normalMap: this.normalMap,
       normalScale: new THREE.Vector2(1.1, 1.1),
       specularMap: this.specularMap,
@@ -1107,6 +1108,7 @@ class Renderer3D {
         color: 0x7dd3fc,
         transparent: true,
         opacity: 0.08,
+        side: THREE.FrontSide,
       }),
     );
     this.atmosphere.renderOrder = 4;
@@ -1123,6 +1125,7 @@ class Renderer3D {
         depthWrite: false,
         blending: THREE.AdditiveBlending,
         color: new THREE.Color(0xffffff),
+        side: THREE.FrontSide,
       }),
     );
     this.clouds.material.depthTest = true;
@@ -1153,6 +1156,7 @@ class Renderer3D {
       map: this.dayMap,
       roughness: 0.9,
       metalness: 0.0,
+      side: THREE.FrontSide,
     });
     this.mapPlane = new THREE.Mesh(
       new THREE.PlaneGeometry(this.planeSize.width, this.planeSize.height, 1, 1),
@@ -1166,9 +1170,21 @@ class Renderer3D {
     this.axisHelper = new THREE.AxesHelper(this.globeRadius * 1.6);
     this.axisHelper.visible = true;
     this.axisHelper.setColors(0xff0000, 0x00ff00, 0x0000ff);
+    this.axisHelper.renderOrder = 2000;
+    if (this.axisHelper.material) {
+      const materials = Array.isArray(this.axisHelper.material)
+        ? this.axisHelper.material
+        : [this.axisHelper.material];
+      materials.forEach((material) => {
+        if (!material) return;
+        material.depthTest = false;
+        material.depthWrite = false;
+      });
+    }
     this.scene.add(this.axisHelper);
 
     this.gridLines = this.buildLatLonGrid(this.globeRadius + 0.6, 20, 10);
+    this.gridLines.renderOrder = 2000;
     this.scene.add(this.gridLines);
 
     this.setLightingMode("day");
@@ -1650,6 +1666,8 @@ class Renderer3D {
       transparent: true,
       opacity: 0.45,
     });
+    material.depthTest = false;
+    material.depthWrite = false;
     return new THREE.LineSegments(geometry, material);
   }
 
