@@ -88,10 +88,14 @@ pub fn sample_flights_near(
     let mut flights = sample_flights(now_ms, count);
     let lat = center_lat.max(-85.0).min(85.0);
     let lon = center_lon.max(-180.0).min(180.0);
+    let t = (now_ms as f64 / 1000.0) / 90.0;
     for (idx, flight) in flights.iter_mut().enumerate() {
-        let offset = (idx as f64 * 4.2) % 20.0 - 10.0;
-        flight.lat = (lat + offset * 0.35).max(-85.0).min(85.0);
-        flight.lon = (lon + offset * 0.55).max(-180.0).min(180.0);
+        let spread = 5.0 + idx as f64 * 2.5;
+        let drift = (t + idx as f64 * 0.4).sin() * 1.6;
+        let wobble = (t + idx as f64 * 0.6).cos() * 2.1;
+        flight.lat = (lat + spread * 0.15 + drift).max(-85.0).min(85.0);
+        flight.lon = (lon + spread * 0.2 + wobble).max(-180.0).min(180.0);
+        flight.heading_deg = flight.heading_deg.map(|h| (h + drift * 8.0) % 360.0);
     }
     flights
 }

@@ -1941,7 +1941,7 @@ class FlightPinLayer {
   bind() {
     if (!this.layerEl) return;
     this.layerEl.addEventListener("click", (event) => {
-      const pin = event.target.closest(".flight-pin");
+      const pin = event.target.closest('.pin[data-kind="flight"]');
       if (!pin) return;
       event.stopPropagation();
       const label = pin.dataset.label || "Flight";
@@ -1972,11 +1972,8 @@ class FlightPinLayer {
       let node = this.nodes.get(entity);
       if (!node) {
         node = document.createElement("div");
-        node.className = "pin flight-pin";
-        node.innerHTML = `
-          <span class="flight-icon" aria-hidden="true"></span>
-          <span class="flight-label"></span>
-        `;
+        node.className = "pin";
+        node.dataset.kind = "flight";
         node.dataset.entity = entity;
         this.layerEl.appendChild(node);
         this.nodes.set(entity, node);
@@ -1992,8 +1989,7 @@ class FlightPinLayer {
         node.title = label;
       }
       node.dataset.status = flight.on_ground ? "ground" : "airborne";
-      const labelEl = node.querySelector(".flight-label");
-      if (labelEl) labelEl.textContent = label;
+      node.textContent = label;
       const heading = Number.isFinite(flight.heading_deg) ? flight.heading_deg : 0;
       node.style.setProperty("--heading", `${heading}deg`);
       const geo = world.getComponent(entity, "Geo");
@@ -2020,7 +2016,7 @@ class FlightPinLayer {
         screen.y <= clamp.bottom - pad;
       if (screen.visible && withinBounds) {
         node.style.opacity = "1";
-        node.style.pointerEvents = "none";
+        node.style.pointerEvents = "auto";
         node.style.transform = `translate(${screen.x}px, ${screen.y}px) translate(-50%, -50%)`;
       } else {
         node.style.opacity = "0";
@@ -2084,15 +2080,15 @@ class FlightTrailLayer {
     this.group.add(line);
 
     const stalkMaterial = new THREE.LineBasicMaterial({
-      color: 0xf97316,
+      color: 0xf43f5e,
       transparent: true,
-      opacity: 0.7,
+      opacity: 0.85,
     });
-    stalkMaterial.depthTest = true;
+    stalkMaterial.depthTest = false;
     stalkMaterial.depthWrite = false;
     const stalkGeometry = new THREE.BufferGeometry();
     const stalk = new THREE.Line(stalkGeometry, stalkMaterial);
-    stalk.renderOrder = 58;
+    stalk.renderOrder = 82;
     stalk.frustumCulled = true;
     this.group.add(stalk);
 
@@ -2184,13 +2180,14 @@ class FlightTrailLayer {
   }
 }
 
-class FlightSpriteLayer {
+class FlightMeshLayer {
   constructor(renderer) {
     this.renderer = renderer;
     this.group = new THREE.Group();
     this.group.renderOrder = 45;
     this.group.visible = false;
-    this.sprites = new Map();
+    this.meshes = new Map();
+    this.geometry = new THREE.PlaneGeometry(1, 1);
     this.texture = null;
     this.initTexture();
     if (this.renderer?.scene) {
@@ -2229,22 +2226,49 @@ class FlightSpriteLayer {
     return Math.min(18, Math.max(4, base * ratio));
   }
 
-  ensureSprite(entity) {
-    let sprite = this.sprites.get(entity);
-    if (sprite) return sprite;
-    const material = new THREE.SpriteMaterial({
+  ensureMesh(entity) {
+    let mesh = this.meshes.get(entity);
+    if (mesh) return mesh;
+    const material = new THREE.MeshBasicMaterial({
       map: this.texture,
       color: new THREE.Color(0xffffff),
       transparent: true,
+      opacity: 0.95,
       depthTest: true,
       depthWrite: false,
+      side: THREE.FrontSide,
     });
-    material.rotation = 0;
-    sprite = new THREE.Sprite(material);
-    sprite.renderOrder = 60;
-    this.group.add(sprite);
-    this.sprites.set(entity, sprite);
-    return sprite;
+    material.alphaTest = 0.12;
+    mesh = new THREE.Mesh(this.geometry, material);
+    mesh.renderOrder = 60;
+    this.group.add(mesh);
+    this.meshes.set(entity, mesh);
+    return mesh;
+  }
+
+  buildOrientation(latDeg, lonDeg, headingDeg) {
+    const lat = THREE.MathUtils.degToRad(latDeg);
+    const lon = THREE.MathUtils.degToRad(lonDeg);
+    const normal = new THREE.Vector3(
+      Math.cos(lat) * Math.cos(lon),
+      Math.sin(lat),
+      Math.cos(lat) * Math.sin(lon),
+    ).normalize();
+    const east = new THREE.Vector3(-Math.sin(lon), 0, Math.cos(lon)).normalize();
+    const north = new THREE.Vector3(
+      -Math.sin(lat) * Math.cos(lon),
+      Math.cos(lat),
+      -Math.sin(lat) * Math.sin(lon),
+    ).normalize();
+    const heading = THREE.MathUtils.degToRad(headingDeg);
+    const forward = north
+      .clone()
+      .multiplyScalar(Math.cos(heading))
+      .add(east.clone().multiplyScalar(Math.sin(heading)))
+      .normalize();
+    const right = normal.clone().cross(forward).normalize();
+    const basis = new THREE.Matrix4().makeBasis(right, forward, normal);
+    return { basis, normal };
   }
 
   sync(entities, world) {
@@ -2254,7 +2278,7 @@ class FlightSpriteLayer {
     entities.forEach((entity) => {
       const flight = world.getComponent(entity, "Flight");
       if (!flight) return;
-      const sprite = this.ensureSprite(entity);
+      const mesh = this.ensureMesh(entity);
       const altitude = this.altitudeForFlight(flight);
       const geo = world.getComponent(entity, "Geo");
       if (!geo) return;
@@ -2262,18 +2286,20 @@ class FlightSpriteLayer {
         geo,
         this.renderer.markerAltitude + altitude,
       );
-      sprite.position.set(pos.x, pos.y, pos.z);
-      sprite.scale.set(scale, scale, 1);
+      mesh.position.set(pos.x, pos.y, pos.z);
+      mesh.scale.set(scale, scale, scale);
       const heading = Number.isFinite(flight.heading_deg) ? flight.heading_deg : 0;
-      sprite.material.rotation = THREE.MathUtils.degToRad(heading);
+      const { basis } = this.buildOrientation(geo.lat, geo.lon, heading);
+      mesh.setRotationFromMatrix(basis);
+      mesh.material.color.set(colorForFlight(flight));
       seen.add(entity);
     });
 
-    for (const [entity, sprite] of this.sprites.entries()) {
+    for (const [entity, mesh] of this.meshes.entries()) {
       if (!seen.has(entity)) {
-        this.group.remove(sprite);
-        sprite.material.dispose();
-        this.sprites.delete(entity);
+        this.group.remove(mesh);
+        mesh.material.dispose();
+        this.meshes.delete(entity);
       }
     }
   }
@@ -2286,18 +2312,18 @@ class FlightOverlay {
     this.visible = false;
     this.pinLayer = new FlightPinLayer(layerEl, renderer, els.board, edgeLayer);
     this.trails = new FlightTrailLayer(renderer);
-    this.sprites = new FlightSpriteLayer(renderer);
+    this.planes = new FlightMeshLayer(renderer);
     this.lastSnapshot = null;
     this.pinLayer.setVisible(false);
     this.trails.setVisible(false);
-    this.sprites.setVisible(false);
+    this.planes.setVisible(false);
   }
 
   setVisible(visible) {
     this.visible = visible;
     this.pinLayer.setVisible(visible);
     this.trails.setVisible(visible && this.renderer?.mode === "globe");
-    this.sprites.setVisible(visible && this.renderer?.mode === "globe");
+    this.planes.setVisible(visible && this.renderer?.mode === "globe");
   }
 
   ingest(snapshot) {
@@ -2313,8 +2339,8 @@ class FlightOverlay {
     this.pinLayer.syncPins(flights, this.world);
     this.pinLayer.prune(this.world);
     this.trails.setVisible(this.visible && this.renderer?.mode === "globe");
-    this.sprites.setVisible(this.visible && this.renderer?.mode === "globe");
-    this.sprites.sync(flights, this.world);
+    this.planes.setVisible(this.visible && this.renderer?.mode === "globe");
+    this.planes.sync(flights, this.world);
   }
 }
 

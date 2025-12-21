@@ -493,36 +493,21 @@ body {
   z-index: 3;
 }
 
-.pin.flight-pin {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
+.flight-layer .pin {
+  pointer-events: auto;
+}
+
+.pin[data-kind="flight"] {
   font-weight: 600;
   border: 1px solid rgba(34, 211, 238, 0.55);
   box-shadow: 0 0 14px rgba(34, 211, 238, 0.25);
-  pointer-events: none;
 }
 
-.pin.flight-pin[data-status="ground"] {
+.pin[data-kind="flight"][data-status="ground"] {
   background: rgba(148, 163, 184, 0.8);
   border-color: rgba(148, 163, 184, 0.7);
   color: #0f172a;
   box-shadow: 0 0 10px rgba(148, 163, 184, 0.3);
-}
-
-.pin.flight-pin .flight-icon {
-  width: 16px;
-  height: 16px;
-  background: url("/static/assets/plane.png") center/contain no-repeat;
-  transform: rotate(var(--heading, 0deg));
-  filter: drop-shadow(0 2px 6px rgba(15, 23, 42, 0.4));
-}
-
-.pin.flight-pin .flight-label {
-  font-size: 10px;
-  font-weight: 600;
-  white-space: nowrap;
 }
 
 .pin.selected {
