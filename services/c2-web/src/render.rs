@@ -10,6 +10,7 @@ pub struct UiTemplateData {
     pub status: Option<StatusResponse>,
     pub snapshot: UiSnapshot,
     pub tile_config_json: Option<String>,
+    pub weather_config_json: Option<String>,
 }
 
 impl UiTemplateData {
@@ -20,6 +21,7 @@ impl UiTemplateData {
             status,
             snapshot,
             tile_config_json: state.tile_config_json.clone(),
+            weather_config_json: state.weather_config_json.clone(),
         }
     }
 }
@@ -31,5 +33,6 @@ pub fn build_context(data: &UiTemplateData) -> Context {
     context.insert("status", &data.status);
     context.insert("snapshot", &data.snapshot);
     context.insert("tile_config_json", &data.tile_config_json);
+    context.insert("weather_config_json", &data.weather_config_json);
     context
 }

@@ -95,6 +95,48 @@ const buildTileConfig = () => {
 
 const TILE_CONFIG = buildTileConfig();
 
+const DEFAULT_WEATHER_FIELDS = [
+  "cloudCover",
+  "precipitationIntensity",
+  "temperature",
+  "windSpeed",
+  "pressureSeaLevel",
+  "humidity",
+  "visibility",
+];
+
+const buildWeatherConfig = () => {
+  const config = window.C2_WEATHER_CONFIG || {};
+  let fields = Array.isArray(config.fields) && config.fields.length
+    ? config.fields.filter(Boolean)
+    : DEFAULT_WEATHER_FIELDS.slice();
+  if (!fields.length) fields = DEFAULT_WEATHER_FIELDS.slice();
+  const defaultField = fields.includes(config.defaultField)
+    ? config.defaultField
+    : fields[0];
+  const defaultTime = config.defaultTime || "now";
+  const defaultFormat = config.defaultFormat || "png";
+  const defaultOpacity = Number.isFinite(config.defaultOpacity)
+    ? config.defaultOpacity
+    : 0.55;
+  const minZoom = Number.isFinite(config.minZoom) ? config.minZoom : 1;
+  const maxZoom = Number.isFinite(config.maxZoom) ? config.maxZoom : 12;
+  const maxTiles = Number.isFinite(config.maxTiles) ? config.maxTiles : 140;
+  return {
+    enabled: Boolean(config.enabled),
+    fields,
+    defaultField,
+    defaultTime,
+    defaultFormat,
+    defaultOpacity,
+    minZoom,
+    maxZoom,
+    maxTiles,
+  };
+};
+
+const WEATHER_CONFIG = buildWeatherConfig();
+
 const setDot = (state) => {
   if (!els.apiDot) return;
   els.apiDot.classList.remove("ok", "warn", "error");
@@ -444,6 +486,7 @@ class TileManager {
     this.provider = provider || null;
     this.zoom = null;
     this.group.visible = Boolean(this.provider);
+    this.group.renderOrder = this.provider?.renderOrder ?? 10;
     if (this.loader) {
       this.loader.crossOrigin = this.provider?.proxy ? null : "anonymous";
     }
@@ -585,32 +628,106 @@ class TileManager {
     return 5;
   }
 
+  pickFocusBoxPx(size, zoom) {
+    const base = Math.min(size.width || 0, size.height || 0);
+    if (!base) return 0;
+    const maxRadius = Math.max(220, base * 0.32);
+    const minRadius = Math.max(140, base * 0.2);
+    const ratio = this.provider
+      ? Math.max(0, Math.min(1, (zoom - this.provider.minZoom) / 6))
+      : 0.5;
+    return minRadius + (maxRadius - minRadius) * ratio;
+  }
+
   computeVisibleTiles(camera, size, zoom) {
     const centerGeo = this.sampleGeo(camera, 0, 0);
     if (!centerGeo) {
       return { keys: [], tiles: new Map() };
     }
+    const focusPx = this.pickFocusBoxPx(size, zoom);
+    const ndcX = Math.min(0.95, (focusPx / Math.max(1, size.width)) * 2);
+    const ndcY = Math.min(0.95, (focusPx / Math.max(1, size.height)) * 2);
+    const focusSamples = [
+      [0, 0],
+      [ndcX, 0],
+      [-ndcX, 0],
+      [0, ndcY],
+      [0, -ndcY],
+      [ndcX, ndcY],
+      [-ndcX, ndcY],
+      [ndcX, -ndcY],
+      [-ndcX, -ndcY],
+    ];
+    const focusGeos = focusSamples
+      .map(([x, y]) => this.sampleGeo(camera, x, y))
+      .filter(Boolean);
     const center = {
       x: tileXForLon(centerGeo.lon, zoom),
       y: tileYForLat(centerGeo.lat, zoom),
     };
-    const radius = this.pickTileRadius(camera, zoom);
     const n = 2 ** zoom;
     const tiles = new Map();
     const keys = [];
-    for (let dx = -radius; dx <= radius; dx += 1) {
-      const rawX = center.x + dx;
-      const wrappedX = ((rawX % n) + n) % n;
-      for (let dy = -radius; dy <= radius; dy += 1) {
-        const y = center.y + dy;
-        if (y < 0 || y >= n) continue;
-        const key = `${zoom}/${wrappedX}/${y}`;
-        if (tiles.has(key)) continue;
-        const bounds = tileBounds(wrappedX, y, zoom);
-        const tile = { key, x: wrappedX, y, zoom, bounds };
-        tiles.set(key, tile);
-        const dist = dx * dx + dy * dy;
-        keys.push({ key, dist, tile });
+    if (focusGeos.length) {
+      const latMin = Math.max(-85, Math.min(...focusGeos.map((g) => g.lat)));
+      const latMax = Math.min(85, Math.max(...focusGeos.map((g) => g.lat)));
+      const lonStats = this.computeLonRange(focusGeos.map((g) => g.lon));
+      const lonSpan = lonStats.max - lonStats.min;
+      const lonPadding = Math.max(1, lonSpan * 0.04);
+      const lonMin = lonStats.min - lonPadding;
+      const lonMax = lonStats.max + lonPadding;
+      const yMin = Math.max(0, tileYForLat(latMax, zoom) - 1);
+      const yMax = Math.min(n - 1, tileYForLat(latMin, zoom) + 1);
+      let lonRanges = [];
+      if (lonSpan >= 360) {
+        lonRanges = [[-180, 180]];
+      } else if (lonMin < -180) {
+        lonRanges = [
+          [lonMin + 360, 180],
+          [-180, lonMax],
+        ];
+      } else if (lonMax > 180) {
+        lonRanges = [
+          [lonMin, 180],
+          [-180, lonMax - 360],
+        ];
+      } else {
+        lonRanges = [[lonMin, lonMax]];
+      }
+      const ranges = lonRanges.map(([startLon, endLon]) => [
+        tileXForLon(startLon, zoom),
+        tileXForLon(endLon, zoom),
+      ]);
+      ranges.forEach(([start, end]) => {
+        for (let x = start - 1; x <= end + 1; x += 1) {
+          if (x < 0 || x >= n) continue;
+          for (let y = yMin; y <= yMax; y += 1) {
+            const key = `${zoom}/${x}/${y}`;
+            if (tiles.has(key)) continue;
+            const bounds = tileBounds(x, y, zoom);
+            const tile = { key, x, y, zoom, bounds };
+            tiles.set(key, tile);
+            const dist = (x - center.x) ** 2 + (y - center.y) ** 2;
+            keys.push({ key, dist, tile });
+          }
+        }
+      });
+    } else {
+      const radius = this.pickTileRadius(camera, zoom);
+      for (let dx = -radius; dx <= radius; dx += 1) {
+        const rawX = center.x + dx;
+        const wrappedX = ((rawX % n) + n) % n;
+        for (let dy = -radius; dy <= radius; dy += 1) {
+          const y = center.y + dy;
+          if (y < 0 || y >= n) continue;
+          const key = `${zoom}/${wrappedX}/${y}`;
+          if (tiles.has(key)) continue;
+          const bounds = tileBounds(wrappedX, y, zoom);
+          const tile = { key, x: wrappedX, y, zoom, bounds };
+          tiles.set(key, tile);
+          const dist = dx * dx + dy * dy;
+          keys.push({ key, dist, tile });
+        }
       }
     }
     keys.sort((a, b) => a.dist - b.dist);
@@ -705,12 +822,23 @@ class TileManager {
     }
   }
 
-  loadTile(tile) {
-    if (!this.provider) return;
-    const url = this.provider.url
+  buildUrl(tile) {
+    if (!this.provider) return "";
+    let url = this.provider.url
       .replace("{z}", tile.zoom)
       .replace("{x}", tile.x)
       .replace("{y}", tile.y);
+    if (this.provider.params) {
+      Object.entries(this.provider.params).forEach(([key, value]) => {
+        url = url.replace(`{${key}}`, encodeURIComponent(String(value)));
+      });
+    }
+    return url;
+  }
+
+  loadTile(tile) {
+    if (!this.provider) return;
+    const url = this.buildUrl(tile);
     this.pending.add(tile.key);
     this.inFlight += 1;
     this.loader.load(
@@ -725,20 +853,26 @@ class TileManager {
         texture.anisotropy = this.renderer?.capabilities?.getMaxAnisotropy?.() || 1;
         texture.needsUpdate = true;
         const geometry = this.buildTileGeometry(tile.bounds);
+        const opacity = Number.isFinite(this.provider.opacity)
+          ? this.provider.opacity
+          : 1.0;
         const material = new THREE.MeshBasicMaterial({
           map: texture,
-          transparent: true,
-          opacity: 1.0,
+          transparent: opacity < 0.999 || this.provider.transparent === true,
+          opacity,
           color: new THREE.Color(0xffffff),
           side: THREE.DoubleSide,
         });
-        material.depthTest = false;
-        material.depthWrite = false;
+        material.depthTest = this.provider.depthTest ?? false;
+        material.depthWrite = this.provider.depthWrite ?? false;
+        if (Number.isFinite(this.provider.alphaTest)) {
+          material.alphaTest = this.provider.alphaTest;
+        }
         material.polygonOffset = true;
         material.polygonOffsetFactor = -3;
         material.polygonOffsetUnits = -3;
         const mesh = new THREE.Mesh(geometry, material);
-        mesh.renderOrder = 10;
+        mesh.renderOrder = this.provider.renderOrder ?? 10;
         geometry.computeBoundingSphere();
         mesh.frustumCulled = true;
         const visible = this.desiredKeys?.has(tile.key);
@@ -840,6 +974,13 @@ class Renderer3D {
     this.tileManager = null;
     this.tileProvider = null;
     this.tileZoom = null;
+    this.weatherManager = null;
+    this.weatherProvider = null;
+    this.weatherField = WEATHER_CONFIG.defaultField;
+    this.weatherTime = WEATHER_CONFIG.defaultTime;
+    this.weatherFormat = WEATHER_CONFIG.defaultFormat;
+    this.weatherOpacity = WEATHER_CONFIG.defaultOpacity;
+    this.weatherVisible = false;
     this.globeRotation = Math.PI;
     this.dayMap = null;
     this.nightMap = null;
@@ -848,7 +989,7 @@ class Renderer3D {
     this.cloudsMap = null;
     this.globeMaterial = null;
     this.lightingMode = "day";
-    this.showClouds = true;
+    this.showClouds = false;
     this.showAxes = true;
     this.showGrid = true;
     this.baseRotateSpeed = 0.85;
@@ -987,6 +1128,17 @@ class Renderer3D {
     );
     this.tileManager.setBaseDistance(this.defaultDistance);
 
+    this.weatherManager = new TileManager(
+      this.scene,
+      this.globeRadius + 0.1,
+      this.renderer,
+      this.globeRotation,
+    );
+    this.weatherManager.maxTiles = Math.min(WEATHER_CONFIG.maxTiles, 160);
+    this.weatherManager.maxCache = Math.max(256, this.weatherManager.maxTiles * 3);
+    this.weatherManager.maxInFlight = 6;
+    this.weatherManager.setBaseDistance(this.defaultDistance);
+
     const planeMaterial = new THREE.MeshStandardMaterial({
       map: this.dayMap,
       roughness: 0.9,
@@ -1010,10 +1162,12 @@ class Renderer3D {
     this.scene.add(this.gridLines);
 
     this.setLightingMode("day");
-    this.setCloudsVisible(true);
+    this.setCloudsVisible(false);
     this.setAxesVisible(true);
     this.setGridVisible(true);
     this.setTileProvider(TILE_CONFIG.activeProvider);
+    this.refreshWeatherProvider();
+    this.setWeatherVisible(false);
     this.setMode("globe", true);
   }
 
@@ -1039,6 +1193,7 @@ class Renderer3D {
     this.controls.addEventListener("change", () => {
       this.recordCameraTrail();
       this.tileManager?.markDirty();
+      this.weatherManager?.markDirty();
     });
     this.attachCrosshairControls(allowRotate);
   }
@@ -1184,6 +1339,10 @@ class Renderer3D {
     if (this.tileManager) {
       this.tileManager.group.visible = mode === "globe" && Boolean(this.tileProvider);
     }
+    if (this.weatherManager) {
+      this.weatherManager.group.visible =
+        mode === "globe" && this.weatherVisible && Boolean(this.weatherProvider);
+    }
     if (els.map2d) {
       els.map2d.style.display = mode === "iso" ? "block" : "none";
     }
@@ -1274,6 +1433,9 @@ class Renderer3D {
       this.tileManager.update(this.camera, this.size);
       this.tileZoom = this.tileManager.zoom;
     }
+    if (this.weatherManager && this.weatherProvider && this.weatherVisible && this.mode === "globe") {
+      this.weatherManager.update(this.camera, this.size);
+    }
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -1302,6 +1464,9 @@ class Renderer3D {
     }
     if (this.tileManager) {
       this.tileManager.setBaseDistance(distance);
+    }
+    if (this.weatherManager) {
+      this.weatherManager.setBaseDistance(distance);
     }
   }
 
@@ -1359,6 +1524,67 @@ class Renderer3D {
     if (this.tileManager) {
       this.tileManager.setProvider(provider);
       this.tileZoom = provider ? this.tileManager.zoom : null;
+    }
+  }
+
+  buildWeatherProvider() {
+    if (!WEATHER_CONFIG.enabled) return null;
+    return {
+      id: "weather",
+      name: "Weather Overlay",
+      url: "/ui/tiles/weather/{z}/{x}/{y}?field={field}&time={time}&format={format}",
+      minZoom: WEATHER_CONFIG.minZoom,
+      maxZoom: WEATHER_CONFIG.maxZoom,
+      opacity: this.weatherOpacity,
+      renderOrder: 12,
+      params: {
+        field: this.weatherField,
+        time: this.weatherTime,
+        format: this.weatherFormat,
+      },
+    };
+  }
+
+  refreshWeatherProvider() {
+    const provider = this.buildWeatherProvider();
+    this.weatherProvider = provider;
+    if (this.weatherManager) {
+      this.weatherManager.setProvider(provider);
+      if (WEATHER_CONFIG.maxTiles) {
+        this.weatherManager.maxTiles = Math.min(WEATHER_CONFIG.maxTiles, 160);
+        this.weatherManager.maxCache = Math.max(256, this.weatherManager.maxTiles * 3);
+      }
+      this.weatherManager.group.visible =
+        this.mode === "globe" && this.weatherVisible && Boolean(provider);
+    }
+  }
+
+  setWeatherVisible(visible) {
+    this.weatherVisible = Boolean(visible);
+    if (this.weatherManager) {
+      this.weatherManager.group.visible =
+        this.mode === "globe" && this.weatherVisible && Boolean(this.weatherProvider);
+      if (this.weatherVisible) {
+        this.weatherManager.markDirty();
+      }
+    }
+  }
+
+  setWeatherField(field) {
+    if (!field || field === this.weatherField) return;
+    this.weatherField = field;
+    this.refreshWeatherProvider();
+    if (this.weatherManager) {
+      this.weatherManager.markDirty();
+    }
+  }
+
+  setWeatherTime(time) {
+    if (!time || time === this.weatherTime) return;
+    this.weatherTime = time;
+    this.refreshWeatherProvider();
+    if (this.weatherManager) {
+      this.weatherManager.markDirty();
     }
   }
 
@@ -1996,6 +2222,47 @@ const setupGlobeControls = (renderer3d) => {
   });
 };
 
+const formatWeatherLabel = (value) => {
+  if (!value) return "";
+  return value
+    .replace(/_/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/^./, (char) => char.toUpperCase());
+};
+
+const setupWeatherControls = (renderer3d) => {
+  const panel = document.getElementById("weather-panel");
+  if (!WEATHER_CONFIG.enabled) {
+    if (panel) panel.style.display = "none";
+    return;
+  }
+  if (panel) panel.style.display = "block";
+  const select = document.getElementById("weather-field");
+  if (select) {
+    select.innerHTML = "";
+    WEATHER_CONFIG.fields.forEach((field) => {
+      const option = document.createElement("option");
+      option.value = field;
+      option.textContent = formatWeatherLabel(field);
+      select.appendChild(option);
+    });
+    select.value = WEATHER_CONFIG.defaultField;
+    renderer3d.setWeatherField(WEATHER_CONFIG.defaultField);
+    select.addEventListener("change", () => {
+      renderer3d.setWeatherField(select.value);
+    });
+  }
+  const toggle = document.querySelector("[data-weather-toggle]");
+  if (toggle) {
+    toggle.setAttribute("aria-pressed", "false");
+    toggle.addEventListener("click", () => {
+      const next = toggle.getAttribute("aria-pressed") !== "true";
+      toggle.setAttribute("aria-pressed", next.toString());
+      renderer3d.setWeatherVisible(next);
+    });
+  }
+};
+
 const setupTileProviders = (renderer3d) => {
   const select = document.getElementById("tile-provider");
   if (!select) return;
@@ -2056,6 +2323,7 @@ const main = () => {
 
   setupTileProviders(renderer3d);
   setupGlobeControls(renderer3d);
+  setupWeatherControls(renderer3d);
 
   const renderLoop = (() => {
     let lastFpsSample = performance.now();

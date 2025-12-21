@@ -15,6 +15,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(ui_api::sse)
         .service(ui_api::ws_route)
         .service(tiles::tile)
+        .service(tiles::weather_tile)
         .service(partials::mission_feed)
         .service(partials::incidents)
         .service(partials::assets);

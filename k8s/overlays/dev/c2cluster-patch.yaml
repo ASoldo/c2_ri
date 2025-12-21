@@ -35,6 +35,12 @@ spec:
           value: "top_secret"
         - name: C2_UI_POLL_INTERVAL_MS
           value: "2000"
+        - name: C2_WEB_WEATHER_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: c2-web-weather
+              key: api_key
+              optional: true
     mcp:
       replicas: 1
     worker:

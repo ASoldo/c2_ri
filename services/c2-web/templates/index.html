@@ -53,11 +53,21 @@
           <div class="panel-actions">
             <button data-globe-mode="day" data-active="true">Day</button>
             <button data-globe-mode="night">Night</button>
-            <button data-globe-toggle="clouds" aria-pressed="true">Clouds</button>
             <button data-globe-toggle="axes" aria-pressed="true">Axes</button>
             <button data-globe-toggle="grid" aria-pressed="true">Grid</button>
           </div>
           <div class="meta">Toggle globe lighting and debug layers.</div>
+        </section>
+        <section class="panel-section" id="weather-panel">
+          <h2>Weather Overlay</h2>
+          <div class="panel-field">
+            <label for="weather-field">Data layer</label>
+            <select id="weather-field"></select>
+          </div>
+          <div class="panel-actions">
+            <button data-weather-toggle="overlay" aria-pressed="false">Weather</button>
+          </div>
+          <div class="meta">Tomorrow.io tiles layered above base maps.</div>
         </section>
         <section class="panel-section">
           <h2>Overlays</h2>

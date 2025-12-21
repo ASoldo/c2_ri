@@ -16,6 +16,11 @@
     window.C2_TILE_CONFIG = {{ tile_config_json | safe }};
   </script>
   {% endif %}
+  {% if weather_config_json and weather_config_json != "" %}
+  <script>
+    window.C2_WEATHER_CONFIG = {{ weather_config_json | safe }};
+  </script>
+  {% endif %}
   <script type="module" src="/static/ui.js"></script>
 </body>
 </html>

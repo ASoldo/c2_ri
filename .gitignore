@@ -23,3 +23,6 @@ k8s/argocd/secret.env
 
 # Grafana OIDC local secrets
 k8s/overlays/dev/grafana-oidc.env
+
+# Weather overlay secrets
+k8s/overlays/dev/c2-web-weather.env

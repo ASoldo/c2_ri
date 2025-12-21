@@ -249,6 +249,7 @@ fn render_partials(
         status: None,
         snapshot: snapshot.clone(),
         tile_config_json: None,
+        weather_config_json: None,
     };
     let context = build_context(&data);
     let mission_feed = tera
