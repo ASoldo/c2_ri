@@ -1,7 +1,7 @@
 use actix_web::{get, web, Error, HttpResponse};
 use serde::Deserialize;
 
-use crate::flights::{now_epoch_millis, sample_flights, FlightSnapshot, FlightState};
+use crate::flights::{now_epoch_millis, sample_flights, sample_flights_near, FlightSnapshot, FlightState};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -110,6 +110,7 @@ pub async fn flights(
         .limit
         .unwrap_or(state.flight_max_flights)
         .clamp(1, state.flight_max_flights);
+    let sample_limit = limit.min(state.flight_sample_count);
 
     let now = std::time::Instant::now();
     if let Ok(cache) = state.flight_cache.lock() {
@@ -133,6 +134,15 @@ pub async fn flights(
         query.lamax.map(clamp_lat),
         query.lomax.map(clamp_lon),
     );
+    let center_hint = if let (Some(lamin), Some(lomin), Some(lamax), Some(lomax)) = bbox {
+        if lamin < lamax && lomin < lomax {
+            Some(((lamin + lamax) / 2.0, (lomin + lomax) / 2.0))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     if let (Some(lamin), Some(lomin), Some(lamax), Some(lomax)) = bbox {
         if lamin < lamax && lomin < lomax {
             url.query_pairs_mut()
@@ -173,14 +183,16 @@ pub async fn flights(
                 }
             }
             if state.flight_sample_enabled {
+                let flights = if let Some((lat, lon)) = center_hint {
+                    sample_flights_near(now_epoch_millis(), sample_limit, lat, lon)
+                } else {
+                    sample_flights(now_epoch_millis(), sample_limit)
+                };
                 FlightSnapshot {
                     provider: state.flight_provider.clone(),
                     source: "sample".to_string(),
                     timestamp_ms: now_epoch_millis(),
-                    flights: sample_flights(
-                        now_epoch_millis(),
-                        limit.min(state.flight_sample_count),
-                    ),
+                    flights,
                 }
             } else {
                 return Ok(HttpResponse::build(
@@ -199,14 +211,16 @@ pub async fn flights(
                 }
             }
             if state.flight_sample_enabled {
+                let flights = if let Some((lat, lon)) = center_hint {
+                    sample_flights_near(now_epoch_millis(), sample_limit, lat, lon)
+                } else {
+                    sample_flights(now_epoch_millis(), sample_limit)
+                };
                 FlightSnapshot {
                     provider: state.flight_provider.clone(),
                     source: "sample".to_string(),
                     timestamp_ms: now_epoch_millis(),
-                    flights: sample_flights(
-                        now_epoch_millis(),
-                        limit.min(state.flight_sample_count),
-                    ),
+                    flights,
                 }
             } else {
                 return Ok(HttpResponse::build(

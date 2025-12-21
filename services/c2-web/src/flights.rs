@@ -78,3 +78,20 @@ pub fn sample_flights(now_ms: u64, count: usize) -> Vec<FlightState> {
     flights.truncate(count.max(1));
     flights
 }
+
+pub fn sample_flights_near(
+    now_ms: u64,
+    count: usize,
+    center_lat: f64,
+    center_lon: f64,
+) -> Vec<FlightState> {
+    let mut flights = sample_flights(now_ms, count);
+    let lat = center_lat.max(-85.0).min(85.0);
+    let lon = center_lon.max(-180.0).min(180.0);
+    for (idx, flight) in flights.iter_mut().enumerate() {
+        let offset = (idx as f64 * 4.2) % 20.0 - 10.0;
+        flight.lat = (lat + offset * 0.35).max(-85.0).min(85.0);
+        flight.lon = (lon + offset * 0.55).max(-180.0).min(180.0);
+    }
+    flights
+}

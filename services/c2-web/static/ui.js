@@ -2113,7 +2113,22 @@ class FlightTrailLayer {
         this.renderer.markerAltitude + point.altitude,
       ),
     );
-    track.line.geometry.setFromPoints(points);
+    const current = track.line.geometry;
+    const attr = current.getAttribute("position");
+    if (!attr || attr.count < points.length) {
+      current.dispose();
+      track.line.geometry = new THREE.BufferGeometry().setFromPoints(points);
+      track.line.geometry.computeBoundingSphere();
+      return;
+    }
+    const positions = attr.array;
+    points.forEach((point, idx) => {
+      positions[idx * 3] = point.x;
+      positions[idx * 3 + 1] = point.y;
+      positions[idx * 3 + 2] = point.z;
+    });
+    attr.needsUpdate = true;
+    track.line.geometry.setDrawRange(0, points.length);
     track.line.geometry.computeBoundingSphere();
   }
 
@@ -2169,6 +2184,101 @@ class FlightTrailLayer {
   }
 }
 
+class FlightSpriteLayer {
+  constructor(renderer) {
+    this.renderer = renderer;
+    this.group = new THREE.Group();
+    this.group.renderOrder = 45;
+    this.group.visible = false;
+    this.sprites = new Map();
+    this.texture = null;
+    this.initTexture();
+    if (this.renderer?.scene) {
+      this.renderer.scene.add(this.group);
+    }
+  }
+
+  initTexture() {
+    const loader = new THREE.TextureLoader();
+    this.texture = loader.load("/static/assets/plane.png");
+    this.texture.colorSpace = THREE.SRGBColorSpace;
+    this.texture.anisotropy =
+      this.renderer?.renderer?.capabilities?.getMaxAnisotropy?.() || 1;
+  }
+
+  setVisible(visible) {
+    this.group.visible = visible;
+  }
+
+  altitudeForFlight(flight) {
+    const altitudeKm = Number.isFinite(flight.altitude_m)
+      ? flight.altitude_m / 1000
+      : 8;
+    return Math.min(
+      8,
+      Math.max(0.6, altitudeKm * FLIGHT_CONFIG.altitudeScale),
+    );
+  }
+
+  scaleForDistance() {
+    const distance = this.renderer?.camera?.position?.length?.() || this.renderer.defaultDistance;
+    const ratio = this.renderer.defaultDistance
+      ? distance / this.renderer.defaultDistance
+      : 1;
+    const base = this.renderer.globeRadius * 0.06;
+    return Math.min(18, Math.max(4, base * ratio));
+  }
+
+  ensureSprite(entity) {
+    let sprite = this.sprites.get(entity);
+    if (sprite) return sprite;
+    const material = new THREE.SpriteMaterial({
+      map: this.texture,
+      color: new THREE.Color(0xffffff),
+      transparent: true,
+      depthTest: true,
+      depthWrite: false,
+    });
+    material.rotation = 0;
+    sprite = new THREE.Sprite(material);
+    sprite.renderOrder = 60;
+    this.group.add(sprite);
+    this.sprites.set(entity, sprite);
+    return sprite;
+  }
+
+  sync(entities, world) {
+    if (!this.renderer) return;
+    const seen = new Set();
+    const scale = this.scaleForDistance();
+    entities.forEach((entity) => {
+      const flight = world.getComponent(entity, "Flight");
+      if (!flight) return;
+      const sprite = this.ensureSprite(entity);
+      const altitude = this.altitudeForFlight(flight);
+      const geo = world.getComponent(entity, "Geo");
+      if (!geo) return;
+      const pos = this.renderer.positionForGeo(
+        geo,
+        this.renderer.markerAltitude + altitude,
+      );
+      sprite.position.set(pos.x, pos.y, pos.z);
+      sprite.scale.set(scale, scale, 1);
+      const heading = Number.isFinite(flight.heading_deg) ? flight.heading_deg : 0;
+      sprite.material.rotation = THREE.MathUtils.degToRad(heading);
+      seen.add(entity);
+    });
+
+    for (const [entity, sprite] of this.sprites.entries()) {
+      if (!seen.has(entity)) {
+        this.group.remove(sprite);
+        sprite.material.dispose();
+        this.sprites.delete(entity);
+      }
+    }
+  }
+}
+
 class FlightOverlay {
   constructor(renderer, world, layerEl, edgeLayer) {
     this.renderer = renderer;
@@ -2176,15 +2286,18 @@ class FlightOverlay {
     this.visible = false;
     this.pinLayer = new FlightPinLayer(layerEl, renderer, els.board, edgeLayer);
     this.trails = new FlightTrailLayer(renderer);
+    this.sprites = new FlightSpriteLayer(renderer);
     this.lastSnapshot = null;
     this.pinLayer.setVisible(false);
     this.trails.setVisible(false);
+    this.sprites.setVisible(false);
   }
 
   setVisible(visible) {
     this.visible = visible;
     this.pinLayer.setVisible(visible);
     this.trails.setVisible(visible && this.renderer?.mode === "globe");
+    this.sprites.setVisible(visible && this.renderer?.mode === "globe");
   }
 
   ingest(snapshot) {
@@ -2200,6 +2313,8 @@ class FlightOverlay {
     this.pinLayer.syncPins(flights, this.world);
     this.pinLayer.prune(this.world);
     this.trails.setVisible(this.visible && this.renderer?.mode === "globe");
+    this.sprites.setVisible(this.visible && this.renderer?.mode === "globe");
+    this.sprites.sync(flights, this.world);
   }
 }
 
