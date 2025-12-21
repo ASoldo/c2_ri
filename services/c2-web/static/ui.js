@@ -96,13 +96,13 @@ const buildTileConfig = () => {
 const TILE_CONFIG = buildTileConfig();
 
 const DEFAULT_WEATHER_FIELDS = [
-  "cloudCover",
-  "precipitationIntensity",
-  "temperature",
-  "windSpeed",
-  "pressureSeaLevel",
-  "humidity",
-  "visibility",
+  "IMERG_Precipitation_Rate",
+  "AIRS_Precipitation_Day",
+  "MODIS_Terra_Cloud_Fraction_Day",
+  "MODIS_Terra_Cloud_Top_Temp_Day",
+  "MODIS_Terra_Cloud_Top_Pressure_Day",
+  "MODIS_Terra_Cloud_Top_Height_Day",
+  "MERRA2_2m_Air_Temperature_Monthly",
 ];
 
 const buildWeatherConfig = () => {
@@ -114,14 +114,18 @@ const buildWeatherConfig = () => {
   const defaultField = fields.includes(config.defaultField)
     ? config.defaultField
     : fields[0];
-  const defaultTime = config.defaultTime || "now";
+  const defaultTime = config.defaultTime || "default";
   const defaultFormat = config.defaultFormat || "png";
   const defaultOpacity = Number.isFinite(config.defaultOpacity)
     ? config.defaultOpacity
     : 0.55;
-  const minZoom = Number.isFinite(config.minZoom) ? config.minZoom : 1;
-  const maxZoom = Number.isFinite(config.maxZoom) ? config.maxZoom : 12;
-  const maxTiles = Number.isFinite(config.maxTiles) ? config.maxTiles : 140;
+  const maxTiles = Number.isFinite(config.maxTiles) ? config.maxTiles : 60;
+  const updateIntervalMs = Number.isFinite(config.updateIntervalMs)
+    ? config.updateIntervalMs
+    : 900;
+  const maxInFlight = Number.isFinite(config.maxInFlight) ? config.maxInFlight : 3;
+  const minZoom = Number.isFinite(config.minZoom) ? config.minZoom : 0;
+  const maxZoom = Number.isFinite(config.maxZoom) ? config.maxZoom : 6;
   return {
     enabled: Boolean(config.enabled),
     fields,
@@ -129,9 +133,11 @@ const buildWeatherConfig = () => {
     defaultTime,
     defaultFormat,
     defaultOpacity,
+    maxTiles,
+    updateIntervalMs,
+    maxInFlight,
     minZoom,
     maxZoom,
-    maxTiles,
   };
 };
 
@@ -536,7 +542,11 @@ class TileManager {
     const zoomChanged = zoom !== this.zoom;
     const distanceDelta = Math.abs(distance - this.lastDistance);
     const minDistanceDelta = Math.max(0.08, distance * 0.0015);
-    const interval = zoom >= 16 ? 120 : 240;
+    const interval = Number.isFinite(this.provider?.updateIntervalMs)
+      ? this.provider.updateIntervalMs
+      : zoom >= 16
+        ? 120
+        : 240;
     if (
       !this.forceUpdate &&
       !zoomChanged &&
@@ -1134,9 +1144,9 @@ class Renderer3D {
       this.renderer,
       this.globeRotation,
     );
-    this.weatherManager.maxTiles = Math.min(WEATHER_CONFIG.maxTiles, 160);
+    this.weatherManager.maxTiles = Math.min(WEATHER_CONFIG.maxTiles, 120);
     this.weatherManager.maxCache = Math.max(256, this.weatherManager.maxTiles * 3);
-    this.weatherManager.maxInFlight = 6;
+    this.weatherManager.maxInFlight = WEATHER_CONFIG.maxInFlight;
     this.weatherManager.setBaseDistance(this.defaultDistance);
 
     const planeMaterial = new THREE.MeshStandardMaterial({
@@ -1537,6 +1547,7 @@ class Renderer3D {
       maxZoom: WEATHER_CONFIG.maxZoom,
       opacity: this.weatherOpacity,
       renderOrder: 12,
+      updateIntervalMs: WEATHER_CONFIG.updateIntervalMs,
       params: {
         field: this.weatherField,
         time: this.weatherTime,
@@ -1551,9 +1562,10 @@ class Renderer3D {
     if (this.weatherManager) {
       this.weatherManager.setProvider(provider);
       if (WEATHER_CONFIG.maxTiles) {
-        this.weatherManager.maxTiles = Math.min(WEATHER_CONFIG.maxTiles, 160);
+        this.weatherManager.maxTiles = Math.min(WEATHER_CONFIG.maxTiles, 120);
         this.weatherManager.maxCache = Math.max(256, this.weatherManager.maxTiles * 3);
       }
+      this.weatherManager.maxInFlight = WEATHER_CONFIG.maxInFlight;
       this.weatherManager.group.visible =
         this.mode === "globe" && this.weatherVisible && Boolean(provider);
     }

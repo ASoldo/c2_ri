@@ -41,7 +41,9 @@ pub async fn tile(
         .map_err(actix_web::error::ErrorBadGateway)?;
 
     if !response.status().is_success() {
-        return Ok(HttpResponse::BadGateway().finish());
+        let status = actix_web::http::StatusCode::from_u16(response.status().as_u16())
+            .unwrap_or(actix_web::http::StatusCode::BAD_GATEWAY);
+        return Ok(HttpResponse::build(status).finish());
     }
     let content_type = response
         .headers()
@@ -68,25 +70,34 @@ pub struct WeatherQuery {
     field: Option<String>,
     time: Option<String>,
     format: Option<String>,
-    gradient: Option<String>,
 }
 
-fn sanitize_time(value: &str) -> Option<String> {
-    if value.len() > 40 {
+fn normalize_time(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
         return None;
     }
-    if !value
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | ':' | 'T' | 'Z' | '+' | '.'))
+    let lowered = value.to_ascii_lowercase();
+    if lowered == "default" || lowered == "auto" || lowered == "latest" || lowered == "now" {
+        return None;
+    }
+    if value.len() == 10
+        && value.bytes().enumerate().all(|(idx, b)| {
+            if idx == 4 || idx == 7 {
+                b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        })
     {
-        return None;
+        return Some(value.to_string());
     }
-    Some(value.to_string())
+    None
 }
 
 fn sanitize_format(value: &str) -> Option<String> {
     match value {
-        "png" | "webp" | "jpg" | "jpeg" => Some(value.to_string()),
+        "png" | "jpg" | "jpeg" => Some(value.to_string()),
         _ => None,
     }
 }
@@ -97,10 +108,9 @@ pub async fn weather_tile(
     path: web::Path<(u8, u32, u32)>,
     query: web::Query<WeatherQuery>,
 ) -> Result<HttpResponse, Error> {
-    let api_key = state
-        .weather_api_key
-        .as_ref()
-        .ok_or_else(|| actix_web::error::ErrorNotFound("weather tiles disabled"))?;
+    if !state.weather_enabled {
+        return Err(actix_web::error::ErrorNotFound("weather tiles disabled"));
+    }
     let (z, x, y) = path.into_inner();
     if z < state.weather_min_zoom || z > state.weather_max_zoom {
         return Ok(HttpResponse::BadRequest().body("zoom out of range"));
@@ -115,48 +125,70 @@ pub async fn weather_tile(
     let time = query
         .time
         .as_deref()
-        .and_then(sanitize_time)
-        .unwrap_or_else(|| state.weather_default_time.clone());
+        .and_then(normalize_time)
+        .or_else(|| normalize_time(&state.weather_default_time));
     let format = query
         .format
         .as_deref()
         .and_then(sanitize_format)
         .unwrap_or_else(|| state.weather_default_format.clone());
-    let gradient = query
-        .gradient
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .filter(|value| value.len() <= 200)
-        .map(|value| value.to_string());
 
-    let mut url = reqwest::Url::parse("https://api.tomorrow.io/v4/map/tile/")
+    let base = if let Some(time) = time.as_deref() {
+        format!(
+            "{}/{}/default/{}/{}/{}/{}/{}.{}",
+            state.weather_base_url,
+            field,
+            time,
+            state.weather_tile_matrix_set,
+            z,
+            y,
+            x,
+            format
+        )
+    } else {
+        format!(
+            "{}/{}/default/{}/{}/{}/{}.{}",
+            state.weather_base_url,
+            field,
+            state.weather_tile_matrix_set,
+            z,
+            y,
+            x,
+            format
+        )
+    };
+    let url = reqwest::Url::parse(&base)
         .map_err(|_| actix_web::error::ErrorBadRequest("invalid weather tile url"))?;
-    {
-        let mut segments = url
-            .path_segments_mut()
-            .map_err(|_| actix_web::error::ErrorBadRequest("invalid weather tile url"))?;
-        segments.push(&z.to_string());
-        segments.push(&x.to_string());
-        segments.push(&y.to_string());
-        segments.push(field);
-        segments.push(&format!("{}.{}", time, format));
-    }
-    url.query_pairs_mut().append_pair("apikey", api_key);
-    if let Some(gradient) = gradient.as_deref() {
-        url.query_pairs_mut().append_pair("gradient", gradient);
-    }
-
+    let log_url = url.clone();
     let response = state
         .tile_client
         .get(url)
         .header("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
         .send()
-        .await
-        .map_err(actix_web::error::ErrorBadGateway)?;
+        .await;
+    let response = match response {
+        Ok(response) => response,
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                url = %log_url,
+                field = field,
+                "weather tile request failed"
+            );
+            return Ok(HttpResponse::BadGateway().finish());
+        }
+    };
 
     if !response.status().is_success() {
-        return Ok(HttpResponse::BadGateway().finish());
+        tracing::warn!(
+            status = %response.status(),
+            url = %log_url,
+            field = field,
+            "weather tile upstream error"
+        );
+        let status = actix_web::http::StatusCode::from_u16(response.status().as_u16())
+            .unwrap_or(actix_web::http::StatusCode::BAD_GATEWAY);
+        return Ok(HttpResponse::build(status).finish());
     }
     let content_type = response
         .headers()
