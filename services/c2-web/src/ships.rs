@@ -51,6 +51,10 @@ pub fn now_epoch_millis() -> u64 {
         .unwrap_or(0)
 }
 
+fn clamp_lat(lat: f64) -> f64 {
+    lat.max(-85.0).min(85.0)
+}
+
 fn clamp_lon(mut lon: f64) -> f64 {
     while lon > 180.0 {
         lon -= 360.0;
@@ -100,5 +104,29 @@ pub fn sample_ships(now_ms: u64, count: usize) -> Vec<ShipState> {
     })
     .collect::<Vec<_>>();
     ships.truncate(count.max(1));
+    ships
+}
+
+pub fn sample_ships_near(
+    now_ms: u64,
+    count: usize,
+    center_lat: f64,
+    center_lon: f64,
+) -> Vec<ShipState> {
+    let mut ships = sample_ships(now_ms, count);
+    let lat = clamp_lat(center_lat);
+    let lon = clamp_lon(center_lon);
+    let t = (now_ms as f64 / 1000.0) / 140.0;
+    for (idx, ship) in ships.iter_mut().enumerate() {
+        let spread = 4.0 + idx as f64 * 1.8;
+        let drift = (t + idx as f64 * 0.4).sin() * 1.1;
+        let wobble = (t + idx as f64 * 0.6).cos() * 1.6;
+        ship.lat = clamp_lat(lat + spread * 0.2 + drift);
+        ship.lon = clamp_lon(lon + spread * 0.28 + wobble);
+        if let Some(heading) = ship.heading_deg.as_mut() {
+            *heading = (*heading + drift * 6.0) % 360.0;
+        }
+        ship.course_deg = ship.heading_deg;
+    }
     ships
 }

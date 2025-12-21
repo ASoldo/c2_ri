@@ -1,7 +1,7 @@
 use actix_web::{get, web, Error, HttpResponse};
 use serde::Deserialize;
 
-use crate::ships::{now_epoch_millis, sample_ships, ShipSnapshot, ShipState};
+use crate::ships::{now_epoch_millis, sample_ships, sample_ships_near, ShipSnapshot, ShipState};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -171,6 +171,14 @@ pub async fn ships(
         .unwrap_or(state.ship_max_ships)
         .clamp(1, state.ship_max_ships);
     let sample_limit = limit.min(state.ship_sample_count);
+    let center_hint = match (query.lamin, query.lomin, query.lamax, query.lomax) {
+        (Some(lamin), Some(lomin), Some(lamax), Some(lomax))
+            if lamin < lamax && lomin < lomax =>
+        {
+            Some(((lamin + lamax) / 2.0, (lomin + lomax) / 2.0))
+        }
+        _ => None,
+    };
 
     let now = std::time::Instant::now();
     let mut cached_payload: Option<ShipSnapshot> = None;
@@ -186,6 +194,34 @@ pub async fn ships(
             return Ok(HttpResponse::Ok().json(cached));
         }
     }
+
+    let sample_payload = || {
+        let now_ms = now_epoch_millis();
+        let ships = if let Some((lat, lon)) = center_hint {
+            sample_ships_near(now_ms, sample_limit, lat, lon)
+        } else {
+            sample_ships(now_ms, sample_limit)
+        };
+        ShipSnapshot {
+            provider: state.ship_provider.clone(),
+            source: "sample".to_string(),
+            timestamp_ms: now_ms,
+            ships,
+        }
+    };
+    let fallback_payload = || {
+        if state.ship_sample_enabled {
+            return Some(sample_payload());
+        }
+        if let (Some(payload), Some(age)) = (&cached_payload, cached_age) {
+            if age < state.ship_cache_ttl {
+                let mut cached = payload.clone();
+                cached.source = "cache".to_string();
+                return Some(cached);
+            }
+        }
+        None
+    };
 
     let mut url = reqwest::Url::parse(&state.ship_base_url)
         .map_err(|_| actix_web::error::ErrorBadRequest("invalid ship base url"))?;
@@ -222,48 +258,51 @@ pub async fn ships(
 
     let payload = match response {
         Ok(response) if response.status().is_success() => {
-            let value = response
-                .json::<EsriResponse>()
-                .await
-                .map_err(actix_web::error::ErrorBadGateway)?;
-            parse_esri_response(value, &state.ship_provider, limit)
+            match response.text().await {
+                Ok(body) => match serde_json::from_str::<EsriResponse>(&body) {
+                    Ok(value) => {
+                        let mut snapshot = parse_esri_response(value, &state.ship_provider, limit);
+                        if snapshot.ships.is_empty() && state.ship_sample_enabled {
+                            snapshot = sample_payload();
+                        }
+                        snapshot
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "ship provider parse failed");
+                        if let Some(payload) = fallback_payload() {
+                            payload
+                        } else {
+                            return Ok(HttpResponse::build(
+                                actix_web::http::StatusCode::BAD_GATEWAY,
+                            )
+                            .finish());
+                        }
+                    }
+                },
+                Err(err) => {
+                    tracing::warn!(error = %err, "ship provider response read failed");
+                    if let Some(payload) = fallback_payload() {
+                        payload
+                    } else {
+                        return Ok(
+                            HttpResponse::build(actix_web::http::StatusCode::BAD_GATEWAY).finish(),
+                        );
+                    }
+                }
+            }
         }
         Ok(response) => {
             tracing::warn!(status = %response.status(), "ship provider error");
-            if state.ship_sample_enabled {
-                ShipSnapshot {
-                    provider: state.ship_provider.clone(),
-                    source: "sample".to_string(),
-                    timestamp_ms: now_epoch_millis(),
-                    ships: sample_ships(now_epoch_millis(), sample_limit),
-                }
-            } else if let (Some(payload), Some(age)) = (&cached_payload, cached_age) {
-                if age < state.ship_cache_ttl {
-                    let mut cached = payload.clone();
-                    cached.source = "cache".to_string();
-                    return Ok(HttpResponse::Ok().json(cached));
-                }
-                return Ok(HttpResponse::build(actix_web::http::StatusCode::BAD_GATEWAY).finish());
+            if let Some(payload) = fallback_payload() {
+                payload
             } else {
                 return Ok(HttpResponse::build(actix_web::http::StatusCode::BAD_GATEWAY).finish());
             }
         }
         Err(err) => {
             tracing::warn!(error = %err, "ship provider request failed");
-            if state.ship_sample_enabled {
-                ShipSnapshot {
-                    provider: state.ship_provider.clone(),
-                    source: "sample".to_string(),
-                    timestamp_ms: now_epoch_millis(),
-                    ships: sample_ships(now_epoch_millis(), sample_limit),
-                }
-            } else if let (Some(payload), Some(age)) = (&cached_payload, cached_age) {
-                if age < state.ship_cache_ttl {
-                    let mut cached = payload.clone();
-                    cached.source = "cache".to_string();
-                    return Ok(HttpResponse::Ok().json(cached));
-                }
-                return Ok(HttpResponse::build(actix_web::http::StatusCode::BAD_GATEWAY).finish());
+            if let Some(payload) = fallback_payload() {
+                payload
             } else {
                 return Ok(HttpResponse::build(actix_web::http::StatusCode::BAD_GATEWAY).finish());
             }
