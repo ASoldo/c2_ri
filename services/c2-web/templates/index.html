@@ -29,73 +29,121 @@
     <aside class="dock left" id="dock-left" data-state="closed">
       <button class="dock-toggle" data-dock-toggle="left" aria-label="Toggle left dock">≡</button>
       <div class="dock-panel">
-        <section class="panel-section">
-          <div id="mission-feed-panel" data-partial="/partials/mission-feed">
-            {% include "partials/mission_feed.html" %}
+        <section class="panel-section" data-collapsible="true" data-collapsed="false">
+          <button class="panel-header" type="button" aria-expanded="true">
+            <span class="panel-title">Live Mission Feed</span>
+            <span class="panel-toggle-icon" aria-hidden="true">-</span>
+          </button>
+          <div class="panel-body">
+            <div id="mission-feed-panel" data-partial="/partials/mission-feed">
+              {% include "partials/mission_feed.html" %}
+            </div>
           </div>
         </section>
-        <section class="panel-section">
-          <div id="incident-panel" data-partial="/partials/incidents">
-            {% include "partials/incidents.html" %}
+        <section class="panel-section" data-collapsible="true" data-collapsed="false">
+          <button class="panel-header" type="button" aria-expanded="true">
+            <span class="panel-title">Priority Incidents</span>
+            <span class="panel-toggle-icon" aria-hidden="true">-</span>
+          </button>
+          <div class="panel-body">
+            <div id="incident-panel" data-partial="/partials/incidents">
+              {% include "partials/incidents.html" %}
+            </div>
           </div>
         </section>
-        <section class="panel-section">
-          <div id="asset-panel" data-partial="/partials/assets">
-            {% include "partials/assets.html" %}
+        <section class="panel-section" data-collapsible="true" data-collapsed="false">
+          <button class="panel-header" type="button" aria-expanded="true">
+            <span class="panel-title">Asset Readiness</span>
+            <span class="panel-toggle-icon" aria-hidden="true">-</span>
+          </button>
+          <div class="panel-body">
+            <div id="asset-panel" data-partial="/partials/assets">
+              {% include "partials/assets.html" %}
+            </div>
           </div>
         </section>
-        <section class="panel-section">
-          <h2>Globe Layers</h2>
-          <div class="panel-field">
-            <label for="tile-provider">Tile provider</label>
-            <select id="tile-provider"></select>
+        <section class="panel-section" data-collapsible="true" data-collapsed="false">
+          <button class="panel-header" type="button" aria-expanded="true">
+            <span class="panel-title">Globe Layers</span>
+            <span class="panel-toggle-icon" aria-hidden="true">-</span>
+          </button>
+          <div class="panel-body">
+            <div class="panel-field">
+              <label for="tile-provider">Tile provider</label>
+              <select id="tile-provider"></select>
+            </div>
+            <div class="panel-actions">
+              <button data-globe-mode="day" data-active="true">Day</button>
+              <button data-globe-mode="night">Night</button>
+              <button data-globe-toggle="axes" aria-pressed="true">Axes</button>
+              <button data-globe-toggle="grid" aria-pressed="true">Grid</button>
+            </div>
+            <div class="meta">Toggle globe lighting and debug layers.</div>
           </div>
-          <div class="panel-actions">
-            <button data-globe-mode="day" data-active="true">Day</button>
-            <button data-globe-mode="night">Night</button>
-            <button data-globe-toggle="axes" aria-pressed="true">Axes</button>
-            <button data-globe-toggle="grid" aria-pressed="true">Grid</button>
-          </div>
-          <div class="meta">Toggle globe lighting and debug layers.</div>
         </section>
-        <section class="panel-section" id="weather-panel">
-          <h2>Weather Overlay</h2>
-          <div class="panel-field">
-            <label for="weather-field">Data layer</label>
-            <select id="weather-field"></select>
+        <section class="panel-section" id="weather-panel" data-collapsible="true" data-collapsed="false">
+          <button class="panel-header" type="button" aria-expanded="true">
+            <span class="panel-title">Weather Overlay</span>
+            <span class="panel-toggle-icon" aria-hidden="true">-</span>
+          </button>
+          <div class="panel-body">
+            <div class="panel-field">
+              <label for="weather-field">Data layer</label>
+              <select id="weather-field"></select>
+            </div>
+            <div class="panel-actions">
+              <button data-weather-toggle="overlay" aria-pressed="false">Weather</button>
+            </div>
+            <div class="meta">NASA GIBS tiles layered above base maps.</div>
           </div>
-          <div class="panel-actions">
-            <button data-weather-toggle="overlay" aria-pressed="false">Weather</button>
-          </div>
-          <div class="meta">NASA GIBS tiles layered above base maps.</div>
         </section>
-        <section class="panel-section" id="flight-panel">
-          <h2>Air Traffic</h2>
-          <div class="panel-actions">
-            <button data-flight-toggle="overlay" aria-pressed="false">Flights</button>
+        <section class="panel-section" id="flight-panel" data-collapsible="true" data-collapsed="false">
+          <button class="panel-header" type="button" aria-expanded="true">
+            <span class="panel-title">Air Traffic</span>
+            <span class="panel-toggle-icon" aria-hidden="true">-</span>
+          </button>
+          <div class="panel-body">
+            <div class="panel-actions">
+              <button data-flight-toggle="overlay" aria-pressed="false">Flights</button>
+            </div>
+            <div class="meta" id="flight-provider-label">Live flight tracks via OpenSky.</div>
           </div>
-          <div class="meta" id="flight-provider-label">Live flight tracks via OpenSky.</div>
         </section>
-        <section class="panel-section" id="satellite-panel">
-          <h2>Satellites</h2>
-          <div class="panel-actions">
-            <button data-satellite-toggle="overlay" aria-pressed="false">Satellites</button>
+        <section class="panel-section" id="satellite-panel" data-collapsible="true" data-collapsed="false">
+          <button class="panel-header" type="button" aria-expanded="true">
+            <span class="panel-title">Satellites</span>
+            <span class="panel-toggle-icon" aria-hidden="true">-</span>
+          </button>
+          <div class="panel-body">
+            <div class="panel-actions">
+              <button data-satellite-toggle="overlay" aria-pressed="false">Satellites</button>
+            </div>
+            <div class="meta" id="satellite-provider-label">Live satellite tracks via CelesTrak.</div>
           </div>
-          <div class="meta" id="satellite-provider-label">Live satellite tracks via CelesTrak.</div>
         </section>
-        <section class="panel-section" id="ship-panel">
-          <h2>Maritime</h2>
-          <div class="panel-actions">
-            <button data-ship-toggle="overlay" aria-pressed="false">Ships</button>
+        <section class="panel-section" id="ship-panel" data-collapsible="true" data-collapsed="false">
+          <button class="panel-header" type="button" aria-expanded="true">
+            <span class="panel-title">Maritime</span>
+            <span class="panel-toggle-icon" aria-hidden="true">-</span>
+          </button>
+          <div class="panel-body">
+            <div class="panel-actions">
+              <button data-ship-toggle="overlay" aria-pressed="false">Ships</button>
+            </div>
+            <div class="meta" id="ship-provider-label">Live vessel tracks via ArcGIS.</div>
           </div>
-          <div class="meta" id="ship-provider-label">Live vessel tracks via ArcGIS.</div>
         </section>
-        <section class="panel-section">
-          <h2>Overlays</h2>
-          <div class="panel-actions">
-            <button data-layer-toggle="pins">Pins</button>
+        <section class="panel-section" data-collapsible="true" data-collapsed="false">
+          <button class="panel-header" type="button" aria-expanded="true">
+            <span class="panel-title">Overlays</span>
+            <span class="panel-toggle-icon" aria-hidden="true">-</span>
+          </button>
+          <div class="panel-body">
+            <div class="panel-actions">
+              <button data-layer-toggle="pins">Pins</button>
+            </div>
+            <div class="meta">Toggle overlays anchored to tracked entities.</div>
           </div>
-          <div class="meta">Toggle overlays anchored to tracked entities.</div>
         </section>
       </div>
     </aside>

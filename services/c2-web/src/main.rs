@@ -324,7 +324,7 @@ async fn main() -> io::Result<()> {
     let ship_altitude = env::var("C2_WEB_SHIP_ALTITUDE")
         .ok()
         .and_then(|value| value.parse::<f32>().ok())
-        .unwrap_or(0.6);
+        .unwrap_or(0.12);
     let ship_sample_enabled = env::var("C2_WEB_SHIP_SAMPLE_ENABLED")
         .ok()
         .map(|value| {

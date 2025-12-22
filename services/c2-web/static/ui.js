@@ -247,7 +247,7 @@ const DEFAULT_SHIP_CONFIG = {
   maxShips: 200,
   spanMinDeg: 6,
   spanMaxDeg: 70,
-  altitude: 0.6,
+  altitude: 0.12,
   source: "ArcGIS ShipPositions",
   sample: true,
 };
@@ -2695,6 +2695,7 @@ class ShipPinLayer {
       bottom: window.innerHeight,
     };
     const pad = 22;
+    const baseAltitude = shipBaseAltitude(this.renderer);
     entities.forEach((entity) => {
       const ship = world.getComponent(entity, "Ship");
       if (!ship) return;
@@ -2729,7 +2730,7 @@ class ShipPinLayer {
       if (!geo) return;
       const pos = this.renderer.positionForGeo(
         geo,
-        this.renderer.markerAltitude + altitudeForShip(ship),
+        baseAltitude + altitudeForShip(ship),
       );
       const screen = this.renderer.projectToScreen(pos);
       if (!screen) return;
@@ -2821,6 +2822,7 @@ class ShipMeshLayer {
     if (!this.renderer) return;
     const seen = new Set();
     const scale = this.scaleForDistance();
+    const baseAltitude = shipBaseAltitude(this.renderer);
     entities.forEach((entity) => {
       const ship = world.getComponent(entity, "Ship");
       if (!ship) return;
@@ -2829,7 +2831,7 @@ class ShipMeshLayer {
       if (!geo) return;
       const pos = this.renderer.positionForGeo(
         geo,
-        this.renderer.markerAltitude + altitudeForShip(ship),
+        baseAltitude + altitudeForShip(ship),
       );
       mesh.position.set(pos.x, pos.y, pos.z);
       mesh.scale.set(scale, scale, scale);
@@ -3098,7 +3100,12 @@ const colorForShip = (ship) => {
 };
 
 const altitudeForShip = () =>
-  Number.isFinite(SHIP_CONFIG.altitude) ? SHIP_CONFIG.altitude : 0.6;
+  Number.isFinite(SHIP_CONFIG.altitude) ? SHIP_CONFIG.altitude : 0.12;
+
+const shipBaseAltitude = (renderer) => {
+  const base = renderer?.markerAltitude ?? 3.0;
+  return Math.max(0.25, base * 0.2);
+};
 
 const formatShipLabel = (ship) => {
   if (!ship) return "SHIP";
@@ -3521,6 +3528,27 @@ const setupDockToggles = () => {
   });
 };
 
+const setupPanelCollapsibles = () => {
+  if (!els.dockLeft) return;
+  els.dockLeft
+    .querySelectorAll('.panel-section[data-collapsible="true"]')
+    .forEach((section) => {
+      const header = section.querySelector(".panel-header");
+      if (!header) return;
+      const icon = header.querySelector(".panel-toggle-icon");
+      const setCollapsed = (collapsed) => {
+        section.dataset.collapsed = collapsed ? "true" : "false";
+        header.setAttribute("aria-expanded", (!collapsed).toString());
+        if (icon) icon.textContent = collapsed ? "+" : "-";
+      };
+      setCollapsed(section.dataset.collapsed === "true");
+      header.addEventListener("click", () => {
+        const next = section.dataset.collapsed !== "true";
+        setCollapsed(next);
+      });
+    });
+};
+
 const setupLayerToggles = () => {
   document.querySelectorAll("[data-layer-toggle]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -3873,6 +3901,7 @@ const main = () => {
   setupFlightControls(renderer3d, bus, flightOverlay);
   setupSatelliteControls(renderer3d, bus, satelliteOverlay);
   setupShipControls(renderer3d, bus, shipOverlay);
+  setupPanelCollapsibles();
 
   const renderLoop = (() => {
     let lastFpsSample = performance.now();
@@ -3902,10 +3931,14 @@ const main = () => {
           if (meta?.kind === "ship" && !shipOverlay.visible) return false;
           return true;
         });
+      const shipAltitude = shipBaseAltitude(renderer3d) + altitudeForShip();
       const points = entities3d.map((entity) => {
         const geo = world.getComponent(entity, "Geo");
         const renderable = world.getComponent(entity, "Renderable") || {};
-        const pos = renderer3d.positionForGeo(geo, renderer3d.markerAltitude);
+        const meta = world.getComponent(entity, "Meta");
+        const altitude =
+          meta?.kind === "ship" ? shipAltitude : renderer3d.markerAltitude;
+        const pos = renderer3d.positionForGeo(geo, altitude);
         return { ...pos, color: renderable.color };
       });
       renderer3d.setInstances(points);

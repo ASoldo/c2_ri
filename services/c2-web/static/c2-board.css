@@ -409,6 +409,60 @@ body {
   color: var(--steel);
 }
 
+.panel-section[data-collapsed="true"] .panel-body {
+  display: none;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  margin: 0 0 8px;
+  background: transparent;
+  border: none;
+  color: var(--steel);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.panel-header:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.4);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+.panel-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--steel);
+}
+
+.panel-toggle-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.2);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--steel);
+}
+
+.panel-body > :first-child {
+  margin-top: 0;
+}
+
+.panel-body > :last-child {
+  margin-bottom: 0;
+}
+
 .panel-section .meta {
   margin-top: 6px;
   font-size: 12px;
