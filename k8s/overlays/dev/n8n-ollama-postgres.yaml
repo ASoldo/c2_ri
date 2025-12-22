@@ -99,6 +99,8 @@ metadata:
     app.kubernetes.io/name: n8n
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: n8n
@@ -111,7 +113,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: n8n
-          image: n8nio/n8n:1.84.1
+          image: n8nio/n8n:1.120.0
           env:
             - name: DB_TYPE
               value: postgresdb
@@ -137,6 +139,8 @@ spec:
               value: https://n8n.c2.local
             - name: N8N_ENCRYPTION_KEY
               value: change-me-in-prod
+            - name: N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS
+              value: "true"
             - name: GENERIC_TIMEZONE
               value: UTC
           ports:
