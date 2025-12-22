@@ -350,9 +350,13 @@ impl From<SecurityClassification> for McpSecurityClassification {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct McpAuthContext {
-    tenant_id: String,
-    user_id: String,
+    #[serde(default, alias = "tenant_id")]
+    tenant_id: Option<String>,
+    #[serde(default, alias = "user_id")]
+    user_id: Option<String>,
+    #[serde(default)]
     roles: Vec<String>,
+    #[serde(default)]
     permissions: Vec<String>,
     clearance: Option<McpSecurityClassification>,
 }
@@ -1340,8 +1344,16 @@ fn parse_uuid(value: &str) -> Result<Uuid, ErrorData> {
 }
 
 fn parse_auth(auth: &McpAuthContext) -> Result<AuthorizedContext, ErrorData> {
-    let tenant_id = parse_uuid(&auth.tenant_id)?;
-    let user_id = parse_uuid(&auth.user_id)?;
+    let tenant_id = auth
+        .tenant_id
+        .as_ref()
+        .ok_or_else(|| ErrorData::invalid_params("missing tenantId", None))?;
+    let user_id = auth
+        .user_id
+        .as_ref()
+        .ok_or_else(|| ErrorData::invalid_params("missing userId", None))?;
+    let tenant_id = parse_uuid(tenant_id)?;
+    let user_id = parse_uuid(user_id)?;
     let roles = auth
         .roles
         .iter()
@@ -1449,15 +1461,26 @@ fn resolve_auth(
     default_auth: Option<&AuthorizedContext>,
 ) -> Result<AuthorizedContext, ErrorData> {
     if let Some(auth) = params_auth {
-        return parse_auth(&auth);
+        if auth_is_complete(&auth) {
+            return parse_auth(&auth);
+        }
     }
     if let Some(auth) = auth_from_meta(meta)? {
-        return parse_auth(&auth);
+        if auth_is_complete(&auth) {
+            return parse_auth(&auth);
+        }
     }
     if let Some(auth) = default_auth {
         return Ok(auth.clone());
     }
     Err(ErrorData::invalid_params("missing auth context", None))
+}
+
+fn auth_is_complete(auth: &McpAuthContext) -> bool {
+    auth.tenant_id.is_some()
+        && auth.user_id.is_some()
+        && !auth.roles.is_empty()
+        && !auth.permissions.is_empty()
 }
 
 fn auth_from_meta(meta: &Meta) -> Result<Option<McpAuthContext>, ErrorData> {
@@ -1486,8 +1509,8 @@ fn load_default_auth() -> Option<AuthorizedContext> {
         None => None,
     };
     let auth = McpAuthContext {
-        tenant_id,
-        user_id,
+        tenant_id: Some(tenant_id),
+        user_id: Some(user_id),
         roles: split_csv(&roles),
         permissions: split_csv(&permissions),
         clearance,
