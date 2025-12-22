@@ -7,6 +7,7 @@ use c2_core::{
 use c2_identity::{Permission, Role, Subject};
 use c2_observability::{init, log_startup, ObservabilityConfig};
 use c2_policy::{BasicPolicyEngine, PolicyContext, PolicyDecision, PolicyEngine, PolicyRequest, ResourceDescriptor};
+use axum::{routing::any_service, Router};
 use c2_storage::{AssetRepository, IncidentRepository, MissionRepository, StorageError, TaskRepository};
 use c2_storage_surreal::{SurrealConfig, SurrealStore};
 use rmcp::handler::server::tool::ToolRouter;
@@ -15,6 +16,10 @@ use rmcp::model::{
     Annotated, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParam,
     RawResource, RawResourceTemplate, ReadResourceRequestParam, ReadResourceResult, Resource,
     ResourceContents, ResourceTemplate, ServerCapabilities, ServerInfo,
+};
+use rmcp::transport::{
+    streamable_http_server::session::local::LocalSessionManager, StreamableHttpServerConfig,
+    StreamableHttpService,
 };
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 use schemars::JsonSchema;
@@ -1272,27 +1277,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let policy = BasicPolicyEngine::with_default_rules();
     let service = C2McpService::new(store, policy);
 
+    let session_manager = Arc::new(LocalSessionManager::default());
+    let http_service = StreamableHttpService::new(
+        {
+            let service = service.clone();
+            move || Ok(service.clone())
+        },
+        session_manager,
+        StreamableHttpServerConfig::default(),
+    );
+    let app = Router::new().route("/mcp", any_service(http_service));
     let listener = TcpListener::bind(&config.bind_addr).await?;
-    tracing::info!("c2-mcp listening on {}", config.bind_addr);
+    tracing::info!("c2-mcp http listening on {}", config.bind_addr);
 
-    loop {
-        tokio::select! {
-            result = listener.accept() => {
-                let (stream, peer) = result?;
-                let service = service.clone();
-                tracing::info!("mcp client connected: {}", peer);
-                tokio::spawn(async move {
-                    if let Err(err) = rmcp::serve_server(service, stream).await {
-                        tracing::error!("mcp session error: {}", err);
-                    }
-                });
-            }
-            _ = tokio::signal::ctrl_c() => {
-                tracing::info!("shutdown signal received");
-                break;
-            }
+    let shutdown = async {
+        if let Err(err) = tokio::signal::ctrl_c().await {
+            tracing::error!("failed to install ctrl-c handler: {}", err);
         }
-    }
+    };
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
+        .await?;
 
     Ok(())
 }

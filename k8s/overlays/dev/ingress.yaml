@@ -14,6 +14,7 @@ spec:
         - c2.local
         - n8n.c2.local
         - ollama.c2.local
+        - mcp.c2.local
       secretName: c2-ingress-tls
   rules:
     - host: c2.local
@@ -66,3 +67,13 @@ spec:
                 name: ollama
                 port:
                   number: 11434
+    - host: mcp.c2.local
+      http:
+        paths:
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: c2-mcp
+                port:
+                  number: 8080
