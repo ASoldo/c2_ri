@@ -3527,6 +3527,20 @@ const bringDockToFront = (dock) => {
   dock.style.zIndex = dockZ.toString();
 };
 
+const updateDockControls = (dock) => {
+  if (!dock) return;
+  const state = normalizeDockState(dock.dataset.state);
+  const minimize = dock.querySelector('[data-dock-action="minimize"]');
+  if (!minimize) return;
+  if (state === "minimized") {
+    minimize.textContent = "+";
+    minimize.setAttribute("aria-label", "Restore window");
+  } else {
+    minimize.textContent = "—";
+    minimize.setAttribute("aria-label", "Minimize window");
+  }
+};
+
 const positionDockCenter = (dock) => {
   const parent = dock.offsetParent || document.body;
   const parentRect = parent.getBoundingClientRect();
@@ -3550,6 +3564,7 @@ const setDockState = (dock, state) => {
     }
     bringDockToFront(dock);
   }
+  updateDockControls(dock);
   updateWindowMenuState();
 };
 
@@ -3575,7 +3590,8 @@ const updateWindowMenuState = () => {
 const applyDockAction = (dock, action) => {
   if (!dock) return;
   if (action === "minimize") {
-    setDockState(dock, "minimized");
+    const current = normalizeDockState(dock.dataset.state);
+    setDockState(dock, current === "minimized" ? "open" : "minimized");
     return;
   }
   if (action === "close") {
@@ -3609,7 +3625,7 @@ const setupDockDrag = () => {
     handle.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
       const dock = handle.closest(".dock");
-      if (!dock || normalizeDockState(dock.dataset.state) !== "open") return;
+      if (!dock || normalizeDockState(dock.dataset.state) === "closed") return;
       event.preventDefault();
       bringDockToFront(dock);
       const parent = dock.offsetParent || document.body;
