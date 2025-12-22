@@ -14,7 +14,7 @@ use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{
     Annotated, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParam,
-    RawResource, RawResourceTemplate, ReadResourceRequestParam, ReadResourceResult, Resource,
+    Meta, RawResource, RawResourceTemplate, ReadResourceRequestParam, ReadResourceResult, Resource,
     ResourceContents, ResourceTemplate, ServerCapabilities, ServerInfo,
 };
 use rmcp::transport::{
@@ -24,6 +24,7 @@ use rmcp::transport::{
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -33,15 +34,18 @@ use uuid::Uuid;
 struct C2McpService {
     store: Arc<SurrealStore>,
     policy: BasicPolicyEngine,
+    default_auth: Option<AuthorizedContext>,
     tool_router: ToolRouter<Self>,
 }
 
 impl C2McpService {
     fn new(store: SurrealStore, policy: BasicPolicyEngine) -> Self {
         let store = Arc::new(store);
+        let default_auth = load_default_auth();
         Self {
             store,
             policy,
+            default_auth,
             tool_router: Self::tool_router(),
         }
     }
@@ -362,7 +366,7 @@ struct AuthorizedContext {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct ListMissionsParams {
-    auth: McpAuthContext,
+    auth: Option<McpAuthContext>,
     limit: Option<usize>,
     offset: Option<usize>,
 }
@@ -370,7 +374,7 @@ struct ListMissionsParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct GetByIdParams {
-    auth: McpAuthContext,
+    auth: Option<McpAuthContext>,
     id: String,
 }
 
@@ -387,14 +391,14 @@ struct MissionInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct UpsertMissionParams {
-    auth: McpAuthContext,
+    auth: Option<McpAuthContext>,
     mission: MissionInput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct ListAssetsParams {
-    auth: McpAuthContext,
+    auth: Option<McpAuthContext>,
     limit: Option<usize>,
     offset: Option<usize>,
 }
@@ -412,14 +416,14 @@ struct AssetInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct UpsertAssetParams {
-    auth: McpAuthContext,
+    auth: Option<McpAuthContext>,
     asset: AssetInput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct ListIncidentsParams {
-    auth: McpAuthContext,
+    auth: Option<McpAuthContext>,
     limit: Option<usize>,
     offset: Option<usize>,
 }
@@ -437,14 +441,14 @@ struct IncidentInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct UpsertIncidentParams {
-    auth: McpAuthContext,
+    auth: Option<McpAuthContext>,
     incident: IncidentInput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct ListTasksParams {
-    auth: McpAuthContext,
+    auth: Option<McpAuthContext>,
     mission_id: String,
     limit: Option<usize>,
     offset: Option<usize>,
@@ -464,7 +468,7 @@ struct TaskInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct UpsertTaskParams {
-    auth: McpAuthContext,
+    auth: Option<McpAuthContext>,
     task: TaskInput,
 }
 
@@ -616,9 +620,10 @@ impl C2McpService {
     async fn list_missions(
         &self,
         params: Parameters<ListMissionsParams>,
+        meta: Meta,
     ) -> Result<Json<MissionList>, ErrorData> {
-        let params = params.0;
-        let auth = parse_auth(&params.auth)?;
+        let ListMissionsParams { auth, limit, offset } = params.0;
+        let auth = resolve_auth(auth, &meta, self.default_auth.as_ref())?;
         authorize_action(
             &self.policy,
             &auth,
@@ -628,8 +633,8 @@ impl C2McpService {
             None,
         )?;
 
-        let limit = params.limit.unwrap_or(100);
-        let offset = params.offset.unwrap_or(0);
+        let limit = limit.unwrap_or(100);
+        let offset = offset.unwrap_or(0);
         let missions = MissionRepository::list_by_tenant(&*self.store, auth.subject.tenant_id, limit, offset)
             .await
             .map_err(storage_error)?;
@@ -646,10 +651,14 @@ impl C2McpService {
         description = "Fetch a mission by ID.",
         annotations(read_only_hint = true, idempotent_hint = true, destructive_hint = false)
     )]
-    async fn get_mission(&self, params: Parameters<GetByIdParams>) -> Result<Json<McpMission>, ErrorData> {
-        let params = params.0;
-        let auth = parse_auth(&params.auth)?;
-        let mission_id = parse_uuid(&params.id)?;
+    async fn get_mission(
+        &self,
+        params: Parameters<GetByIdParams>,
+        meta: Meta,
+    ) -> Result<Json<McpMission>, ErrorData> {
+        let GetByIdParams { auth, id } = params.0;
+        let auth = resolve_auth(auth, &meta, self.default_auth.as_ref())?;
+        let mission_id = parse_uuid(&id)?;
         let mission_id = MissionId::from_uuid(mission_id);
         let mission = MissionRepository::get(&*self.store, mission_id)
             .await
@@ -676,10 +685,11 @@ impl C2McpService {
     async fn upsert_mission(
         &self,
         params: Parameters<UpsertMissionParams>,
+        meta: Meta,
     ) -> Result<Json<McpMission>, ErrorData> {
-        let params = params.0;
-        let auth = parse_auth(&params.auth)?;
-        let mission_id = match &params.mission.id {
+        let UpsertMissionParams { auth, mission } = params.0;
+        let auth = resolve_auth(auth, &meta, self.default_auth.as_ref())?;
+        let mission_id = match &mission.id {
             Some(value) => MissionId::from_uuid(parse_uuid(value)?),
             None => MissionId::new(),
         };
@@ -692,7 +702,7 @@ impl C2McpService {
             }
         }
 
-        let classification: SecurityClassification = params.mission.classification.into();
+        let classification: SecurityClassification = mission.classification.into();
         authorize_action(
             &self.policy,
             &auth,
@@ -710,9 +720,9 @@ impl C2McpService {
         let mission = Mission {
             id: mission_id,
             tenant_id: auth.subject.tenant_id,
-            name: params.mission.name,
-            status: params.mission.status.into(),
-            priority: params.mission.priority.into(),
+            name: mission.name,
+            status: mission.status.into(),
+            priority: mission.priority.into(),
             classification,
             created_at_ms,
             updated_at_ms,
@@ -731,9 +741,10 @@ impl C2McpService {
     async fn list_assets(
         &self,
         params: Parameters<ListAssetsParams>,
+        meta: Meta,
     ) -> Result<Json<AssetList>, ErrorData> {
-        let params = params.0;
-        let auth = parse_auth(&params.auth)?;
+        let ListAssetsParams { auth, limit, offset } = params.0;
+        let auth = resolve_auth(auth, &meta, self.default_auth.as_ref())?;
         authorize_action(
             &self.policy,
             &auth,
@@ -742,8 +753,8 @@ impl C2McpService {
             "asset",
             None,
         )?;
-        let limit = params.limit.unwrap_or(100);
-        let offset = params.offset.unwrap_or(0);
+        let limit = limit.unwrap_or(100);
+        let offset = offset.unwrap_or(0);
         let assets = AssetRepository::list_by_tenant(&*self.store, auth.subject.tenant_id, limit, offset)
             .await
             .map_err(storage_error)?;
@@ -760,10 +771,14 @@ impl C2McpService {
         description = "Fetch an asset by ID.",
         annotations(read_only_hint = true, idempotent_hint = true, destructive_hint = false)
     )]
-    async fn get_asset(&self, params: Parameters<GetByIdParams>) -> Result<Json<McpAsset>, ErrorData> {
-        let params = params.0;
-        let auth = parse_auth(&params.auth)?;
-        let asset_id = AssetId::from_uuid(parse_uuid(&params.id)?);
+    async fn get_asset(
+        &self,
+        params: Parameters<GetByIdParams>,
+        meta: Meta,
+    ) -> Result<Json<McpAsset>, ErrorData> {
+        let GetByIdParams { auth, id } = params.0;
+        let auth = resolve_auth(auth, &meta, self.default_auth.as_ref())?;
+        let asset_id = AssetId::from_uuid(parse_uuid(&id)?);
         let asset = AssetRepository::get(&*self.store, asset_id)
             .await
             .map_err(storage_error)?;
@@ -789,10 +804,11 @@ impl C2McpService {
     async fn upsert_asset(
         &self,
         params: Parameters<UpsertAssetParams>,
+        meta: Meta,
     ) -> Result<Json<McpAsset>, ErrorData> {
-        let params = params.0;
-        let auth = parse_auth(&params.auth)?;
-        let asset_id = match &params.asset.id {
+        let UpsertAssetParams { auth, asset } = params.0;
+        let auth = resolve_auth(auth, &meta, self.default_auth.as_ref())?;
+        let asset_id = match &asset.id {
             Some(value) => AssetId::from_uuid(parse_uuid(value)?),
             None => AssetId::new(),
         };
@@ -805,7 +821,7 @@ impl C2McpService {
             }
         }
 
-        let classification: SecurityClassification = params.asset.classification.into();
+        let classification: SecurityClassification = asset.classification.into();
         authorize_action(
             &self.policy,
             &auth,
@@ -823,9 +839,9 @@ impl C2McpService {
         let asset = Asset {
             id: asset_id,
             tenant_id: auth.subject.tenant_id,
-            name: params.asset.name,
-            kind: params.asset.kind.into(),
-            status: params.asset.status.into(),
+            name: asset.name,
+            kind: asset.kind.into(),
+            status: asset.status.into(),
             readiness: ReadinessState::default(),
             comms_status: CommsStatus::default(),
             maintenance_state: MaintenanceState::default(),
@@ -849,9 +865,10 @@ impl C2McpService {
     async fn list_incidents(
         &self,
         params: Parameters<ListIncidentsParams>,
+        meta: Meta,
     ) -> Result<Json<IncidentList>, ErrorData> {
-        let params = params.0;
-        let auth = parse_auth(&params.auth)?;
+        let ListIncidentsParams { auth, limit, offset } = params.0;
+        let auth = resolve_auth(auth, &meta, self.default_auth.as_ref())?;
         authorize_action(
             &self.policy,
             &auth,
@@ -860,8 +877,8 @@ impl C2McpService {
             "incident",
             None,
         )?;
-        let limit = params.limit.unwrap_or(100);
-        let offset = params.offset.unwrap_or(0);
+        let limit = limit.unwrap_or(100);
+        let offset = offset.unwrap_or(0);
         let incidents =
             IncidentRepository::list_by_tenant(&*self.store, auth.subject.tenant_id, limit, offset)
                 .await
@@ -882,10 +899,11 @@ impl C2McpService {
     async fn get_incident(
         &self,
         params: Parameters<GetByIdParams>,
+        meta: Meta,
     ) -> Result<Json<McpIncident>, ErrorData> {
-        let params = params.0;
-        let auth = parse_auth(&params.auth)?;
-        let incident_id = IncidentId::from_uuid(parse_uuid(&params.id)?);
+        let GetByIdParams { auth, id } = params.0;
+        let auth = resolve_auth(auth, &meta, self.default_auth.as_ref())?;
+        let incident_id = IncidentId::from_uuid(parse_uuid(&id)?);
         let incident = IncidentRepository::get(&*self.store, incident_id)
             .await
             .map_err(storage_error)?;
@@ -911,10 +929,11 @@ impl C2McpService {
     async fn upsert_incident(
         &self,
         params: Parameters<UpsertIncidentParams>,
+        meta: Meta,
     ) -> Result<Json<McpIncident>, ErrorData> {
-        let params = params.0;
-        let auth = parse_auth(&params.auth)?;
-        let incident_id = match &params.incident.id {
+        let UpsertIncidentParams { auth, incident } = params.0;
+        let auth = resolve_auth(auth, &meta, self.default_auth.as_ref())?;
+        let incident_id = match &incident.id {
             Some(value) => IncidentId::from_uuid(parse_uuid(value)?),
             None => IncidentId::new(),
         };
@@ -927,7 +946,7 @@ impl C2McpService {
             }
         }
 
-        let classification: SecurityClassification = params.incident.classification.into();
+        let classification: SecurityClassification = incident.classification.into();
         authorize_action(
             &self.policy,
             &auth,
@@ -945,9 +964,9 @@ impl C2McpService {
         let incident = Incident {
             id: incident_id,
             tenant_id: auth.subject.tenant_id,
-            incident_type: params.incident.incident_type.into(),
-            status: params.incident.status.into(),
-            summary: params.incident.summary,
+            incident_type: incident.incident_type.into(),
+            status: incident.status.into(),
+            summary: incident.summary,
             classification,
             created_at_ms,
             updated_at_ms,
@@ -963,9 +982,18 @@ impl C2McpService {
         description = "List tasks for a mission.",
         annotations(read_only_hint = true, idempotent_hint = true, destructive_hint = false)
     )]
-    async fn list_tasks(&self, params: Parameters<ListTasksParams>) -> Result<Json<TaskList>, ErrorData> {
-        let params = params.0;
-        let auth = parse_auth(&params.auth)?;
+    async fn list_tasks(
+        &self,
+        params: Parameters<ListTasksParams>,
+        meta: Meta,
+    ) -> Result<Json<TaskList>, ErrorData> {
+        let ListTasksParams {
+            auth,
+            mission_id,
+            limit,
+            offset,
+        } = params.0;
+        let auth = resolve_auth(auth, &meta, self.default_auth.as_ref())?;
         authorize_action(
             &self.policy,
             &auth,
@@ -974,9 +1002,9 @@ impl C2McpService {
             "task",
             None,
         )?;
-        let mission_id = MissionId::from_uuid(parse_uuid(&params.mission_id)?);
-        let limit = params.limit.unwrap_or(100);
-        let offset = params.offset.unwrap_or(0);
+        let mission_id = MissionId::from_uuid(parse_uuid(&mission_id)?);
+        let limit = limit.unwrap_or(100);
+        let offset = offset.unwrap_or(0);
         let tasks = TaskRepository::list_by_mission(&*self.store, mission_id, limit, offset)
             .await
             .map_err(storage_error)?;
@@ -993,10 +1021,14 @@ impl C2McpService {
         description = "Fetch a task by ID.",
         annotations(read_only_hint = true, idempotent_hint = true, destructive_hint = false)
     )]
-    async fn get_task(&self, params: Parameters<GetByIdParams>) -> Result<Json<McpTask>, ErrorData> {
-        let params = params.0;
-        let auth = parse_auth(&params.auth)?;
-        let task_id = TaskId::from_uuid(parse_uuid(&params.id)?);
+    async fn get_task(
+        &self,
+        params: Parameters<GetByIdParams>,
+        meta: Meta,
+    ) -> Result<Json<McpTask>, ErrorData> {
+        let GetByIdParams { auth, id } = params.0;
+        let auth = resolve_auth(auth, &meta, self.default_auth.as_ref())?;
+        let task_id = TaskId::from_uuid(parse_uuid(&id)?);
         let task = TaskRepository::get(&*self.store, task_id)
             .await
             .map_err(storage_error)?;
@@ -1022,14 +1054,15 @@ impl C2McpService {
     async fn upsert_task(
         &self,
         params: Parameters<UpsertTaskParams>,
+        meta: Meta,
     ) -> Result<Json<McpTask>, ErrorData> {
-        let params = params.0;
-        let auth = parse_auth(&params.auth)?;
-        let task_id = match &params.task.id {
+        let UpsertTaskParams { auth, task } = params.0;
+        let auth = resolve_auth(auth, &meta, self.default_auth.as_ref())?;
+        let task_id = match &task.id {
             Some(value) => TaskId::from_uuid(parse_uuid(value)?),
             None => TaskId::new(),
         };
-        let mission_id = MissionId::from_uuid(parse_uuid(&params.task.mission_id)?);
+        let mission_id = MissionId::from_uuid(parse_uuid(&task.mission_id)?);
         let mission = MissionRepository::get(&*self.store, mission_id)
             .await
             .map_err(storage_error)?;
@@ -1048,7 +1081,7 @@ impl C2McpService {
             }
         }
 
-        let classification: SecurityClassification = params.task.classification.into();
+        let classification: SecurityClassification = task.classification.into();
         authorize_action(
             &self.policy,
             &auth,
@@ -1067,9 +1100,9 @@ impl C2McpService {
             id: task_id,
             mission_id,
             tenant_id: auth.subject.tenant_id,
-            title: params.task.title,
-            status: params.task.status.into(),
-            priority: params.task.priority.into(),
+            title: task.title,
+            status: task.status.into(),
+            priority: task.priority.into(),
             classification,
             created_at_ms,
             updated_at_ms,
@@ -1099,7 +1132,7 @@ impl ServerHandler for C2McpService {
                 website_url: None,
             },
             instructions: Some(
-                "Provide auth context in tool parameters (auth) or in _meta.auth for resource reads."
+                "Provide auth context in tool parameters (auth) or in _meta.auth. If omitted, the server uses C2_MCP_* default auth when configured."
                     .to_string(),
             ),
         }
@@ -1110,7 +1143,7 @@ impl ServerHandler for C2McpService {
         request: Option<PaginatedRequestParam>,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
-        let auth = parse_auth(&auth_from_meta(&context.meta)?)?;
+        let auth = resolve_auth(None, &context.meta, self.default_auth.as_ref())?;
         authorize_action(
             &self.policy,
             &auth,
@@ -1169,7 +1202,7 @@ impl ServerHandler for C2McpService {
         request: ReadResourceRequestParam,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ReadResourceResult, ErrorData> {
-        let auth = parse_auth(&auth_from_meta(&context.meta)?)?;
+        let auth = resolve_auth(None, &context.meta, self.default_auth.as_ref())?;
         let (kind, id) = parse_resource_uri(&request.uri)?;
         match kind {
             ResourceKind::Mission => {
@@ -1410,17 +1443,85 @@ fn resource_contents(uri: &str, payload: String) -> ResourceContents {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct MetaAuthWrapper {
-    auth: McpAuthContext,
+fn resolve_auth(
+    params_auth: Option<McpAuthContext>,
+    meta: &Meta,
+    default_auth: Option<&AuthorizedContext>,
+) -> Result<AuthorizedContext, ErrorData> {
+    if let Some(auth) = params_auth {
+        return parse_auth(&auth);
+    }
+    if let Some(auth) = auth_from_meta(meta)? {
+        return parse_auth(&auth);
+    }
+    if let Some(auth) = default_auth {
+        return Ok(auth.clone());
+    }
+    Err(ErrorData::invalid_params("missing auth context", None))
 }
 
-fn auth_from_meta(meta: &rmcp::model::Meta) -> Result<McpAuthContext, ErrorData> {
-    let value =
-        serde_json::to_value(meta).map_err(|err| ErrorData::invalid_params(err.to_string(), None))?;
-    let wrapper: MetaAuthWrapper =
-        serde_json::from_value(value).map_err(|_| ErrorData::invalid_params("missing auth in meta", None))?;
-    Ok(wrapper.auth)
+fn auth_from_meta(meta: &Meta) -> Result<Option<McpAuthContext>, ErrorData> {
+    let auth_value = match meta.get("auth") {
+        Some(value) => value.clone(),
+        None => return Ok(None),
+    };
+    let auth = serde_json::from_value(auth_value)
+        .map_err(|_| ErrorData::invalid_params("invalid auth in meta", None))?;
+    Ok(Some(auth))
+}
+
+fn load_default_auth() -> Option<AuthorizedContext> {
+    let tenant_id = env::var("C2_MCP_TENANT_ID").ok()?;
+    let user_id = env::var("C2_MCP_USER_ID").ok()?;
+    let roles = env::var("C2_MCP_ROLES").ok()?;
+    let permissions = env::var("C2_MCP_PERMISSIONS").ok()?;
+    let clearance = match env::var("C2_MCP_CLEARANCE").ok() {
+        Some(value) => match parse_clearance(&value) {
+            Some(clearance) => Some(clearance),
+            None => {
+                tracing::warn!("invalid C2_MCP_CLEARANCE value: {}", value);
+                None
+            }
+        },
+        None => None,
+    };
+    let auth = McpAuthContext {
+        tenant_id,
+        user_id,
+        roles: split_csv(&roles),
+        permissions: split_csv(&permissions),
+        clearance,
+    };
+    match parse_auth(&auth) {
+        Ok(auth) => {
+            tracing::info!("c2-mcp default auth loaded from C2_MCP_* env");
+            Some(auth)
+        }
+        Err(err) => {
+            tracing::error!("invalid C2_MCP_* auth configuration: {}", err.message);
+            None
+        }
+    }
+}
+
+fn split_csv(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(|entry| entry.trim().to_string())
+        .filter(|entry| !entry.is_empty())
+        .collect()
+}
+
+fn parse_clearance(value: &str) -> Option<McpSecurityClassification> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "unclassified" => Some(McpSecurityClassification::Unclassified),
+        "controlled" => Some(McpSecurityClassification::Controlled),
+        "restricted" => Some(McpSecurityClassification::Restricted),
+        "confidential" => Some(McpSecurityClassification::Confidential),
+        "secret" => Some(McpSecurityClassification::Secret),
+        "top_secret" | "top-secret" => Some(McpSecurityClassification::TopSecret),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
