@@ -3516,17 +3516,6 @@ class EdgeLayer {
   }
 }
 
-const setupDockToggles = () => {
-  document.querySelectorAll("[data-dock-toggle]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const target = button.dataset.dockToggle;
-      const dock = target === "left" ? els.dockLeft : els.dockRight;
-      if (!dock) return;
-      toggleDockState(dock);
-    });
-  });
-};
-
 const dockStates = ["open", "minimized", "closed"];
 let dockZ = 20;
 
@@ -3538,12 +3527,29 @@ const bringDockToFront = (dock) => {
   dock.style.zIndex = dockZ.toString();
 };
 
+const positionDockCenter = (dock) => {
+  const parent = dock.offsetParent || document.body;
+  const parentRect = parent.getBoundingClientRect();
+  const width = dock.offsetWidth || 320;
+  const height = dock.offsetHeight || 420;
+  const left = Math.max(12, (parentRect.width - width) / 2);
+  const top = Math.max(12, (parentRect.height - height) / 2);
+  dock.style.left = `${left}px`;
+  dock.style.top = `${top}px`;
+  dock.dataset.positioned = "true";
+};
+
 const setDockState = (dock, state) => {
   if (!dock) return;
   const next = normalizeDockState(state);
   dock.dataset.state = next;
   dock.setAttribute("aria-hidden", next === "open" ? "false" : "true");
-  if (next === "open") bringDockToFront(dock);
+  if (next === "open") {
+    if (dock.dataset.positioned !== "true") {
+      positionDockCenter(dock);
+    }
+    bringDockToFront(dock);
+  }
   updateWindowMenuState();
 };
 
@@ -3599,35 +3605,35 @@ const setupDockDrag = () => {
   document.querySelectorAll(".dock").forEach((dock) => {
     dock.addEventListener("pointerdown", () => bringDockToFront(dock));
   });
-  document.querySelectorAll(".dock-header").forEach((header) => {
-    header.addEventListener("pointerdown", (event) => {
+  document.querySelectorAll("[data-dock-drag-handle]").forEach((handle) => {
+    handle.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
-      if (event.target.closest(".dock-controls")) return;
-      const dock = header.closest(".dock");
+      const dock = handle.closest(".dock");
       if (!dock || normalizeDockState(dock.dataset.state) !== "open") return;
       event.preventDefault();
       bringDockToFront(dock);
+      const parent = dock.offsetParent || document.body;
+      const parentRect = parent.getBoundingClientRect();
       const rect = dock.getBoundingClientRect();
       const offsetX = event.clientX - rect.left;
       const offsetY = event.clientY - rect.top;
-      dock.style.left = `${rect.left}px`;
-      dock.style.top = `${rect.top}px`;
-      dock.style.right = "auto";
-      dock.style.bottom = "auto";
+      dock.style.left = `${rect.left - parentRect.left}px`;
+      dock.style.top = `${rect.top - parentRect.top}px`;
+      dock.dataset.positioned = "true";
       dock.classList.add("dragging");
 
       const onMove = (moveEvent) => {
         const width = dock.offsetWidth;
         const height = dock.offsetHeight;
-        const maxLeft = Math.max(12, window.innerWidth - width - 12);
-        const maxTop = Math.max(12, window.innerHeight - height - 12);
+        const maxLeft = Math.max(12, parentRect.width - width - 12);
+        const maxTop = Math.max(12, parentRect.height - height - 12);
         const nextLeft = Math.min(
           maxLeft,
-          Math.max(12, moveEvent.clientX - offsetX),
+          Math.max(12, moveEvent.clientX - parentRect.left - offsetX),
         );
         const nextTop = Math.min(
           maxTop,
-          Math.max(12, moveEvent.clientY - offsetY),
+          Math.max(12, moveEvent.clientY - parentRect.top - offsetY),
         );
         dock.style.left = `${nextLeft}px`;
         dock.style.top = `${nextTop}px`;
@@ -4192,7 +4198,6 @@ const main = () => {
   if (SHIP_CONFIG.enabled) {
     setInterval(() => fetchShips(renderer3d, bus, shipOverlay), SHIP_CONFIG.updateIntervalMs);
   }
-  setupDockToggles();
   setupDockControls();
   setupDockDrag();
   setupPillMenus();

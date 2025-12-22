@@ -43,7 +43,7 @@ body {
   z-index: 10;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
   margin: 40px;
   padding: 20px 28px 12px;
 }
@@ -83,6 +83,7 @@ body {
   font-weight: 600;
   flex-wrap: wrap;
   row-gap: 4px;
+  width: 100%;
 }
 
 .pill-brand {
@@ -466,40 +467,33 @@ body {
   min-height: 320px;
   min-width: 260px;
   margin: 0;
-  --dock-handle: 44px;
-  transition: transform 0.3s ease;
+  transition: opacity 0.2s ease, transform 0.2s ease;
   resize: both;
   overflow: hidden;
   backdrop-filter: blur(4px);
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
 }
 
-.dock.left {
-  left: 24px;
-  top: 24px;
-  transform: translateX(0);
-}
-
-.dock.left[data-state="minimized"] {
-  transform: translateX(calc(-100% + var(--dock-handle)));
-}
-
-.dock.right {
-  right: 24px;
-  top: 24px;
-  transform: translateX(0);
-}
-
-.dock.right[data-state="minimized"] {
-  transform: translateX(calc(100% - var(--dock-handle)));
+.dock[data-positioned="true"] {
+  transform: none;
 }
 
 .dock[data-state="closed"] {
   opacity: 0;
   pointer-events: none;
+  transform: translate(-50%, -50%) scale(0.98);
 }
 
-.dock[data-state="minimized"] .dock-panel {
-  pointer-events: none;
+.dock[data-state="minimized"] {
+  height: auto;
+  min-height: 0;
+  resize: none;
+}
+
+.dock[data-state="minimized"] .dock-content {
+  display: none;
 }
 
 .dock-panel {
@@ -522,14 +516,6 @@ body {
   border-bottom: 1px solid rgba(148, 163, 184, 0.25);
   background: rgba(255, 255, 255, 0.9);
   cursor: grab;
-}
-
-.dock.left .dock-header {
-  padding-right: calc(16px + var(--dock-handle));
-}
-
-.dock.right .dock-header {
-  padding-left: calc(16px + var(--dock-handle));
 }
 
 .dock-title {
@@ -557,6 +543,14 @@ body {
   cursor: pointer;
 }
 
+.dock-move {
+  cursor: grab;
+}
+
+.dock-move:active {
+  cursor: grabbing;
+}
+
 .dock-control:hover {
   background: rgba(15, 23, 42, 0.08);
 }
@@ -576,14 +570,6 @@ body {
   overflow-x: hidden;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-}
-
-.dock.left .dock-content {
-  padding-right: calc(18px + var(--dock-handle));
-}
-
-.dock.right .dock-content {
-  padding-left: calc(18px + var(--dock-handle));
 }
 
 .panel-section {
@@ -700,38 +686,6 @@ body {
 .panel-actions button[data-active="true"] {
   border-color: rgba(14, 116, 144, 0.6);
   background: rgba(14, 116, 144, 0.12);
-}
-
-.dock-edge {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  z-index: 11;
-  width: var(--dock-handle);
-  border-radius: 18px;
-  border: 1px solid var(--panel-border);
-  background: var(--panel);
-  box-shadow: var(--shadow);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-}
-
-.dock-edge-icon {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--steel);
-  letter-spacing: 0.08em;
-}
-
-.dock.left .dock-edge {
-  right: 0;
-}
-
-.dock.right .dock-edge {
-  left: 0;
 }
 
 .layer-toggle {
@@ -879,16 +833,7 @@ body {
   }
 
   .dock {
-    top: 72px;
     height: 65vh;
-    width: 78vw;
-  }
-
-  .dock.right {
-    right: 0;
-  }
-
-  .dock.left {
-    left: 0;
+    width: 82vw;
   }
 }
