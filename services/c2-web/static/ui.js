@@ -3522,8 +3522,189 @@ const setupDockToggles = () => {
       const target = button.dataset.dockToggle;
       const dock = target === "left" ? els.dockLeft : els.dockRight;
       if (!dock) return;
-      const state = dock.getAttribute("data-state") || "open";
-      dock.setAttribute("data-state", state === "open" ? "closed" : "open");
+      toggleDockState(dock);
+    });
+  });
+};
+
+const dockStates = ["open", "minimized", "closed"];
+let dockZ = 20;
+
+const normalizeDockState = (state) =>
+  dockStates.includes(state) ? state : "open";
+
+const bringDockToFront = (dock) => {
+  dockZ += 1;
+  dock.style.zIndex = dockZ.toString();
+};
+
+const setDockState = (dock, state) => {
+  if (!dock) return;
+  const next = normalizeDockState(state);
+  dock.dataset.state = next;
+  dock.setAttribute("aria-hidden", next === "open" ? "false" : "true");
+  if (next === "open") bringDockToFront(dock);
+  updateWindowMenuState();
+};
+
+const toggleDockState = (dock) => {
+  if (!dock) return;
+  const state = normalizeDockState(dock.dataset.state);
+  const next = state === "open" ? "minimized" : "open";
+  setDockState(dock, next);
+};
+
+const updateWindowMenuState = () => {
+  document.querySelectorAll("[data-window-state]").forEach((node) => {
+    const id = node.dataset.windowState;
+    const dock = document.getElementById(id);
+    if (!dock) return;
+    const state = normalizeDockState(dock.dataset.state);
+    node.dataset.state = state;
+    node.textContent =
+      state === "open" ? "Open" : state === "minimized" ? "Minimized" : "Closed";
+  });
+};
+
+const applyDockAction = (dock, action) => {
+  if (!dock) return;
+  if (action === "minimize") {
+    setDockState(dock, "minimized");
+    return;
+  }
+  if (action === "close") {
+    setDockState(dock, "closed");
+    return;
+  }
+  if (action === "open") {
+    setDockState(dock, "open");
+  }
+};
+
+const allDocks = () => [els.dockLeft, els.dockRight].filter(Boolean);
+
+const setupDockControls = () => {
+  document.querySelectorAll("[data-dock-action]").forEach((button) => {
+    const action = button.dataset.dockAction;
+    const dock = button.closest(".dock");
+    if (!action || !dock) return;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      applyDockAction(dock, action);
+    });
+  });
+};
+
+const setupDockDrag = () => {
+  document.querySelectorAll(".dock").forEach((dock) => {
+    dock.addEventListener("pointerdown", () => bringDockToFront(dock));
+  });
+  document.querySelectorAll(".dock-header").forEach((header) => {
+    header.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      if (event.target.closest(".dock-controls")) return;
+      const dock = header.closest(".dock");
+      if (!dock || normalizeDockState(dock.dataset.state) !== "open") return;
+      event.preventDefault();
+      bringDockToFront(dock);
+      const rect = dock.getBoundingClientRect();
+      const offsetX = event.clientX - rect.left;
+      const offsetY = event.clientY - rect.top;
+      dock.style.left = `${rect.left}px`;
+      dock.style.top = `${rect.top}px`;
+      dock.style.right = "auto";
+      dock.style.bottom = "auto";
+      dock.classList.add("dragging");
+
+      const onMove = (moveEvent) => {
+        const width = dock.offsetWidth;
+        const height = dock.offsetHeight;
+        const maxLeft = Math.max(12, window.innerWidth - width - 12);
+        const maxTop = Math.max(12, window.innerHeight - height - 12);
+        const nextLeft = Math.min(
+          maxLeft,
+          Math.max(12, moveEvent.clientX - offsetX),
+        );
+        const nextTop = Math.min(
+          maxTop,
+          Math.max(12, moveEvent.clientY - offsetY),
+        );
+        dock.style.left = `${nextLeft}px`;
+        dock.style.top = `${nextTop}px`;
+      };
+
+      const onUp = () => {
+        dock.classList.remove("dragging");
+        window.removeEventListener("pointermove", onMove);
+      };
+
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp, { once: true });
+    });
+  });
+};
+
+const closePillMenus = () => {
+  document.querySelectorAll(".pill-menu").forEach((menu) => {
+    menu.dataset.open = "false";
+    const trigger = menu.querySelector(".pill-menu-trigger");
+    if (trigger) trigger.setAttribute("aria-expanded", "false");
+  });
+};
+
+const setupPillMenus = () => {
+  const menus = document.querySelectorAll(".pill-menu");
+  if (!menus.length) return;
+  menus.forEach((menu) => {
+    const trigger = menu.querySelector(".pill-menu-trigger");
+    if (!trigger) return;
+    trigger.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const isOpen = menu.dataset.open === "true";
+      closePillMenus();
+      if (!isOpen) {
+        menu.dataset.open = "true";
+        trigger.setAttribute("aria-expanded", "true");
+      }
+    });
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".pill-menu")) closePillMenus();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closePillMenus();
+  });
+};
+
+const setupWindowMenuActions = () => {
+  document.querySelectorAll("[data-window-action]").forEach((button) => {
+    const action = button.dataset.windowAction;
+    const target = button.dataset.windowId;
+    button.addEventListener("click", () => {
+      if (action === "toggle" && target) {
+        const dock = document.getElementById(target);
+        const state = normalizeDockState(dock?.dataset?.state);
+        setDockState(dock, state === "open" ? "minimized" : "open");
+        closePillMenus();
+        return;
+      }
+      if (action === "open-all") {
+        allDocks().forEach((dock) => setDockState(dock, "open"));
+        closePillMenus();
+        return;
+      }
+      if (action === "minimize-all") {
+        allDocks().forEach((dock) => setDockState(dock, "minimized"));
+        closePillMenus();
+        return;
+      }
+      if (action === "close-all") {
+        allDocks().forEach((dock) => setDockState(dock, "closed"));
+        closePillMenus();
+        return;
+      }
     });
   });
 };
@@ -4012,6 +4193,13 @@ const main = () => {
     setInterval(() => fetchShips(renderer3d, bus, shipOverlay), SHIP_CONFIG.updateIntervalMs);
   }
   setupDockToggles();
+  setupDockControls();
+  setupDockDrag();
+  setupPillMenus();
+  setupWindowMenuActions();
+  allDocks().forEach((dock) => {
+    setDockState(dock, dock.dataset.state || "open");
+  });
   setupLayerToggles();
 
   requestAnimationFrame(renderLoop);

@@ -43,7 +43,7 @@ body {
   z-index: 10;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   margin: 40px;
   padding: 20px 28px 12px;
 }
@@ -74,15 +74,122 @@ body {
 .status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 16px;
+  gap: 14px;
+  padding: 10px 16px;
   border-radius: 999px;
   background: var(--panel);
   box-shadow: var(--shadow);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   flex-wrap: wrap;
   row-gap: 4px;
+}
+
+.pill-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--steel);
+}
+
+.pill-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
+  color: rgba(15, 23, 42, 0.6);
+}
+
+.pill-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.pill-menu-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pill-menu {
+  position: relative;
+}
+
+.pill-menu-trigger {
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--steel);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pill-menu-trigger[aria-expanded="true"] {
+  background: rgba(15, 23, 42, 0.08);
+  border-color: rgba(15, 23, 42, 0.2);
+}
+
+.pill-menu-caret {
+  font-size: 10px;
+}
+
+.pill-menu-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  min-width: 220px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 6px;
+  display: none;
+  z-index: 30;
+}
+
+.pill-menu[data-open="true"] .pill-menu-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pill-menu-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 8px 10px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--steel);
+  cursor: pointer;
+}
+
+.pill-menu-item:hover {
+  background: rgba(15, 23, 42, 0.06);
+}
+
+.pill-menu-state {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: rgba(15, 23, 42, 0.5);
+}
+
+.pill-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-left: auto;
 }
 
 .status-dot {
@@ -116,7 +223,7 @@ body {
 .c2-body {
   position: relative;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: 1fr;
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -352,39 +459,115 @@ body {
 }
 
 .dock {
-  position: relative;
-  z-index: 9;
+  position: absolute;
+  z-index: 20;
   width: 320px;
-  margin: 12px 0;
-  height: calc(100% - 24px);
+  height: 70vh;
+  min-height: 320px;
+  min-width: 260px;
+  margin: 0;
   --dock-handle: 44px;
   transition: transform 0.3s ease;
+  resize: both;
+  overflow: hidden;
+  backdrop-filter: blur(4px);
 }
 
 .dock.left {
+  left: 24px;
+  top: 24px;
   transform: translateX(0);
 }
 
-.dock.left[data-state="closed"] {
+.dock.left[data-state="minimized"] {
   transform: translateX(calc(-100% + var(--dock-handle)));
 }
 
 .dock.right {
+  right: 24px;
+  top: 24px;
   transform: translateX(0);
 }
 
-.dock.right[data-state="closed"] {
+.dock.right[data-state="minimized"] {
   transform: translateX(calc(100% - var(--dock-handle)));
 }
 
+.dock[data-state="closed"] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dock[data-state="minimized"] .dock-panel {
+  pointer-events: none;
+}
+
 .dock-panel {
-  margin: 0 12px;
+  margin: 0;
   height: 100%;
-  min-height: 0;
   background: var(--panel);
   border-radius: 20px;
   border: 1px solid var(--panel-border);
   box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dock-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(255, 255, 255, 0.9);
+  cursor: grab;
+}
+
+.dock.left .dock-header {
+  padding-right: calc(16px + var(--dock-handle));
+}
+
+.dock.right .dock-header {
+  padding-left: calc(16px + var(--dock-handle));
+}
+
+.dock-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--steel);
+  font-weight: 700;
+}
+
+.dock-controls {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.dock-control {
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: rgba(255, 255, 255, 0.7);
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--steel);
+  cursor: pointer;
+}
+
+.dock-control:hover {
+  background: rgba(15, 23, 42, 0.08);
+}
+
+.dock.dragging .dock-header {
+  cursor: grabbing;
+}
+
+.dock-content {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -395,11 +578,11 @@ body {
   scrollbar-gutter: stable;
 }
 
-.dock.left .dock-panel {
+.dock.left .dock-content {
   padding-right: calc(18px + var(--dock-handle));
 }
 
-.dock.right .dock-panel {
+.dock.right .dock-content {
   padding-left: calc(18px + var(--dock-handle));
 }
 
@@ -696,9 +879,9 @@ body {
   }
 
   .dock {
-    position: absolute;
-    top: 80px;
-    bottom: 80px;
+    top: 72px;
+    height: 65vh;
+    width: 78vw;
   }
 
   .dock.right {
