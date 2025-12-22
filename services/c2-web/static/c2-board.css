@@ -44,6 +44,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  margin: 40px;
   padding: 20px 28px 12px;
 }
 
@@ -356,6 +357,7 @@ body {
   width: 320px;
   margin: 12px 0;
   height: calc(100% - 24px);
+  --dock-handle: 44px;
   transition: transform 0.3s ease;
 }
 
@@ -364,7 +366,7 @@ body {
 }
 
 .dock.left[data-state="closed"] {
-  transform: translateX(-100%);
+  transform: translateX(calc(-100% + var(--dock-handle)));
 }
 
 .dock.right {
@@ -372,12 +374,13 @@ body {
 }
 
 .dock.right[data-state="closed"] {
-  transform: translateX(100%);
+  transform: translateX(calc(100% - var(--dock-handle)));
 }
 
 .dock-panel {
   margin: 0 12px;
   height: 100%;
+  min-height: 0;
   background: var(--panel);
   border-radius: 20px;
   border: 1px solid var(--panel-border);
@@ -386,14 +389,18 @@ body {
   flex-direction: column;
   gap: 16px;
   padding: 18px;
-  overflow: hidden;
-}
-
-.dock.left .dock-panel {
-  overflow-y: auto;
+  overflow-y: scroll;
   overflow-x: hidden;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
+}
+
+.dock.left .dock-panel {
+  padding-right: calc(18px + var(--dock-handle));
+}
+
+.dock.right .dock-panel {
+  padding-left: calc(18px + var(--dock-handle));
 }
 
 .panel-section {
@@ -512,35 +519,36 @@ body {
   background: rgba(14, 116, 144, 0.12);
 }
 
-.dock-toggle {
+.dock-edge {
   position: absolute;
-  top: 22px;
-  z-index: 10;
-  width: 34px;
-  height: 34px;
-  border-radius: 999px;
-  border: none;
+  top: 0;
+  bottom: 0;
+  z-index: 11;
+  width: var(--dock-handle);
+  border-radius: 18px;
+  border: 1px solid var(--panel-border);
   background: var(--panel);
   box-shadow: var(--shadow);
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
 }
 
-.dock.left .dock-toggle {
-  right: -16px;
+.dock-edge-icon {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--steel);
+  letter-spacing: 0.08em;
 }
 
-.dock.right .dock-toggle {
-  left: -16px;
+.dock.left .dock-edge {
+  right: 0;
 }
 
-.dock.left:not([data-state="closed"]) .dock-toggle {
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-}
-
-.dock.right:not([data-state="closed"]) .dock-toggle {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
+.dock.right .dock-edge {
+  left: 0;
 }
 
 .layer-toggle {
