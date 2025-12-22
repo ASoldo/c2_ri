@@ -4,6 +4,7 @@ kind: Kustomization
 resources:
   - ../../base
   - ingress.yaml
+  - n8n-ollama-postgres.yaml
   - surrealdb.yaml
 
 patchesStrategicMerge:
