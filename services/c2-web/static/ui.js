@@ -2891,6 +2891,271 @@ class ShipOverlay {
   }
 }
 
+class MediaOverlay {
+  constructor(renderer) {
+    this.renderer = renderer;
+    this.group = new THREE.Group();
+    this.group.renderOrder = 55;
+    this.rotationY = renderer?.globeRotation || 0;
+    this.group.rotation.y = this.rotationY;
+    this.group.visible = false;
+    this.mesh = null;
+    this.material = null;
+    this.texture = null;
+    this.video = null;
+    this.image = null;
+    this.enabled = false;
+    this.kind = "mjpg";
+    this.url = "";
+    this.lat = 0;
+    this.lon = 0;
+    this.widthDeg = 16;
+    this.heightDeg = 9;
+    this.rotationDeg = 0;
+    this.altitude = 0.45;
+    this.scale = 1;
+    this.needsFrameUpdate = false;
+    this.lastFrameAt = 0;
+    this.frameIntervalMs = 33;
+    if (this.renderer?.scene) {
+      this.renderer.scene.add(this.group);
+    }
+  }
+
+  setEnabled(enabled) {
+    this.enabled = Boolean(enabled);
+    this.group.visible = this.enabled && this.renderer?.mode === "globe";
+    if (!this.enabled) {
+      this.pauseMedia();
+    } else {
+      this.resumeMedia();
+    }
+  }
+
+  setSource(kind, url) {
+    const nextKind = kind || "mjpg";
+    const nextUrl = url || "";
+    if (nextKind === this.kind && nextUrl === this.url) return;
+    this.kind = nextKind;
+    this.url = nextUrl;
+    this.disposeMedia();
+    if (!nextUrl) {
+      if (this.mesh) this.mesh.visible = false;
+      return;
+    }
+    if (nextKind === "video" || nextKind === "rtsp") {
+      const video = document.createElement("video");
+      video.src = nextUrl;
+      video.crossOrigin = "anonymous";
+      video.playsInline = true;
+      video.muted = true;
+      video.loop = true;
+      video.autoplay = true;
+      video.preload = "auto";
+      video.play().catch(() => {});
+      this.video = video;
+      const texture = new THREE.VideoTexture(video);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.generateMipmaps = false;
+      this.texture = texture;
+      this.needsFrameUpdate = false;
+      this.frameIntervalMs = 33;
+    } else {
+      const image = new Image();
+      image.crossOrigin = "anonymous";
+      image.referrerPolicy = "no-referrer";
+      image.decoding = "async";
+      image.src = nextUrl;
+      this.image = image;
+      const texture = new THREE.Texture(image);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.generateMipmaps = false;
+      texture.needsUpdate = false;
+      image.onload = () => {
+        texture.needsUpdate = true;
+        this.lastFrameAt = performance.now();
+      };
+      image.onerror = () => {
+        console.warn("Media overlay failed to load source.", {
+          kind: nextKind,
+          url: nextUrl,
+        });
+      };
+      this.texture = texture;
+      if (nextKind === "gif") {
+        this.needsFrameUpdate = true;
+        this.frameIntervalMs = 66;
+      } else {
+        this.needsFrameUpdate = false;
+        this.frameIntervalMs = 33;
+      }
+    }
+    this.ensureMesh();
+    this.updateMaterial();
+    this.rebuildGeometry();
+    if (this.mesh) this.mesh.visible = true;
+  }
+
+  setTransform(config) {
+    if (!config) return;
+    if (Number.isFinite(config.lat)) this.lat = config.lat;
+    if (Number.isFinite(config.lon)) this.lon = config.lon;
+    if (Number.isFinite(config.widthDeg)) this.widthDeg = config.widthDeg;
+    if (Number.isFinite(config.heightDeg)) this.heightDeg = config.heightDeg;
+    if (Number.isFinite(config.rotationDeg)) this.rotationDeg = config.rotationDeg;
+    if (Number.isFinite(config.altitude)) this.altitude = config.altitude;
+    if (Number.isFinite(config.scale)) this.scale = config.scale;
+    this.rebuildGeometry();
+  }
+
+  update(now = performance.now()) {
+    if (!this.enabled) return;
+    this.group.visible = this.renderer?.mode === "globe";
+    if (!this.group.visible) return;
+    if (
+      this.needsFrameUpdate &&
+      this.texture &&
+      this.image &&
+      this.image.complete &&
+      now - this.lastFrameAt > this.frameIntervalMs
+    ) {
+      this.texture.needsUpdate = true;
+      this.lastFrameAt = now;
+    }
+  }
+
+  clear() {
+    this.setSource(this.kind, "");
+    if (this.mesh) {
+      this.mesh.visible = false;
+    }
+  }
+
+  pauseMedia() {
+    if (this.video) {
+      this.video.pause();
+    }
+  }
+
+  resumeMedia() {
+    if (this.video) {
+      this.video.play().catch(() => {});
+    }
+  }
+
+  disposeMedia() {
+    if (this.video) {
+      this.video.pause();
+      this.video.removeAttribute("src");
+      this.video.load();
+    }
+    this.video = null;
+    if (this.image) {
+      this.image.onload = null;
+      this.image.onerror = null;
+      this.image.src = "";
+    }
+    this.image = null;
+    if (this.texture) {
+      this.texture.dispose();
+    }
+    this.texture = null;
+    this.needsFrameUpdate = false;
+    this.lastFrameAt = 0;
+    this.frameIntervalMs = 33;
+    if (this.material) {
+      this.material.map = null;
+      this.material.needsUpdate = true;
+    }
+  }
+
+  ensureMesh() {
+    if (this.mesh) return;
+    const material = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 1,
+      color: new THREE.Color(0xffffff),
+      side: THREE.FrontSide,
+      depthTest: true,
+      depthWrite: false,
+    });
+    material.polygonOffset = true;
+    material.polygonOffsetFactor = -2;
+    material.polygonOffsetUnits = -2;
+    const geometry = new THREE.SphereGeometry(
+      (this.renderer?.globeRadius || 120) + this.altitude,
+      32,
+      24,
+    );
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.renderOrder = 55;
+    mesh.frustumCulled = true;
+    this.mesh = mesh;
+    this.material = material;
+    this.group.add(mesh);
+  }
+
+  updateMaterial() {
+    if (!this.material || !this.texture) return;
+    this.material.map = this.texture;
+    this.material.needsUpdate = true;
+  }
+
+  rebuildGeometry() {
+    if (!this.mesh || !this.renderer) return;
+    const radius =
+      (this.renderer?.globeRadius || 120) +
+      Math.max(0.05, this.altitude);
+    const width = Math.max(0.5, Math.abs(this.widthDeg) * Math.max(0.1, this.scale));
+    const height = Math.max(0.5, Math.abs(this.heightDeg) * Math.max(0.1, this.scale));
+    const halfW = width / 2;
+    const halfH = height / 2;
+    const latNorth = clampLat(this.lat + halfH);
+    const latSouth = clampLat(this.lat - halfH);
+    const lonWest = wrapLon(this.lon - halfW);
+    const lonEast = wrapLon(this.lon + halfW);
+    let phiStart = ((lonWest + 180) * Math.PI) / 180;
+    let phiLength = ((lonEast - lonWest) * Math.PI) / 180;
+    if (phiLength <= 0) {
+      phiLength += TWO_PI;
+    }
+    const thetaStart = ((90 - latNorth) * Math.PI) / 180;
+    const thetaLength = ((latNorth - latSouth) * Math.PI) / 180;
+    const lonSpan = Math.abs(lonEast - lonWest);
+    const latSpan = Math.abs(latNorth - latSouth);
+    const widthSegments = Math.min(96, Math.max(10, Math.round(lonSpan / 1.8)));
+    const heightSegments = Math.min(72, Math.max(8, Math.round(latSpan / 1.8)));
+    const geometry = new THREE.SphereGeometry(
+      radius,
+      widthSegments,
+      heightSegments,
+      phiStart,
+      phiLength,
+      thetaStart,
+      thetaLength,
+    );
+    geometry.computeBoundingSphere();
+    this.mesh.geometry.dispose();
+    this.mesh.geometry = geometry;
+    this.mesh.rotation.set(0, 0, 0);
+    const normal = geoToSphere({ lat: this.lat, lon: this.lon }, 1);
+    const axis = new THREE.Vector3(normal.x, normal.y, normal.z).normalize();
+    if (this.rotationY) {
+      axis.applyAxisAngle(AXIS_Y, -this.rotationY);
+    }
+    if (Number.isFinite(this.rotationDeg) && this.rotationDeg !== 0) {
+      this.mesh.rotateOnAxis(
+        axis,
+        THREE.MathUtils.degToRad(this.rotationDeg),
+      );
+    }
+  }
+}
+
 const hashString = (value) => {
   let hash = 2166136261;
   for (let i = 0; i < value.length; i += 1) {
@@ -2921,6 +3186,32 @@ const geoToSphere = (geo, radius) => {
   const y = radius * Math.cos(phi);
   const z = radius * Math.sin(phi) * Math.sin(theta);
   return { x, y, z };
+};
+
+const wrapLon = (lon) => {
+  const value = ((lon + 180) % 360 + 360) % 360 - 180;
+  return value;
+};
+
+const resolveMediaUrl = (rawUrl, kind) => {
+  if (!rawUrl) return rawUrl;
+  const lowered = rawUrl.toLowerCase();
+  if (lowered.startsWith("data:") || lowered.startsWith("blob:")) {
+    return rawUrl;
+  }
+  if (kind === "video" || kind === "rtsp") {
+    return rawUrl;
+  }
+  let parsed;
+  try {
+    parsed = new URL(rawUrl, window.location.href);
+  } catch (error) {
+    return rawUrl;
+  }
+  if (parsed.origin === window.location.origin) {
+    return parsed.toString();
+  }
+  return `/ui/media-proxy?url=${encodeURIComponent(parsed.toString())}`;
 };
 
 const colorForAsset = (asset) => {
@@ -5039,6 +5330,94 @@ const setupShipControls = (renderer3d, bus, overlay, bubbleOverlay) => {
   }
 };
 
+const parseNumber = (value, fallback) => {
+  const num = Number.parseFloat(value);
+  return Number.isFinite(num) ? num : fallback;
+};
+
+const setupMediaOverlayControls = (renderer3d, overlay) => {
+  const panel = document.getElementById("media-overlay-panel");
+  if (!panel || !overlay) return;
+  const toggle = panel.querySelector("[data-media-overlay-toggle]");
+  const loadButton = panel.querySelector("[data-media-overlay-load]");
+  const clearButton = panel.querySelector("[data-media-overlay-clear]");
+  const typeSelect = document.getElementById("media-overlay-type");
+  const urlInput = document.getElementById("media-overlay-url");
+  const latInput = document.getElementById("media-overlay-lat");
+  const lonInput = document.getElementById("media-overlay-lon");
+  const widthInput = document.getElementById("media-overlay-width");
+  const heightInput = document.getElementById("media-overlay-height");
+  const rotationInput = document.getElementById("media-overlay-rotation");
+  const altitudeInput = document.getElementById("media-overlay-altitude");
+  const scaleInput = document.getElementById("media-overlay-scale");
+
+  const applyTransform = () => {
+    const lat = clampLat(parseNumber(latInput?.value, overlay.lat));
+    const lon = wrapLon(parseNumber(lonInput?.value, overlay.lon));
+    const widthDeg = Math.max(1, Math.abs(parseNumber(widthInput?.value, overlay.widthDeg)));
+    const heightDeg = Math.max(1, Math.abs(parseNumber(heightInput?.value, overlay.heightDeg)));
+    const rotationDeg = parseNumber(rotationInput?.value, overlay.rotationDeg);
+    const altitude = Math.max(0.05, parseNumber(altitudeInput?.value, overlay.altitude));
+    const scale = Math.max(0.1, parseNumber(scaleInput?.value, overlay.scale));
+    overlay.setTransform({
+      lat,
+      lon,
+      widthDeg,
+      heightDeg,
+      rotationDeg,
+      altitude,
+      scale,
+    });
+  };
+
+  const applySource = () => {
+    const kind = typeSelect?.value || "mjpg";
+    const url = (urlInput?.value || "").trim();
+    const resolvedUrl = resolveMediaUrl(url, kind);
+    overlay.setSource(kind, resolvedUrl);
+    applyTransform();
+  };
+
+  const setEnabled = (enabled) => {
+    if (toggle) toggle.setAttribute("aria-pressed", enabled ? "true" : "false");
+    overlay.setEnabled(enabled);
+  };
+
+  setEnabled(false);
+  applyTransform();
+
+  toggle?.addEventListener("click", () => {
+    const next = toggle.getAttribute("aria-pressed") !== "true";
+    setEnabled(next);
+    if (next && urlInput?.value) {
+      applySource();
+    }
+  });
+
+  loadButton?.addEventListener("click", () => {
+    applySource();
+    setEnabled(true);
+  });
+
+  clearButton?.addEventListener("click", () => {
+    overlay.clear();
+    if (urlInput) urlInput.value = "";
+    setEnabled(false);
+  });
+
+  [latInput, lonInput, widthInput, heightInput, rotationInput, altitudeInput, scaleInput].forEach(
+    (input) => {
+      input?.addEventListener("input", applyTransform);
+    },
+  );
+  typeSelect?.addEventListener("change", () => {
+    if (overlay.enabled) applySource();
+  });
+  urlInput?.addEventListener("change", () => {
+    if (overlay.enabled) applySource();
+  });
+};
+
 const setupTileProviders = (renderer3d) => {
   const select = document.getElementById("tile-provider");
   if (!select) return;
@@ -5098,6 +5477,7 @@ const main = () => {
   const flightOverlay = new FlightOverlay(renderer3d, world);
   const satelliteOverlay = new SatelliteOverlay(renderer3d, world);
   const shipOverlay = new ShipOverlay(renderer3d, world);
+  const mediaOverlay = new MediaOverlay(renderer3d);
 
   bus.on("entities:update", (payload) => {
     syncEntities(payload, world);
@@ -5118,6 +5498,7 @@ const main = () => {
   setupFlightControls(renderer3d, bus, flightOverlay, bubbleOverlay);
   setupSatelliteControls(renderer3d, bus, satelliteOverlay, bubbleOverlay);
   setupShipControls(renderer3d, bus, shipOverlay, bubbleOverlay);
+  setupMediaOverlayControls(renderer3d, mediaOverlay);
   setupPanelCollapsibles();
 
   const renderLoop = (() => {
@@ -5162,6 +5543,7 @@ const main = () => {
       flightOverlay.sync();
       satelliteOverlay.sync();
       shipOverlay.sync();
+      mediaOverlay.update(now);
       renderer3d.render(delta, () => {
         const entitiesPins = world.query(["Geo", "Pin"]);
         const flightEntities = flightOverlay.visible

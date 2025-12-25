@@ -171,6 +171,68 @@
               <div class="meta" id="ship-provider-label">Live vessel tracks via ArcGIS.</div>
             </div>
           </section>
+          <section class="panel-section" id="media-overlay-panel" data-collapsible="true" data-collapsed="true">
+            <button class="panel-header" type="button" aria-expanded="false">
+              <span class="panel-title">Media Overlay</span>
+              <span class="panel-toggle-icon" aria-hidden="true">+</span>
+            </button>
+            <div class="panel-body">
+              <div class="panel-actions">
+                <button data-media-overlay-toggle="overlay" aria-pressed="false">Overlay</button>
+              </div>
+              <div class="panel-field">
+                <label for="media-overlay-type">Source type</label>
+                <select id="media-overlay-type">
+                  <option value="mjpg">MJPG stream</option>
+                  <option value="rtsp">RTSP stream</option>
+                  <option value="video">Video (mp4/hls)</option>
+                  <option value="gif">Animated GIF</option>
+                  <option value="image">Static image</option>
+                </select>
+              </div>
+              <div class="panel-field">
+                <label for="media-overlay-url">Source URL</label>
+                <input
+                  id="media-overlay-url"
+                  type="text"
+                  placeholder="rtsp://, http(s)://.../stream.mjpg, https://.../video.mp4"
+                />
+              </div>
+              <div class="panel-actions">
+                <button type="button" data-media-overlay-load>Load</button>
+                <button type="button" data-media-overlay-clear>Clear</button>
+              </div>
+              <div class="panel-field">
+                <label for="media-overlay-lat">Latitude</label>
+                <input id="media-overlay-lat" type="number" step="0.1" value="0" />
+              </div>
+              <div class="panel-field">
+                <label for="media-overlay-lon">Longitude</label>
+                <input id="media-overlay-lon" type="number" step="0.1" value="0" />
+              </div>
+              <div class="panel-field">
+                <label for="media-overlay-width">Width (deg)</label>
+                <input id="media-overlay-width" type="number" step="0.5" value="16" />
+              </div>
+              <div class="panel-field">
+                <label for="media-overlay-height">Height (deg)</label>
+                <input id="media-overlay-height" type="number" step="0.5" value="9" />
+              </div>
+              <div class="panel-field">
+                <label for="media-overlay-rotation">Rotation (deg)</label>
+                <input id="media-overlay-rotation" type="number" step="1" value="0" />
+              </div>
+              <div class="panel-field">
+                <label for="media-overlay-altitude">Altitude</label>
+                <input id="media-overlay-altitude" type="number" step="0.05" value="0.45" />
+              </div>
+              <div class="panel-field">
+                <label for="media-overlay-scale">Scale</label>
+                <input id="media-overlay-scale" type="number" step="0.05" value="1" />
+              </div>
+              <div class="meta">Curved media sheet mapped to the globe surface.</div>
+            </div>
+          </section>
           <section class="panel-section" data-collapsible="true" data-collapsed="false">
             <button class="panel-header" type="button" aria-expanded="true">
               <span class="panel-title">Overlays</span>
