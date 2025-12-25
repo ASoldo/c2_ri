@@ -66,3 +66,24 @@ Keycloak for LDAP-backed auth can be installed with Helm; see `k8s/keycloak/READ
 ## ArgoCD
 
 Use the Application manifests under `k8s/argocd` after installing ArgoCD.
+
+## Push to Harbor image registry
+
+```sh
+Ran docker build -f docker/Dockerfile --build-arg BIN=c2-web -t harbor.c2.local/c2/c2-web:dev .
+  └ #0 building with "default" instance using docker driver
+
+    … +88 lines
+    #22 naming to harbor.c2.local/c2/c2-web:dev done
+    #22 DONE 0.6s
+
+• Ran docker push harbor.c2.local/c2/c2-web:dev
+  └ The push refers to repository [harbor.c2.local/c2/c2-web]
+    51e938fafbdd: Preparing
+    … +14 lines
+    51e938fafbdd: Pushed
+    dev: digest: sha256:84b665716b3415d0ad2108bca4f003145a4a92e28f41ab7f9fd1327e0bc0c8fd size: 1784
+
+• Ran kubectl -n c2-system rollout restart deploy/c2-web
+  └ deployment.apps/c2-web restarted
+```

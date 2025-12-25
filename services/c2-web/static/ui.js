@@ -1133,6 +1133,8 @@ class Renderer3D {
     this.weatherOpacity = WEATHER_CONFIG.defaultOpacity;
     this.weatherVisible = false;
     this.globeRotation = Math.PI;
+    this.overlayScene = null;
+    this.overlayCamera = null;
     this.dayMap = null;
     this.nightMap = null;
     this.normalMap = null;
@@ -1176,6 +1178,8 @@ class Renderer3D {
       alpha: true,
     });
     this.renderer.setPixelRatio(devicePixelRatio);
+    this.renderer.autoClear = false;
+    this.renderer.setClearColor(0x000000, 0);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
@@ -1336,6 +1340,11 @@ class Renderer3D {
     this.refreshWeatherProvider();
     this.setWeatherVisible(false);
     this.setMode("globe", true);
+  }
+
+  setOverlayScene(scene, camera) {
+    this.overlayScene = scene;
+    this.overlayCamera = camera;
   }
 
   attachControls(allowRotate) {
@@ -1594,7 +1603,7 @@ class Renderer3D {
     }
   }
 
-  render(deltaMs = 16) {
+  render(deltaMs = 16, onBeforeOverlay = null) {
     if (!this.renderer || !this.scene || !this.camera) return;
     if (els.map3d && els.map3d.style.display === "none") return;
     if (this.clouds && this.mode === "globe" && this.showClouds) {
@@ -1612,7 +1621,15 @@ class Renderer3D {
     if (this.weatherManager && this.weatherProvider && this.weatherVisible && this.mode === "globe") {
       this.weatherManager.update(this.camera, this.size);
     }
+    this.renderer.clear();
     this.renderer.render(this.scene, this.camera);
+    if (this.overlayScene && this.overlayCamera) {
+      if (typeof onBeforeOverlay === "function") {
+        onBeforeOverlay();
+      }
+      this.renderer.clearDepth();
+      this.renderer.render(this.overlayScene, this.overlayCamera);
+    }
   }
 
   updateCameraDistance(width, height) {
@@ -2393,22 +2410,19 @@ class FlightMeshLayer {
 }
 
 class FlightOverlay {
-  constructor(renderer, world, layerEl, edgeLayer) {
+  constructor(renderer, world) {
     this.renderer = renderer;
     this.world = world;
     this.visible = false;
-    this.pinLayer = new FlightPinLayer(layerEl, renderer, els.board, edgeLayer);
     this.trails = new FlightTrailLayer(renderer);
     this.planes = new FlightMeshLayer(renderer);
     this.lastSnapshot = null;
-    this.pinLayer.setVisible(false);
     this.trails.setVisible(false);
     this.planes.setVisible(false);
   }
 
   setVisible(visible) {
     this.visible = visible;
-    this.pinLayer.setVisible(visible);
     this.trails.setVisible(visible && this.renderer?.mode === "globe");
     this.planes.setVisible(visible && this.renderer?.mode === "globe");
   }
@@ -2423,8 +2437,6 @@ class FlightOverlay {
   sync() {
     if (!this.visible) return;
     const flights = this.world.query(["Geo", "Flight"]);
-    this.pinLayer.syncPins(flights, this.world);
-    this.pinLayer.prune(this.world);
     this.trails.setVisible(this.visible && this.renderer?.mode === "globe");
     this.planes.setVisible(this.visible && this.renderer?.mode === "globe");
     this.planes.sync(flights, this.world);
@@ -2624,20 +2636,17 @@ class SatelliteMeshLayer {
 }
 
 class SatelliteOverlay {
-  constructor(renderer, world, layerEl, edgeLayer) {
+  constructor(renderer, world) {
     this.renderer = renderer;
     this.world = world;
     this.visible = false;
-    this.pinLayer = new SatellitePinLayer(layerEl, renderer, els.board, edgeLayer);
     this.meshes = new SatelliteMeshLayer(renderer);
     this.lastSnapshot = null;
-    this.pinLayer.setVisible(false);
     this.meshes.setVisible(false);
   }
 
   setVisible(visible) {
     this.visible = visible;
-    this.pinLayer.setVisible(visible);
     this.meshes.setVisible(visible && this.renderer?.mode === "globe");
   }
 
@@ -2650,8 +2659,6 @@ class SatelliteOverlay {
   sync() {
     if (!this.visible) return;
     const satellites = this.world.query(["Geo", "Satellite"]);
-    this.pinLayer.syncPins(satellites, this.world);
-    this.pinLayer.prune(this.world);
     this.meshes.setVisible(this.visible && this.renderer?.mode === "globe");
     this.meshes.sync(satellites, this.world);
   }
@@ -2856,20 +2863,17 @@ class ShipMeshLayer {
 }
 
 class ShipOverlay {
-  constructor(renderer, world, layerEl, edgeLayer) {
+  constructor(renderer, world) {
     this.renderer = renderer;
     this.world = world;
     this.visible = false;
-    this.pinLayer = new ShipPinLayer(layerEl, renderer, els.board, edgeLayer);
     this.meshes = new ShipMeshLayer(renderer);
     this.lastSnapshot = null;
-    this.pinLayer.setVisible(false);
     this.meshes.setVisible(false);
   }
 
   setVisible(visible) {
     this.visible = visible;
-    this.pinLayer.setVisible(visible);
     this.meshes.setVisible(visible && this.renderer?.mode === "globe");
   }
 
@@ -2882,8 +2886,6 @@ class ShipOverlay {
   sync() {
     if (!this.visible) return;
     const ships = this.world.query(["Geo", "Ship"]);
-    this.pinLayer.syncPins(ships, this.world);
-    this.pinLayer.prune(this.world);
     this.meshes.setVisible(this.visible && this.renderer?.mode === "globe");
     this.meshes.sync(ships, this.world);
   }
@@ -3328,6 +3330,1014 @@ const collapseLabel = (label) => {
   return trimmed.slice(0, 3).toUpperCase();
 };
 
+const BUBBLE_FONT_STACK =
+  '"IBM Plex Sans", "Space Grotesk", "Manrope", sans-serif';
+
+const BUBBLE_PIN_BASE = {
+  shape: "pill",
+  fontSize: 11,
+  fontWeight: 600,
+  paddingX: 10,
+  paddingY: 6,
+  textColor: "#0f172a",
+  borderWidth: 1,
+  shadowBlur: 14,
+  uppercase: false,
+  letterSpacing: 0,
+};
+
+const PIN_STYLE_DEFAULT = {
+  ...BUBBLE_PIN_BASE,
+  fontWeight: 500,
+  background: "rgba(34, 211, 238, 0.9)",
+  borderColor: null,
+  borderWidth: 0,
+  shadowColor: null,
+  shadowBlur: 0,
+};
+
+const PIN_STYLE_SELECTED = {
+  ...BUBBLE_PIN_BASE,
+  background: "rgba(250, 204, 21, 0.95)",
+  borderColor: "rgba(250, 204, 21, 0.45)",
+  borderWidth: 2,
+  shadowColor: "rgba(250, 204, 21, 0.4)",
+  shadowBlur: 10,
+  textColor: "#1e293b",
+};
+
+const PIN_STYLE_FLIGHT = {
+  ...BUBBLE_PIN_BASE,
+  background: "rgba(34, 211, 238, 0.9)",
+  borderColor: "rgba(34, 211, 238, 0.55)",
+  shadowColor: "rgba(34, 211, 238, 0.25)",
+};
+
+const PIN_STYLE_FLIGHT_GROUND = {
+  ...BUBBLE_PIN_BASE,
+  background: "rgba(148, 163, 184, 0.8)",
+  borderColor: "rgba(148, 163, 184, 0.7)",
+  shadowColor: "rgba(148, 163, 184, 0.3)",
+};
+
+const PIN_STYLE_SATELLITE = {
+  ...BUBBLE_PIN_BASE,
+  background: "rgba(250, 204, 21, 0.9)",
+  borderColor: "rgba(250, 204, 21, 0.6)",
+  shadowColor: "rgba(250, 204, 21, 0.25)",
+};
+
+const PIN_STYLE_SATELLITE_MEO = {
+  ...BUBBLE_PIN_BASE,
+  background: "rgba(56, 189, 248, 0.85)",
+  borderColor: "rgba(56, 189, 248, 0.7)",
+  shadowColor: "rgba(56, 189, 248, 0.25)",
+};
+
+const PIN_STYLE_SATELLITE_GEO = {
+  ...BUBBLE_PIN_BASE,
+  background: "rgba(163, 230, 53, 0.85)",
+  borderColor: "rgba(163, 230, 53, 0.7)",
+  shadowColor: "rgba(163, 230, 53, 0.25)",
+};
+
+const PIN_STYLE_SATELLITE_UNKNOWN = {
+  ...BUBBLE_PIN_BASE,
+  background: "rgba(148, 163, 184, 0.8)",
+  borderColor: "rgba(148, 163, 184, 0.7)",
+  shadowColor: "rgba(148, 163, 184, 0.3)",
+};
+
+const PIN_STYLE_SHIP = {
+  ...BUBBLE_PIN_BASE,
+  background: "rgba(56, 189, 248, 0.9)",
+  borderColor: "rgba(56, 189, 248, 0.6)",
+  shadowColor: "rgba(56, 189, 248, 0.25)",
+};
+
+const PIN_STYLE_SHIP_TANKER = {
+  ...BUBBLE_PIN_BASE,
+  background: "rgba(249, 115, 22, 0.88)",
+  borderColor: "rgba(249, 115, 22, 0.7)",
+  shadowColor: "rgba(249, 115, 22, 0.25)",
+};
+
+const PIN_STYLE_SHIP_PASSENGER = {
+  ...BUBBLE_PIN_BASE,
+  background: "rgba(163, 230, 53, 0.88)",
+  borderColor: "rgba(163, 230, 53, 0.7)",
+  shadowColor: "rgba(163, 230, 53, 0.25)",
+};
+
+const PIN_STYLE_SHIP_FISHING = {
+  ...BUBBLE_PIN_BASE,
+  background: "rgba(250, 204, 21, 0.88)",
+  borderColor: "rgba(250, 204, 21, 0.7)",
+  shadowColor: "rgba(250, 204, 21, 0.25)",
+};
+
+const PIN_STYLE_SHIP_UNKNOWN = {
+  ...BUBBLE_PIN_BASE,
+  background: "rgba(148, 163, 184, 0.8)",
+  borderColor: "rgba(148, 163, 184, 0.7)",
+  shadowColor: "rgba(148, 163, 184, 0.3)",
+};
+
+const BUBBLE_EDGE_BASE = {
+  shape: "circle",
+  size: 34,
+  fontSize: 12,
+  fontWeight: 700,
+  textColor: "#0f172a",
+  borderWidth: 1,
+  shadowBlur: 16,
+  uppercase: true,
+  letterSpacing: 0.06,
+  paddingX: 0,
+  paddingY: 0,
+};
+
+const EDGE_STYLE_DEFAULT = {
+  ...BUBBLE_EDGE_BASE,
+  background: "rgba(34, 211, 238, 0.9)",
+  borderColor: "rgba(34, 211, 238, 0.6)",
+  shadowColor: "rgba(34, 211, 238, 0.35)",
+};
+
+const EDGE_STYLE_OCCLUDED = {
+  ...BUBBLE_EDGE_BASE,
+  background: "rgba(15, 23, 42, 0.9)",
+  borderColor: "rgba(148, 163, 184, 0.5)",
+  shadowColor: "rgba(15, 23, 42, 0.35)",
+  textColor: "#e2e8f0",
+};
+
+const EDGE_STYLE_SELECTED = {
+  ...BUBBLE_EDGE_BASE,
+  background: "rgba(250, 204, 21, 0.95)",
+  borderColor: "rgba(217, 119, 6, 0.8)",
+  shadowColor: "rgba(250, 204, 21, 0.4)",
+};
+
+const EDGE_STYLE_FLIGHT = {
+  ...BUBBLE_EDGE_BASE,
+  background: "rgba(14, 165, 233, 0.9)",
+  borderColor: "rgba(14, 165, 233, 0.7)",
+  shadowColor: "rgba(14, 165, 233, 0.35)",
+};
+
+const EDGE_STYLE_SATELLITE = {
+  ...BUBBLE_EDGE_BASE,
+  background: "rgba(250, 204, 21, 0.9)",
+  borderColor: "rgba(250, 204, 21, 0.7)",
+  shadowColor: "rgba(250, 204, 21, 0.35)",
+};
+
+const EDGE_STYLE_SHIP = {
+  ...BUBBLE_EDGE_BASE,
+  background: "rgba(56, 189, 248, 0.9)",
+  borderColor: "rgba(56, 189, 248, 0.7)",
+  shadowColor: "rgba(56, 189, 248, 0.35)",
+};
+
+const bubbleMeasureCanvas = document.createElement("canvas");
+const bubbleMeasureCtx = bubbleMeasureCanvas.getContext("2d");
+
+const drawRoundedRect = (ctx, x, y, width, height, radius) => {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + width, y, x + width, y + height, r);
+  ctx.arcTo(x + width, y + height, x, y + height, r);
+  ctx.arcTo(x, y + height, x, y, r);
+  ctx.arcTo(x, y, x + width, y, r);
+  ctx.closePath();
+};
+
+const measureTextHeight = (metrics, fallback) => {
+  const ascent = metrics.actualBoundingBoxAscent;
+  const descent = metrics.actualBoundingBoxDescent;
+  if (Number.isFinite(ascent) && Number.isFinite(descent)) {
+    return ascent + descent;
+  }
+  return fallback;
+};
+
+const drawTextWithSpacing = (ctx, text, centerX, centerY, spacing) => {
+  if (!text) return;
+  const letters = text.split("");
+  const widths = letters.map((letter) => ctx.measureText(letter).width);
+  const total =
+    widths.reduce((sum, width) => sum + width, 0) +
+    spacing * Math.max(0, letters.length - 1);
+  let cursor = centerX - total / 2;
+  letters.forEach((letter, index) => {
+    const width = widths[index] || 0;
+    ctx.fillText(letter, cursor + width / 2, centerY);
+    cursor += width + spacing;
+  });
+};
+
+const buildBubbleCanvas = (text, style, pixelRatio) => {
+  const fontSize = style.fontSize || 11;
+  const fontWeight = style.fontWeight || 600;
+  const font = `${fontWeight} ${fontSize}px ${BUBBLE_FONT_STACK}`;
+  const paddingX = style.paddingX || 0;
+  const paddingY = style.paddingY || 0;
+  const borderWidth = style.borderWidth || 0;
+  const shadowBlur = style.shadowBlur || 0;
+  const shadowPad = shadowBlur ? Math.ceil(shadowBlur * 0.9) : 0;
+  const displayText = style.uppercase ? text.toUpperCase() : text;
+
+  bubbleMeasureCtx.font = font;
+  const metrics = bubbleMeasureCtx.measureText(displayText);
+  const textWidth = metrics.width || 0;
+  const textHeight = measureTextHeight(metrics, fontSize);
+
+  let width = style.size || 0;
+  let height = style.size || 0;
+  if (style.shape !== "circle") {
+    width = Math.ceil(textWidth + paddingX * 2 + borderWidth * 2);
+    height = Math.ceil(textHeight + paddingY * 2 + borderWidth * 2);
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil((width + shadowPad * 2) * pixelRatio);
+  canvas.height = Math.ceil((height + shadowPad * 2) * pixelRatio);
+  const ctx = canvas.getContext("2d");
+  ctx.scale(pixelRatio, pixelRatio);
+
+  const centerX = shadowPad + width / 2;
+  const centerY = shadowPad + height / 2;
+  const shapeX = shadowPad + borderWidth / 2;
+  const shapeY = shadowPad + borderWidth / 2;
+  const shapeWidth = width - borderWidth;
+  const shapeHeight = height - borderWidth;
+
+  ctx.save();
+  ctx.fillStyle = style.background;
+  ctx.shadowColor = style.shadowColor || "transparent";
+  ctx.shadowBlur = shadowBlur;
+  if (style.shape === "circle") {
+    const radius = shapeWidth / 2;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    drawRoundedRect(ctx, shapeX, shapeY, shapeWidth, shapeHeight, shapeHeight / 2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  if (borderWidth > 0 && style.borderColor) {
+    ctx.save();
+    ctx.strokeStyle = style.borderColor;
+    ctx.lineWidth = borderWidth;
+    if (style.shape === "circle") {
+      const radius = shapeWidth / 2;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      drawRoundedRect(ctx, shapeX, shapeY, shapeWidth, shapeHeight, shapeHeight / 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  ctx.fillStyle = style.textColor;
+  ctx.font = font;
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+  if (style.letterSpacing) {
+    drawTextWithSpacing(
+      ctx,
+      displayText,
+      centerX,
+      centerY,
+      style.letterSpacing * fontSize,
+    );
+  } else {
+    ctx.fillText(displayText, centerX, centerY);
+  }
+
+  return {
+    canvas,
+    width: width + shadowPad * 2,
+    height: height + shadowPad * 2,
+  };
+};
+
+const pinBaseStyleFor = (kind, variant) => {
+  if (kind === "flight") {
+    return variant === "ground" ? PIN_STYLE_FLIGHT_GROUND : PIN_STYLE_FLIGHT;
+  }
+  if (kind === "satellite") {
+    if (variant === "meo") return PIN_STYLE_SATELLITE_MEO;
+    if (variant === "geo") return PIN_STYLE_SATELLITE_GEO;
+    if (variant === "unknown") return PIN_STYLE_SATELLITE_UNKNOWN;
+    return PIN_STYLE_SATELLITE;
+  }
+  if (kind === "ship") {
+    if (variant === "tanker") return PIN_STYLE_SHIP_TANKER;
+    if (variant === "passenger") return PIN_STYLE_SHIP_PASSENGER;
+    if (variant === "fishing") return PIN_STYLE_SHIP_FISHING;
+    if (variant === "unknown") return PIN_STYLE_SHIP_UNKNOWN;
+    return PIN_STYLE_SHIP;
+  }
+  return PIN_STYLE_DEFAULT;
+};
+
+const pinBaseStyleKeyFor = (kind, variant) => {
+  return `pin:${kind || "default"}:${variant || "default"}`;
+};
+
+const edgeBaseStyleFor = (kind, occluded) => {
+  if (occluded) return EDGE_STYLE_OCCLUDED;
+  if (kind === "flight") return EDGE_STYLE_FLIGHT;
+  if (kind === "satellite") return EDGE_STYLE_SATELLITE;
+  if (kind === "ship") return EDGE_STYLE_SHIP;
+  return EDGE_STYLE_DEFAULT;
+};
+
+const edgeBaseStyleKeyFor = (kind, occluded) => {
+  if (occluded) return "edge:occluded";
+  return `edge:${kind || "default"}`;
+};
+
+class BubbleTextureCache {
+  constructor(renderer) {
+    this.renderer = renderer;
+    this.cache = new Map();
+    this.pixelRatio = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  }
+
+  get(text, styleKey, style) {
+    const key = `${styleKey}|${text}`;
+    let cached = this.cache.get(key);
+    if (cached) return cached;
+    const { canvas, width, height } = buildBubbleCanvas(
+      text,
+      style,
+      this.pixelRatio,
+    );
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.generateMipmaps = false;
+    cached = { texture, width, height };
+    this.cache.set(key, cached);
+    return cached;
+  }
+}
+
+class BubblePopup {
+  constructor(onAction, onClose) {
+    this.onAction = onAction;
+    this.onClose = onClose;
+    this.popupBackdrop = null;
+    this.popup = null;
+    this.activeEntityId = null;
+    this.initPopup();
+  }
+
+  initPopup() {
+    const backdrop = document.createElement("div");
+    backdrop.className = "edge-popup-backdrop";
+    const popup = document.createElement("div");
+    popup.className = "edge-popup";
+    backdrop.appendChild(popup);
+    document.body.appendChild(backdrop);
+    backdrop.addEventListener("click", () => this.close());
+    popup.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const button = event.target.closest("button[data-action]");
+      if (!button || !this.activeEntityId) return;
+      const action = button.dataset.action;
+      if (action) this.onAction?.(action, this.activeEntityId);
+      this.close();
+    });
+    this.popupBackdrop = backdrop;
+    this.popup = popup;
+  }
+
+  openFor(entityId, label, details) {
+    if (!this.popup || !this.popupBackdrop) return;
+    this.activeEntityId = entityId;
+    const safeLabel = label || "Entity";
+    const detailsHtml = details ? `<div class="edge-popup-meta">${details}</div>` : "";
+    this.popup.innerHTML = `
+      <div class="edge-popup-title">${safeLabel}</div>
+      ${detailsHtml}
+      <div class="edge-popup-actions">
+        <button data-action="focus">Focus</button>
+        <button data-action="details">Details</button>
+        <button data-action="task">Task</button>
+      </div>
+    `;
+    this.popupBackdrop.classList.add("active");
+  }
+
+  close(silent = false) {
+    this.activeEntityId = null;
+    if (this.popupBackdrop) this.popupBackdrop.classList.remove("active");
+    if (!silent) this.onClose?.();
+  }
+}
+
+class BubbleOverlay {
+  constructor(renderer, boundsEl, popup) {
+    this.renderer = renderer;
+    this.boundsEl = boundsEl;
+    this.popup = popup;
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.OrthographicCamera(0, 1, 1, 0, -1000, 1000);
+    this.camera.position.z = 10;
+    this.camera.userData.overlay = true;
+    this.groups = {
+      pins: new THREE.Group(),
+      flights: new THREE.Group(),
+      satellites: new THREE.Group(),
+      ships: new THREE.Group(),
+      edges: new THREE.Group(),
+    };
+    this.scene.add(this.groups.pins);
+    this.scene.add(this.groups.flights);
+    this.scene.add(this.groups.satellites);
+    this.scene.add(this.groups.ships);
+    this.scene.add(this.groups.edges);
+    this.textureCache = new BubbleTextureCache(renderer);
+    this.entries = {
+      pins: new Map(),
+      flights: new Map(),
+      satellites: new Map(),
+      ships: new Map(),
+      edges: new Map(),
+    };
+    this.visible = {
+      pins: true,
+      flights: false,
+      satellites: false,
+      ships: false,
+    };
+    this.size = { width: 1, height: 1 };
+    this.raycaster = new THREE.Raycaster();
+    this.pointer = new THREE.Vector2();
+    this.pointerDown = null;
+    this.selected = null;
+    this.controlsWasEnabled = null;
+    if (this.renderer?.setOverlayScene) {
+      this.renderer.setOverlayScene(this.scene, this.camera);
+    }
+    this.bindEvents();
+  }
+
+  bindEvents() {
+    const canvas = this.renderer?.canvas;
+    if (!canvas) return;
+    const onPointerDown = (event) => {
+      const hit = this.pick(event);
+      if (!hit) return;
+      this.pointerDown = { hit, id: event.pointerId };
+      const controls = this.renderer?.controls;
+      if (controls && this.controlsWasEnabled === null) {
+        this.controlsWasEnabled = controls.enabled;
+        controls.enabled = false;
+      }
+      if (canvas.setPointerCapture) {
+        canvas.setPointerCapture(event.pointerId);
+      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    const onPointerUp = (event) => {
+      if (!this.pointerDown || this.pointerDown.id !== event.pointerId) return;
+      const hit = this.pick(event);
+      if (hit && hit.entry === this.pointerDown.hit.entry) {
+        this.handleSelection(hit.entry);
+      }
+      this.pointerDown = null;
+      if (canvas.releasePointerCapture) {
+        canvas.releasePointerCapture(event.pointerId);
+      }
+      if (this.controlsWasEnabled !== null && this.renderer?.controls) {
+        this.renderer.controls.enabled = this.controlsWasEnabled;
+        this.controlsWasEnabled = null;
+      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    const onPointerCancel = (event) => {
+      if (this.pointerDown && canvas.releasePointerCapture) {
+        canvas.releasePointerCapture(event.pointerId);
+      }
+      this.pointerDown = null;
+      if (this.controlsWasEnabled !== null && this.renderer?.controls) {
+        this.renderer.controls.enabled = this.controlsWasEnabled;
+        this.controlsWasEnabled = null;
+      }
+    };
+    canvas.addEventListener("pointerdown", onPointerDown, { capture: true });
+    canvas.addEventListener("pointerup", onPointerUp, { capture: true });
+    canvas.addEventListener("pointercancel", onPointerCancel, { capture: true });
+  }
+
+  resize(width, height) {
+    this.size = { width, height };
+    this.camera.left = 0;
+    this.camera.right = width;
+    this.camera.top = height;
+    this.camera.bottom = 0;
+    this.camera.updateProjectionMatrix();
+  }
+
+  setPinsVisible(visible) {
+    this.visible.pins = visible;
+    this.groups.pins.visible = visible;
+    if (!visible) this.clearSelectionForGroup("pins");
+  }
+
+  setFlightsVisible(visible) {
+    this.visible.flights = visible;
+    this.groups.flights.visible = visible;
+    if (!visible) this.clearSelectionForGroup("flights");
+  }
+
+  setSatellitesVisible(visible) {
+    this.visible.satellites = visible;
+    this.groups.satellites.visible = visible;
+    if (!visible) this.clearSelectionForGroup("satellites");
+  }
+
+  setShipsVisible(visible) {
+    this.visible.ships = visible;
+    this.groups.ships.visible = visible;
+    if (!visible) this.clearSelectionForGroup("ships");
+  }
+
+  clearSelectionForGroup(group) {
+    if (!this.selected || this.selected.group !== group) return;
+    this.clearSelection();
+    this.popup?.close(true);
+  }
+
+  clearSelection() {
+    if (!this.selected?.entry) return;
+    this.applySelection(this.selected.entry, false);
+    this.selected = null;
+  }
+
+  pick(event) {
+    const canvas = this.renderer?.canvas;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const x = (event.clientX - rect.left) / rect.width;
+    const y = (event.clientY - rect.top) / rect.height;
+    this.pointer.set(x * 2 - 1, -(y * 2 - 1));
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const targets = [
+      this.groups.edges,
+      this.groups.pins,
+      this.groups.flights,
+      this.groups.satellites,
+      this.groups.ships,
+    ];
+    const hits = this.raycaster.intersectObjects(targets, true);
+    const match = hits.find((hit) => hit.object?.userData?.bubble);
+    if (!match) return null;
+    return { entry: match.object.userData.bubble };
+  }
+
+  handleSelection(entry) {
+    if (!entry) return;
+    if (this.selected && this.selected.entry === entry) {
+      this.clearSelection();
+      this.popup?.close(true);
+      return;
+    }
+    if (this.selected?.entry) {
+      this.applySelection(this.selected.entry, false);
+    }
+    this.selected = { entry, group: entry.group, entityId: entry.entityId };
+    this.applySelection(entry, true);
+    this.popup?.openFor(entry.entityId, entry.label, entry.details);
+  }
+
+  applySelection(entry, selected) {
+    if (!entry) return;
+    entry.selected = selected;
+    const styleKey = selected
+      ? entry.selectedStyleKey
+      : entry.baseStyleKey;
+    const style = selected ? entry.selectedStyle : entry.baseStyle;
+    this.applyStyle(entry, styleKey, style);
+  }
+
+  applyStyle(entry, styleKey, style) {
+    const text = entry.text || "";
+    const textureKey = `${styleKey}|${text}`;
+    if (entry.textureKey === textureKey) return;
+    const { texture, width, height } = this.textureCache.get(
+      text,
+      styleKey,
+      style,
+    );
+    entry.sprite.material.map = texture;
+    entry.sprite.material.needsUpdate = true;
+    entry.sprite.scale.set(width, height, 1);
+    entry.textureKey = textureKey;
+  }
+
+  ensureEntry(map, groupName, entityId, data) {
+    let entry = map.get(entityId);
+    if (!entry) {
+      const material = new THREE.SpriteMaterial({
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+      });
+      const sprite = new THREE.Sprite(material);
+      sprite.renderOrder = groupName === "edges" ? 230 : 210;
+      entry = {
+        entityId,
+        group: groupName,
+        sprite,
+        text: "",
+        label: "",
+        details: "",
+        baseStyleKey: "",
+        baseStyle: null,
+        selectedStyleKey: groupName === "edges" ? "edge:selected" : "pin:selected",
+        selectedStyle: groupName === "edges" ? EDGE_STYLE_SELECTED : PIN_STYLE_SELECTED,
+        textureKey: "",
+        selected: false,
+      };
+      sprite.userData.bubble = entry;
+      this.groups[groupName].add(sprite);
+      map.set(entityId, entry);
+    }
+    entry.text = data.text || "";
+    entry.label = data.label || "Entity";
+    entry.details = data.details || "";
+    entry.baseStyleKey = data.baseStyleKey;
+    entry.baseStyle = data.baseStyle;
+    entry.selectedStyleKey =
+      groupName === "edges" ? "edge:selected" : "pin:selected";
+    entry.selectedStyle = groupName === "edges" ? EDGE_STYLE_SELECTED : PIN_STYLE_SELECTED;
+    this.applySelection(entry, data.selected);
+    return entry;
+  }
+
+  positionEntry(entry, screenX, screenY) {
+    entry.sprite.position.set(screenX, this.size.height - screenY, 0);
+  }
+
+  hideEntry(entry) {
+    if (!entry) return;
+    entry.sprite.visible = false;
+    if (this.selected?.entry === entry) {
+      this.clearSelection();
+      this.popup?.close(true);
+    }
+  }
+
+  pruneEntries(map, seen) {
+    for (const [entity, entry] of map.entries()) {
+      if (seen.has(entity)) continue;
+      if (this.selected?.entry === entry) {
+        this.clearSelection();
+        this.popup?.close(true);
+      }
+      this.groups[entry.group].remove(entry.sprite);
+      entry.sprite.material.dispose();
+      map.delete(entity);
+    }
+  }
+
+  syncPins(entities, world) {
+    const seen = new Set();
+    if (!this.visible.pins) {
+      this.groups.pins.visible = false;
+    } else {
+      this.groups.pins.visible = true;
+    }
+    const bounds = this.boundsEl?.getBoundingClientRect?.();
+    const clamp = bounds || {
+      left: 0,
+      top: 0,
+      right: this.size.width,
+      bottom: this.size.height,
+    };
+    const pad = 18;
+    entities.forEach((entity) => {
+      const pin = world.getComponent(entity, "Pin");
+      const meta = world.getComponent(entity, "Meta");
+      if (!pin) return;
+      if (meta?.kind === "flight" || meta?.kind === "satellite" || meta?.kind === "ship") {
+        return;
+      }
+      const geo = world.getComponent(entity, "Geo");
+      if (!geo || !this.renderer) return;
+      const pos = this.renderer.positionForGeo(geo, this.renderer.markerAltitude + 1.5);
+      const screen = this.renderer.projectToScreen(pos);
+      if (!screen) return;
+      const withinBounds =
+        screen.x >= clamp.left + pad &&
+        screen.x <= clamp.right - pad &&
+        screen.y >= clamp.top + pad &&
+        screen.y <= clamp.bottom - pad;
+      const visible = this.visible.pins && screen.visible && withinBounds;
+      const baseStyle = pinBaseStyleFor("default", "default");
+      const baseStyleKey = pinBaseStyleKeyFor("default", "default");
+      const entry = this.ensureEntry(this.entries.pins, "pins", entity, {
+        text: pin.label || "Entity",
+        label: pin.label || meta?.data?.name || "Entity",
+        details: "",
+        baseStyleKey,
+        baseStyle,
+        selected:
+          this.selected?.entityId === entity && this.selected.group === "pins",
+      });
+      entry.sprite.visible = visible;
+      if (visible) {
+        this.positionEntry(entry, screen.x, screen.y);
+      } else {
+        this.hideEntry(entry);
+      }
+      seen.add(entity);
+    });
+    this.pruneEntries(this.entries.pins, seen);
+  }
+
+  syncFlights(entities, world) {
+    const seen = new Set();
+    if (!this.visible.flights) {
+      this.groups.flights.visible = false;
+    } else {
+      this.groups.flights.visible = true;
+    }
+    const bounds = this.boundsEl?.getBoundingClientRect?.();
+    const clamp = bounds || {
+      left: 0,
+      top: 0,
+      right: this.size.width,
+      bottom: this.size.height,
+    };
+    const pad = 22;
+    entities.forEach((entity) => {
+      const flight = world.getComponent(entity, "Flight");
+      if (!flight) return;
+      const geo = world.getComponent(entity, "Geo");
+      if (!geo || !this.renderer) return;
+      const altitudeKm = Number.isFinite(flight.altitude_m)
+        ? flight.altitude_m / 1000
+        : 8;
+      const altitude = Math.min(
+        8,
+        Math.max(0.6, altitudeKm * FLIGHT_CONFIG.altitudeScale),
+      );
+      const pos = this.renderer.positionForGeo(
+        geo,
+        this.renderer.markerAltitude + altitude,
+      );
+      const screen = this.renderer.projectToScreen(pos);
+      if (!screen) return;
+      const withinBounds =
+        screen.x >= clamp.left + pad &&
+        screen.x <= clamp.right - pad &&
+        screen.y >= clamp.top + pad &&
+        screen.y <= clamp.bottom - pad;
+      const visible = this.visible.flights && screen.visible && withinBounds;
+      const label = formatFlightLabel(flight);
+      const details = formatFlightDetails(flight);
+      const variant = flight.on_ground ? "ground" : "air";
+      const baseStyle = pinBaseStyleFor("flight", variant);
+      const baseStyleKey = pinBaseStyleKeyFor("flight", variant);
+      const entry = this.ensureEntry(this.entries.flights, "flights", entity, {
+        text: label,
+        label,
+        details,
+        baseStyleKey,
+        baseStyle,
+        selected:
+          this.selected?.entityId === entity && this.selected.group === "flights",
+      });
+      entry.sprite.visible = visible;
+      if (visible) {
+        this.positionEntry(entry, screen.x, screen.y);
+      } else {
+        this.hideEntry(entry);
+      }
+      seen.add(entity);
+    });
+    this.pruneEntries(this.entries.flights, seen);
+  }
+
+  syncSatellites(entities, world) {
+    const seen = new Set();
+    if (!this.visible.satellites) {
+      this.groups.satellites.visible = false;
+    } else {
+      this.groups.satellites.visible = true;
+    }
+    const bounds = this.boundsEl?.getBoundingClientRect?.();
+    const clamp = bounds || {
+      left: 0,
+      top: 0,
+      right: this.size.width,
+      bottom: this.size.height,
+    };
+    const pad = 22;
+    entities.forEach((entity) => {
+      const satellite = world.getComponent(entity, "Satellite");
+      if (!satellite) return;
+      const geo = world.getComponent(entity, "Geo");
+      if (!geo || !this.renderer) return;
+      const altitude = altitudeForSatellite(satellite);
+      const pos = this.renderer.positionForGeo(
+        geo,
+        this.renderer.markerAltitude + altitude,
+      );
+      const screen = this.renderer.projectToScreen(pos);
+      if (!screen) return;
+      const withinBounds =
+        screen.x >= clamp.left + pad &&
+        screen.x <= clamp.right - pad &&
+        screen.y >= clamp.top + pad &&
+        screen.y <= clamp.bottom - pad;
+      const visible = this.visible.satellites && screen.visible && withinBounds;
+      const label = formatSatelliteLabel(satellite);
+      const details = formatSatelliteDetails(satellite);
+      const variant = orbitBandForSatellite(satellite);
+      const baseStyle = pinBaseStyleFor("satellite", variant);
+      const baseStyleKey = pinBaseStyleKeyFor("satellite", variant);
+      const entry = this.ensureEntry(
+        this.entries.satellites,
+        "satellites",
+        entity,
+        {
+          text: label,
+          label,
+          details,
+          baseStyleKey,
+          baseStyle,
+          selected:
+            this.selected?.entityId === entity &&
+            this.selected.group === "satellites",
+        },
+      );
+      entry.sprite.visible = visible;
+      if (visible) {
+        this.positionEntry(entry, screen.x, screen.y);
+      } else {
+        this.hideEntry(entry);
+      }
+      seen.add(entity);
+    });
+    this.pruneEntries(this.entries.satellites, seen);
+  }
+
+  syncShips(entities, world) {
+    const seen = new Set();
+    if (!this.visible.ships) {
+      this.groups.ships.visible = false;
+    } else {
+      this.groups.ships.visible = true;
+    }
+    const bounds = this.boundsEl?.getBoundingClientRect?.();
+    const clamp = bounds || {
+      left: 0,
+      top: 0,
+      right: this.size.width,
+      bottom: this.size.height,
+    };
+    const pad = 22;
+    const baseAltitude = shipBaseAltitude(this.renderer);
+    entities.forEach((entity) => {
+      const ship = world.getComponent(entity, "Ship");
+      if (!ship) return;
+      const geo = world.getComponent(entity, "Geo");
+      if (!geo || !this.renderer) return;
+      const pos = this.renderer.positionForGeo(
+        geo,
+        baseAltitude + altitudeForShip(ship),
+      );
+      const screen = this.renderer.projectToScreen(pos);
+      if (!screen) return;
+      const withinBounds =
+        screen.x >= clamp.left + pad &&
+        screen.x <= clamp.right - pad &&
+        screen.y >= clamp.top + pad &&
+        screen.y <= clamp.bottom - pad;
+      const visible = this.visible.ships && screen.visible && withinBounds;
+      const label = formatShipLabel(ship);
+      const details = formatShipDetails(ship);
+      const variant = vesselGroupForShip(ship);
+      const baseStyle = pinBaseStyleFor("ship", variant);
+      const baseStyleKey = pinBaseStyleKeyFor("ship", variant);
+      const entry = this.ensureEntry(this.entries.ships, "ships", entity, {
+        text: label,
+        label,
+        details,
+        baseStyleKey,
+        baseStyle,
+        selected:
+          this.selected?.entityId === entity && this.selected.group === "ships",
+      });
+      entry.sprite.visible = visible;
+      if (visible) {
+        this.positionEntry(entry, screen.x, screen.y);
+      } else {
+        this.hideEntry(entry);
+      }
+      seen.add(entity);
+    });
+    this.pruneEntries(this.entries.ships, seen);
+  }
+
+  syncEdges(entities, world) {
+    const seen = new Set();
+    const clamp = {
+      left: 0,
+      top: 0,
+      right: this.size.width,
+      bottom: this.size.height,
+      width: this.size.width,
+      height: this.size.height,
+    };
+    const pad = 22;
+    const centerX = clamp.left + clamp.width / 2;
+    const centerY = clamp.top + clamp.height / 2;
+    const edgeX = clamp.width / 2 - pad;
+    const edgeY = clamp.height / 2 - pad;
+    entities.forEach((entity) => {
+      const geo = world.getComponent(entity, "Geo");
+      const meta = world.getComponent(entity, "Meta");
+      const pin = world.getComponent(entity, "Pin");
+      if (!geo || !meta || !pin || !this.renderer) return;
+      const pos = this.renderer.positionForGeo(
+        geo,
+        this.renderer.markerAltitude + 2.5,
+      );
+      const screen = this.renderer.projectToScreen(pos);
+      if (!screen) return;
+      const withinBounds =
+        screen.x >= clamp.left + pad &&
+        screen.x <= clamp.right - pad &&
+        screen.y >= clamp.top + pad &&
+        screen.y <= clamp.bottom - pad;
+      if (screen.visible && withinBounds) {
+        const existing = this.entries.edges.get(entity);
+        if (existing) this.hideEntry(existing);
+        return;
+      }
+      const dx = screen.x - centerX;
+      const dy = screen.y - centerY;
+      const halfW = edgeX;
+      const halfH = edgeY;
+      const safeDx = Math.abs(dx) < 1 ? (dx >= 0 ? 1 : -1) : dx;
+      const safeDy = Math.abs(dy) < 1 ? (dy >= 0 ? 1 : -1) : dy;
+      const scale = Math.min(halfW / Math.abs(safeDx), halfH / Math.abs(safeDy));
+      let x = centerX + safeDx * scale;
+      let y = centerY + safeDy * scale;
+      const hitVertical = Math.abs(safeDx) * halfH >= Math.abs(safeDy) * halfW;
+      if (hitVertical) {
+        x = centerX + Math.sign(safeDx) * halfW;
+      } else {
+        y = centerY + Math.sign(safeDy) * halfH;
+      }
+      const symbol = collapseLabel(pin.label) || edgeSymbolFor(meta);
+      const label =
+        pin.label || meta.data?.name || meta.data?.summary || meta.kind || "Entity";
+      const details =
+        meta.kind === "flight"
+          ? formatFlightDetails(meta.data)
+          : meta.kind === "satellite"
+            ? formatSatelliteDetails(meta.data)
+            : meta.kind === "ship"
+              ? formatShipDetails(meta.data)
+              : "";
+      const baseStyle = edgeBaseStyleFor(meta.kind, screen.behind);
+      const baseStyleKey = edgeBaseStyleKeyFor(meta.kind, screen.behind);
+      const entry = this.ensureEntry(this.entries.edges, "edges", entity, {
+        text: symbol,
+        label,
+        details,
+        baseStyleKey,
+        baseStyle,
+        selected:
+          this.selected?.entityId === entity && this.selected.group === "edges",
+      });
+      entry.sprite.visible = true;
+      this.positionEntry(entry, x, y);
+      seen.add(entity);
+    });
+    this.pruneEntries(this.entries.edges, seen);
+  }
+}
+
 class EdgeLayer {
   constructor(layerEl, renderer, boundsEl, onAction) {
     this.layerEl = layerEl;
@@ -3752,7 +4762,7 @@ const setupPanelCollapsibles = () => {
     });
 };
 
-const setupLayerToggles = () => {
+const setupLayerToggles = (bubbleOverlay) => {
   document.querySelectorAll("[data-layer-toggle]").forEach((button) => {
     button.addEventListener("click", () => {
       const layerName = button.dataset.layerToggle;
@@ -3762,6 +4772,9 @@ const setupLayerToggles = () => {
       const hidden = layer.getAttribute("data-hidden") === "true";
       layer.setAttribute("data-hidden", (!hidden).toString());
       layer.style.display = hidden ? "block" : "none";
+      if (layerName === "pins") {
+        bubbleOverlay?.setPinsVisible(hidden);
+      }
     });
   });
 };
@@ -3951,7 +4964,7 @@ const fetchShips = async (renderer3d, bus, overlay) => {
   }
 };
 
-const setupFlightControls = (renderer3d, bus, overlay) => {
+const setupFlightControls = (renderer3d, bus, overlay, bubbleOverlay) => {
   const panel = document.getElementById("flight-panel");
   if (!panel || !FLIGHT_CONFIG.enabled) {
     if (panel) panel.style.display = "none";
@@ -3968,6 +4981,7 @@ const setupFlightControls = (renderer3d, bus, overlay) => {
       const next = toggle.getAttribute("aria-pressed") !== "true";
       toggle.setAttribute("aria-pressed", next.toString());
       overlay?.setVisible(next);
+      bubbleOverlay?.setFlightsVisible(next);
       if (next) {
         fetchFlights(renderer3d, bus, overlay);
       }
@@ -3975,7 +4989,7 @@ const setupFlightControls = (renderer3d, bus, overlay) => {
   }
 };
 
-const setupSatelliteControls = (renderer3d, bus, overlay) => {
+const setupSatelliteControls = (renderer3d, bus, overlay, bubbleOverlay) => {
   const panel = document.getElementById("satellite-panel");
   if (!panel || !SATELLITE_CONFIG.enabled) {
     if (panel) panel.style.display = "none";
@@ -3992,6 +5006,7 @@ const setupSatelliteControls = (renderer3d, bus, overlay) => {
       const next = toggle.getAttribute("aria-pressed") !== "true";
       toggle.setAttribute("aria-pressed", next.toString());
       overlay?.setVisible(next);
+      bubbleOverlay?.setSatellitesVisible(next);
       if (next) {
         fetchSatellites(renderer3d, bus, overlay);
       }
@@ -3999,7 +5014,7 @@ const setupSatelliteControls = (renderer3d, bus, overlay) => {
   }
 };
 
-const setupShipControls = (renderer3d, bus, overlay) => {
+const setupShipControls = (renderer3d, bus, overlay, bubbleOverlay) => {
   const panel = document.getElementById("ship-panel");
   if (!panel || !SHIP_CONFIG.enabled) {
     if (panel) panel.style.display = "none";
@@ -4016,6 +5031,7 @@ const setupShipControls = (renderer3d, bus, overlay) => {
       const next = toggle.getAttribute("aria-pressed") !== "true";
       toggle.setAttribute("aria-pressed", next.toString());
       overlay?.setVisible(next);
+      bubbleOverlay?.setShipsVisible(next);
       if (next) {
         fetchShips(renderer3d, bus, overlay);
       }
@@ -4065,25 +5081,23 @@ const main = () => {
   const renderer3d = new Renderer3D(els.map3d);
   renderer3d.init();
 
-  const edgeLayer = new EdgeLayer(els.edgeLayer, renderer3d, null, (action, entityId) => {
-    if (action === "focus") {
-      const entity = Number(entityId);
-      const geo = world.getComponent(entity, "Geo");
-      if (geo) renderer3d.focusOnGeo(geo);
-    } else {
-      console.info("edge action", { action, entityId });
-    }
-  });
-  edgeLayer.bind();
-  const pinLayer = new PinLayer(els.pinLayer, renderer3d, els.board, edgeLayer);
-  const flightOverlay = new FlightOverlay(renderer3d, world, els.flightLayer, edgeLayer);
-  const satelliteOverlay = new SatelliteOverlay(
+  const bubbleOverlay = new BubbleOverlay(
     renderer3d,
-    world,
-    els.satelliteLayer,
-    edgeLayer,
+    els.board,
+    new BubblePopup((action, entityId) => {
+      if (action === "focus") {
+        const entity = Number(entityId);
+        const geo = world.getComponent(entity, "Geo");
+        if (geo) renderer3d.focusOnGeo(geo);
+      } else {
+        console.info("bubble action", { action, entityId });
+      }
+    }, () => bubbleOverlay?.clearSelection?.()),
   );
-  const shipOverlay = new ShipOverlay(renderer3d, world, els.shipLayer, edgeLayer);
+  bubbleOverlay.resize(window.innerWidth, window.innerHeight);
+  const flightOverlay = new FlightOverlay(renderer3d, world);
+  const satelliteOverlay = new SatelliteOverlay(renderer3d, world);
+  const shipOverlay = new ShipOverlay(renderer3d, world);
 
   bus.on("entities:update", (payload) => {
     syncEntities(payload, world);
@@ -4101,9 +5115,9 @@ const main = () => {
   setupTileProviders(renderer3d);
   setupGlobeControls(renderer3d);
   setupWeatherControls(renderer3d);
-  setupFlightControls(renderer3d, bus, flightOverlay);
-  setupSatelliteControls(renderer3d, bus, satelliteOverlay);
-  setupShipControls(renderer3d, bus, shipOverlay);
+  setupFlightControls(renderer3d, bus, flightOverlay, bubbleOverlay);
+  setupSatelliteControls(renderer3d, bus, satelliteOverlay, bubbleOverlay);
+  setupShipControls(renderer3d, bus, shipOverlay, bubbleOverlay);
   setupPanelCollapsibles();
 
   const renderLoop = (() => {
@@ -4145,16 +5159,26 @@ const main = () => {
         return { ...pos, color: renderable.color };
       });
       renderer3d.setInstances(points);
-      renderer3d.render(delta);
-
-      const entitiesPins = world.query(["Geo", "Pin"]);
-      pinLayer.syncPins(entitiesPins, world);
-      pinLayer.prune(world);
       flightOverlay.sync();
       satelliteOverlay.sync();
       shipOverlay.sync();
-      edgeLayer.syncEdges(entities3d, world);
-      edgeLayer.prune(world);
+      renderer3d.render(delta, () => {
+        const entitiesPins = world.query(["Geo", "Pin"]);
+        const flightEntities = flightOverlay.visible
+          ? world.query(["Geo", "Flight"])
+          : [];
+        const satelliteEntities = satelliteOverlay.visible
+          ? world.query(["Geo", "Satellite"])
+          : [];
+        const shipEntities = shipOverlay.visible
+          ? world.query(["Geo", "Ship"])
+          : [];
+        bubbleOverlay.syncPins(entitiesPins, world);
+        bubbleOverlay.syncFlights(flightEntities, world);
+        bubbleOverlay.syncSatellites(satelliteEntities, world);
+        bubbleOverlay.syncShips(shipEntities, world);
+        bubbleOverlay.syncEdges(entities3d, world);
+      });
 
       if (els.runtimeStats) {
         els.runtimeStats.textContent = `Entities: ${entities3d.length} · FPS: ${fps}`;
@@ -4189,6 +5213,7 @@ const main = () => {
   const resize = () => {
     board.resize();
     renderer3d.resize(window.innerWidth, window.innerHeight);
+    bubbleOverlay.resize(renderer3d.size.width, renderer3d.size.height);
   };
 
   window.addEventListener("resize", resize);
@@ -4221,7 +5246,7 @@ const main = () => {
   allDocks().forEach((dock) => {
     setDockState(dock, dock.dataset.state || "open");
   });
-  setupLayerToggles();
+  setupLayerToggles(bubbleOverlay);
 
   requestAnimationFrame(renderLoop);
 };
