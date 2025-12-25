@@ -694,6 +694,11 @@ body {
   cursor: pointer;
 }
 
+.panel-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .panel-actions button[aria-pressed="true"],
 .panel-actions button[data-active="true"] {
   border-color: rgba(14, 116, 144, 0.6);

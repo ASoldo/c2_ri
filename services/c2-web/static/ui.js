@@ -70,6 +70,15 @@ const buildTileConfig = () => {
     const resolvedUrl = proxy
       ? `/ui/tiles/${id}/{z}/{x}/{y}`
       : remoteUrl;
+    const renderOrder = Number.isFinite(provider.renderOrder)
+      ? provider.renderOrder
+      : 10;
+    const polygonOffsetFactor = Number.isFinite(provider.polygonOffsetFactor)
+      ? provider.polygonOffsetFactor
+      : -2;
+    const polygonOffsetUnits = Number.isFinite(provider.polygonOffsetUnits)
+      ? provider.polygonOffsetUnits
+      : -2;
     normalized[id] = {
       id,
       name: provider.name || id,
@@ -79,6 +88,17 @@ const buildTileConfig = () => {
       minZoom: Number.isFinite(provider.minZoom) ? provider.minZoom : 0,
       maxZoom: Number.isFinite(provider.maxZoom) ? provider.maxZoom : 19,
       zoomBias: Number.isFinite(provider.zoomBias) ? provider.zoomBias : 0,
+      opacity: Number.isFinite(provider.opacity) ? provider.opacity : undefined,
+      transparent: provider.transparent === true,
+      renderOrder,
+      polygonOffsetFactor,
+      polygonOffsetUnits,
+      depthTest: typeof provider.depthTest === "boolean" ? provider.depthTest : true,
+      depthWrite:
+        typeof provider.depthWrite === "boolean" ? provider.depthWrite : undefined,
+      updateIntervalMs: Number.isFinite(provider.updateIntervalMs)
+        ? provider.updateIntervalMs
+        : undefined,
     };
   });
   const order = Array.isArray(config.order)
@@ -1280,7 +1300,7 @@ class Renderer3D {
 
     this.tileManager = new TileManager(
       this.scene,
-      this.globeRadius + 0.08,
+      this.globeRadius,
       this.renderer,
       this.globeRotation,
     );
@@ -1288,7 +1308,7 @@ class Renderer3D {
 
     this.weatherManager = new TileManager(
       this.scene,
-      this.globeRadius + 0.1,
+      this.globeRadius,
       this.renderer,
       this.globeRotation,
     );
@@ -1730,10 +1750,10 @@ class Renderer3D {
       maxZoom: WEATHER_CONFIG.maxZoom,
       opacity: this.weatherOpacity,
       renderOrder: 50,
-      depthTest: false,
+      depthTest: true,
       depthWrite: false,
-      polygonOffsetFactor: -6,
-      polygonOffsetUnits: -6,
+      polygonOffsetFactor: -4,
+      polygonOffsetUnits: -4,
       updateIntervalMs: WEATHER_CONFIG.updateIntervalMs,
       params: {
         field: this.weatherField,
@@ -2912,11 +2932,14 @@ class MediaOverlay {
     this.widthDeg = 16;
     this.heightDeg = 9;
     this.rotationDeg = 0;
-    this.altitude = 0.45;
+    this.altitude = 0;
     this.scale = 1;
     this.needsFrameUpdate = false;
     this.lastFrameAt = 0;
     this.frameIntervalMs = 33;
+    this.audioMuted = true;
+    this.playState = "playing";
+    this.volume = 0.8;
     if (this.renderer?.scene) {
       this.renderer.scene.add(this.group);
     }
@@ -2929,6 +2952,36 @@ class MediaOverlay {
       this.pauseMedia();
     } else {
       this.resumeMedia();
+    }
+  }
+
+  setAudioMuted(muted) {
+    this.audioMuted = Boolean(muted);
+    if (this.video) {
+      this.video.muted = this.audioMuted;
+      if (!this.audioMuted && Number.isFinite(this.volume)) {
+        this.video.volume = this.volume;
+      }
+    }
+  }
+
+  setPlayback(state) {
+    const next = state || "playing";
+    this.playState = next;
+    if (!this.video) return;
+    if (next === "playing") {
+      if (this.enabled) {
+        this.video.play().catch(() => {});
+      }
+    } else if (next === "paused") {
+      this.video.pause();
+    } else if (next === "stopped") {
+      this.video.pause();
+      try {
+        this.video.currentTime = 0;
+      } catch (err) {
+        // Ignore if the media element is not seekable yet.
+      }
     }
   }
 
@@ -2947,12 +3000,12 @@ class MediaOverlay {
       const video = document.createElement("video");
       video.src = nextUrl;
       video.crossOrigin = "anonymous";
+      video.muted = this.audioMuted;
+      video.volume = this.volume;
       video.playsInline = true;
-      video.muted = true;
       video.loop = true;
-      video.autoplay = true;
+      video.autoplay = false;
       video.preload = "auto";
-      video.play().catch(() => {});
       this.video = video;
       const texture = new THREE.VideoTexture(video);
       texture.colorSpace = THREE.SRGBColorSpace;
@@ -2962,6 +3015,9 @@ class MediaOverlay {
       this.texture = texture;
       this.needsFrameUpdate = false;
       this.frameIntervalMs = 33;
+      if (this.enabled && this.playState === "playing") {
+        video.play().catch(() => {});
+      }
     } else {
       const image = new Image();
       image.crossOrigin = "anonymous";
@@ -3033,6 +3089,7 @@ class MediaOverlay {
     if (this.mesh) {
       this.mesh.visible = false;
     }
+    this.setPlayback("stopped");
   }
 
   pauseMedia() {
@@ -3043,7 +3100,9 @@ class MediaOverlay {
 
   resumeMedia() {
     if (this.video) {
-      this.video.play().catch(() => {});
+      if (this.playState === "playing") {
+        this.video.play().catch(() => {});
+      }
     }
   }
 
@@ -3084,8 +3143,8 @@ class MediaOverlay {
       depthWrite: false,
     });
     material.polygonOffset = true;
-    material.polygonOffsetFactor = -2;
-    material.polygonOffsetUnits = -2;
+    material.polygonOffsetFactor = -6;
+    material.polygonOffsetUnits = -6;
     const geometry = new THREE.SphereGeometry(
       (this.renderer?.globeRadius || 120) + this.altitude,
       32,
@@ -3109,7 +3168,7 @@ class MediaOverlay {
     if (!this.mesh || !this.renderer) return;
     const radius =
       (this.renderer?.globeRadius || 120) +
-      Math.max(0.05, this.altitude);
+      Math.max(0, this.altitude);
     const width = Math.max(0.5, Math.abs(this.widthDeg) * Math.max(0.1, this.scale));
     const height = Math.max(0.5, Math.abs(this.heightDeg) * Math.max(0.1, this.scale));
     const halfW = width / 2;
@@ -3199,13 +3258,16 @@ const resolveMediaUrl = (rawUrl, kind) => {
   if (lowered.startsWith("data:") || lowered.startsWith("blob:")) {
     return rawUrl;
   }
-  if (kind === "video" || kind === "rtsp") {
-    return rawUrl;
-  }
   let parsed;
   try {
     parsed = new URL(rawUrl, window.location.href);
   } catch (error) {
+    return rawUrl;
+  }
+  if (parsed.protocol === "rtsp:") {
+    return rawUrl;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return rawUrl;
   }
   if (parsed.origin === window.location.origin) {
@@ -5341,6 +5403,10 @@ const setupMediaOverlayControls = (renderer3d, overlay) => {
   const toggle = panel.querySelector("[data-media-overlay-toggle]");
   const loadButton = panel.querySelector("[data-media-overlay-load]");
   const clearButton = panel.querySelector("[data-media-overlay-clear]");
+  const playButton = panel.querySelector("[data-media-overlay-play]");
+  const pauseButton = panel.querySelector("[data-media-overlay-pause]");
+  const stopButton = panel.querySelector("[data-media-overlay-stop]");
+  const muteButton = panel.querySelector("[data-media-overlay-mute]");
   const typeSelect = document.getElementById("media-overlay-type");
   const urlInput = document.getElementById("media-overlay-url");
   const latInput = document.getElementById("media-overlay-lat");
@@ -5357,7 +5423,7 @@ const setupMediaOverlayControls = (renderer3d, overlay) => {
     const widthDeg = Math.max(1, Math.abs(parseNumber(widthInput?.value, overlay.widthDeg)));
     const heightDeg = Math.max(1, Math.abs(parseNumber(heightInput?.value, overlay.heightDeg)));
     const rotationDeg = parseNumber(rotationInput?.value, overlay.rotationDeg);
-    const altitude = Math.max(0.05, parseNumber(altitudeInput?.value, overlay.altitude));
+    const altitude = Math.max(0, parseNumber(altitudeInput?.value, overlay.altitude));
     const scale = Math.max(0.1, parseNumber(scaleInput?.value, overlay.scale));
     overlay.setTransform({
       lat,
@@ -5376,15 +5442,50 @@ const setupMediaOverlayControls = (renderer3d, overlay) => {
     const resolvedUrl = resolveMediaUrl(url, kind);
     overlay.setSource(kind, resolvedUrl);
     applyTransform();
+    syncTransportButtons();
+  };
+
+  const syncTransportButtons = () => {
+    const isVideo = overlay.kind === "video" || overlay.kind === "rtsp";
+    const active = overlay.enabled && isVideo && overlay.video;
+    [playButton, pauseButton, stopButton, muteButton].forEach((button) => {
+      if (!button) return;
+      button.disabled = !active;
+    });
+  };
+
+  const setPlayback = (state) => {
+    overlay.setPlayback(state);
+    if (playButton) {
+      playButton.setAttribute("aria-pressed", state === "playing" ? "true" : "false");
+    }
+    if (pauseButton) {
+      pauseButton.setAttribute("aria-pressed", state === "paused" ? "true" : "false");
+    }
+    if (stopButton) {
+      stopButton.setAttribute("aria-pressed", state === "stopped" ? "true" : "false");
+    }
+    syncTransportButtons();
+  };
+
+  const setMuted = (muted) => {
+    overlay.setAudioMuted(muted);
+    if (muteButton) {
+      muteButton.setAttribute("aria-pressed", muted ? "true" : "false");
+    }
+    syncTransportButtons();
   };
 
   const setEnabled = (enabled) => {
     if (toggle) toggle.setAttribute("aria-pressed", enabled ? "true" : "false");
     overlay.setEnabled(enabled);
+    syncTransportButtons();
   };
 
   setEnabled(false);
   applyTransform();
+  setMuted(true);
+  setPlayback("playing");
 
   toggle?.addEventListener("click", () => {
     const next = toggle.getAttribute("aria-pressed") !== "true";
@@ -5397,12 +5498,32 @@ const setupMediaOverlayControls = (renderer3d, overlay) => {
   loadButton?.addEventListener("click", () => {
     applySource();
     setEnabled(true);
+    setPlayback("playing");
   });
 
   clearButton?.addEventListener("click", () => {
     overlay.clear();
     if (urlInput) urlInput.value = "";
     setEnabled(false);
+    setMuted(true);
+    setPlayback("stopped");
+  });
+
+  playButton?.addEventListener("click", () => {
+    setPlayback("playing");
+  });
+
+  pauseButton?.addEventListener("click", () => {
+    setPlayback("paused");
+  });
+
+  stopButton?.addEventListener("click", () => {
+    setPlayback("stopped");
+  });
+
+  muteButton?.addEventListener("click", () => {
+    const next = muteButton.getAttribute("aria-pressed") !== "true";
+    setMuted(next);
   });
 
   [latInput, lonInput, widthInput, heightInput, rotationInput, altitudeInput, scaleInput].forEach(
@@ -5412,9 +5533,11 @@ const setupMediaOverlayControls = (renderer3d, overlay) => {
   );
   typeSelect?.addEventListener("change", () => {
     if (overlay.enabled) applySource();
+    syncTransportButtons();
   });
   urlInput?.addEventListener("change", () => {
     if (overlay.enabled) applySource();
+    syncTransportButtons();
   });
 };
 
