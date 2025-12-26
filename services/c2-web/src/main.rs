@@ -244,6 +244,10 @@ async fn main() -> io::Result<()> {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(30000);
+    let satellite_timeout_ms = env::var("C2_WEB_SAT_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(4000);
     let satellite_max = env::var("C2_WEB_SAT_MAX")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -383,6 +387,7 @@ async fn main() -> io::Result<()> {
         satellite_base_url,
         satellite_min_interval: Duration::from_millis(satellite_min_interval_ms),
         satellite_cache_ttl: Duration::from_millis(satellite_cache_ttl_ms),
+        satellite_timeout: Duration::from_millis(satellite_timeout_ms),
         satellite_max: satellite_max.max(1),
         satellite_sample_enabled,
         satellite_sample_count: satellite_sample_count.max(1),

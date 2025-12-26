@@ -2925,6 +2925,14 @@ class MediaOverlay {
     this.group.rotation.y = this.rotationY;
     this.group.visible = false;
     this.mesh = null;
+    this.debugLine = null;
+    this.debugLineMaterial = new THREE.LineBasicMaterial({
+      color: 0xf97316,
+      transparent: true,
+      opacity: 0.9,
+    });
+    this.debugLineMaterial.depthTest = false;
+    this.debugLineMaterial.depthWrite = false;
     this.material = null;
     this.texture = null;
     this.video = null;
@@ -3241,6 +3249,8 @@ class MediaOverlay {
     }
     const thetaStart = ((90 - latNorth) * Math.PI) / 180;
     const thetaLength = ((latNorth - latSouth) * Math.PI) / 180;
+    const phiCenter = phiStart + phiLength * 0.5;
+    const thetaCenter = thetaStart + thetaLength * 0.5;
     const lonSpan = Math.abs(lonEast - lonWest);
     const latSpan = Math.abs(latNorth - latSouth);
     const widthSegments = Math.min(96, Math.max(10, Math.round(lonSpan / 1.8)));
@@ -3257,12 +3267,48 @@ class MediaOverlay {
     geometry.computeBoundingSphere();
     this.mesh.geometry.dispose();
     this.mesh.geometry = geometry;
-    this.mesh.rotation.set(0, 0, 0);
-    const normal = geoToSphere({ lat: this.lat, lon: this.lon }, 1);
-    const axis = new THREE.Vector3(normal.x, normal.y, normal.z).normalize();
-    if (this.rotationY) {
-      axis.applyAxisAngle(AXIS_Y, -this.rotationY);
+    const position = geometry.getAttribute("position");
+    const axis = new THREE.Vector3();
+    if (position?.count) {
+      for (let i = 0; i < position.count; i += 1) {
+        axis.x += position.getX(i);
+        axis.y += position.getY(i);
+        axis.z += position.getZ(i);
+      }
+      axis.multiplyScalar(1 / position.count);
+      if (axis.lengthSq() > 0) {
+        axis.normalize();
+      } else {
+        axis.set(
+          Math.sin(thetaCenter) * Math.cos(phiCenter),
+          Math.cos(thetaCenter),
+          Math.sin(thetaCenter) * Math.sin(phiCenter),
+        );
+      }
+    } else {
+      axis.set(
+        Math.sin(thetaCenter) * Math.cos(phiCenter),
+        Math.cos(thetaCenter),
+        Math.sin(thetaCenter) * Math.sin(phiCenter),
+      );
     }
+    const overshoot = Math.max(2, radius * 0.04);
+    const lineEnd = axis.clone().multiplyScalar(radius + overshoot);
+    const lineGeometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0),
+      lineEnd,
+    ]);
+    if (!this.debugLine) {
+      this.debugLine = new THREE.Line(lineGeometry, this.debugLineMaterial);
+      this.debugLine.renderOrder = MEDIA_OVERLAY_RENDER_ORDER + 2;
+      this.debugLine.frustumCulled = false;
+      this.group.add(this.debugLine);
+    } else {
+      this.debugLine.geometry.dispose();
+      this.debugLine.geometry = lineGeometry;
+    }
+    this.debugLine.visible = Boolean(this.mesh?.visible);
+    this.mesh.rotation.set(0, 0, 0);
     if (Number.isFinite(this.rotationDeg) && this.rotationDeg !== 0) {
       this.mesh.rotateOnAxis(
         axis,

@@ -46,6 +46,7 @@ pub struct AppState {
     pub satellite_base_url: String,
     pub satellite_min_interval: Duration,
     pub satellite_cache_ttl: Duration,
+    pub satellite_timeout: Duration,
     pub satellite_max: usize,
     pub satellite_sample_enabled: bool,
     pub satellite_sample_count: usize,
