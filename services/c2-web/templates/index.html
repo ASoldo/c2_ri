@@ -40,7 +40,7 @@
       </div>
     </div>
   </div>
-  <header class="fixed top-4 left-0 right-0 z-40 flex justify-center px-4" data-menu-driver="alpine">
+  <header class="fixed top-10 left-0 right-0 z-40 flex justify-center px-4" data-menu-driver="alpine">
     <div class="pointer-events-auto flex flex-wrap items-center gap-3 rounded-full border border-slate-200/70 bg-white/80 px-4 py-2 shadow-xl backdrop-blur">
       <div class="flex items-center gap-2">
         <span class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-600">
@@ -722,31 +722,6 @@
           data-layer="map-2d"
           class="absolute inset-0 h-full w-full pointer-events-none hidden z-[1]"
         ></canvas>
-        <div
-          class="dom-layer pointer-events-none absolute inset-0 h-full w-full z-[3]"
-          id="pin-layer"
-          data-layer="pins"
-        ></div>
-        <div
-          class="dom-layer flight-layer pointer-events-none absolute inset-0 h-full w-full z-[3]"
-          id="flight-layer"
-          data-layer="flights"
-        ></div>
-        <div
-          class="dom-layer satellite-layer pointer-events-none absolute inset-0 h-full w-full z-[3]"
-          id="satellite-layer"
-          data-layer="satellites"
-        ></div>
-        <div
-          class="dom-layer ship-layer pointer-events-none absolute inset-0 h-full w-full z-[3]"
-          id="ship-layer"
-          data-layer="ships"
-        ></div>
-        <div
-          class="edge-layer pointer-events-none absolute inset-0 z-[4]"
-          id="edge-layer"
-          data-layer="edges"
-        ></div>
       </div>
       <div
         class="fixed left-1/2 top-1/2 z-[4] h-7 w-7 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
@@ -874,23 +849,6 @@
   </div>
 
   <div class="hidden" aria-hidden="true" data-tailwind-bank="overlays">
-    <span class="pin absolute rounded-full bg-cyan-400/90 px-2.5 py-1 text-[11px] text-slate-900 cursor-pointer pointer-events-auto"></span>
-    <span class="font-semibold border border-cyan-400/55 shadow-[0_0_14px_rgba(34,211,238,0.25)]"></span>
-    <span class="font-semibold bg-slate-400/80 border border-slate-400/70 text-slate-900 shadow-[0_0_10px_rgba(148,163,184,0.3)]"></span>
-    <span class="font-semibold bg-amber-300/90 border border-amber-300/60 shadow-[0_0_14px_rgba(250,204,21,0.25)]"></span>
-    <span class="font-semibold bg-sky-400/85 border border-sky-400/70 shadow-[0_0_14px_rgba(56,189,248,0.25)]"></span>
-    <span class="font-semibold bg-lime-400/85 border border-lime-400/70 shadow-[0_0_14px_rgba(163,230,53,0.25)]"></span>
-    <span class="font-semibold bg-sky-400/90 border border-sky-400/60 shadow-[0_0_14px_rgba(56,189,248,0.25)]"></span>
-    <span class="font-semibold bg-orange-500/90 border border-orange-500/70 shadow-[0_0_14px_rgba(249,115,22,0.25)]"></span>
-    <span class="font-semibold bg-lime-400/90 border border-lime-400/70 shadow-[0_0_14px_rgba(163,230,53,0.25)]"></span>
-    <span class="font-semibold bg-amber-300/90 border border-amber-300/70 shadow-[0_0_14px_rgba(250,204,21,0.25)]"></span>
-    <span class="edge-marker absolute grid h-[34px] w-[34px] place-items-center rounded-full border text-[12px] font-bold uppercase tracking-[0.06em] text-slate-900 pointer-events-auto"></span>
-    <span class="bg-cyan-400/90 border-cyan-400/60 shadow-[0_0_16px_rgba(34,211,238,0.35)]"></span>
-    <span class="bg-slate-900/90 border-slate-400/50 text-slate-200 shadow-[0_0_16px_rgba(15,23,42,0.35)]"></span>
-    <span class="bg-amber-300/95 border-amber-600/80 text-slate-900 shadow-[0_0_16px_rgba(250,204,21,0.4)]"></span>
-    <span class="bg-sky-500/90 border-sky-500/70 shadow-[0_0_16px_rgba(14,165,233,0.35)]"></span>
-    <span class="bg-amber-400/90 border-amber-400/70 shadow-[0_0_16px_rgba(250,204,21,0.35)]"></span>
-    <span class="bg-sky-400/90 border-sky-400/70 shadow-[0_0_16px_rgba(56,189,248,0.35)]"></span>
     <span class="fixed inset-0 z-40 hidden items-center justify-center bg-slate-900/20 backdrop-blur-sm flex"></span>
     <span class="w-[260px] min-w-[220px] max-w-[320px] rounded-2xl bg-slate-900/95 px-4 py-3 text-white shadow-2xl"></span>
     <span class="text-[13px] font-semibold"></span>

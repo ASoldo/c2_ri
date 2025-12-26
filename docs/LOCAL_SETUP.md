@@ -70,6 +70,11 @@ Optional overrides:
 - `C2_UI_LIST_LIMIT=200`
 - `C2_WEB_STATIC_DIR=services/c2-web/static`
 
+UI module layout:
+
+- `/static/ui.js` bootstraps `/static/ui/main.js`.
+- UI modules live under `/static/ui/` (renderer, ECS wiring, overlays, controls).
+
 ## Metrics (Prometheus)
 
 Set a metrics listener per service if you want to scrape metrics (use a port distinct from the HTTP service port):

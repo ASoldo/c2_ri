@@ -1,0 +1,18 @@
+export const els = {
+  apiStatus: document.getElementById("api-status"),
+  apiDot: document.getElementById("api-dot"),
+  streamStatus: document.getElementById("stream-status"),
+  wsStatus: document.getElementById("ws-status"),
+  runtimeStats: document.getElementById("runtime-stats"),
+  cameraStats: document.getElementById("camera-stats"),
+  tileStatus: document.getElementById("tile-status"),
+  board: document.getElementById("board"),
+  layerStack: document.getElementById("layer-stack"),
+  map2d: document.getElementById("map-2d"),
+  map3d: document.getElementById("map-3d"),
+  dockLeft: document.getElementById("dock-left"),
+  dockRight: document.getElementById("dock-right"),
+  flightProviderLabel: document.getElementById("flight-provider-label"),
+  satelliteProviderLabel: document.getElementById("satellite-provider-label"),
+  shipProviderLabel: document.getElementById("ship-provider-label"),
+};

@@ -46,10 +46,13 @@ Added
 - UI-001 Local vendor assets for Tailwind v4, htmx, and three.js
 - UI-002 Entity feeds wired into ECS with UI entity stream endpoint
 - UI-002 OSM globe texture layer for 3D map sphere rendering
+- UI-003 Modular c2-web UI runtime under services/c2-web/static/ui with main bootstrap and focused UI modules
 
 Changed
 - Moved observability manifests to k8s/ overlays and updated ArgoCD repo refs
 - Added dev overlay SurrealDB manifest for minikube testing
+- UI-003 Overlay markers and edges now render via Three.js sprite overlay (DOM pin layers removed)
+- UI-003 Three.js renderer now consumes WASM ECS render cache for marker positioning
 
 Fixed
 - Disambiguated storage adapter trait calls across API and Timescale wrappers

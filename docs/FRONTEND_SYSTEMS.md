@@ -4,8 +4,8 @@ This document defines the frontend design patterns for a layered C2 console with
 
 ## Goals
 
-- Infinite board layout with layered rendering (3D + 2D + DOM overlays).
-- High-entity throughput using an ECS architecture and instanced rendering.
+- Infinite board layout with layered rendering (3D + 2D + sprite overlays + DOM panels).
+- High-entity throughput using a WASM ECS runtime and instanced rendering.
 - Real-time updates through SSE/WS, with deterministic fallbacks for offline/edge modes.
 - UI composition similar to Excalidraw (canvas-first) with mission overlays and sliding panels.
 
@@ -13,10 +13,11 @@ This document defines the frontend design patterns for a layered C2 console with
 
 - Layer 0: 3D map canvas (WebGL) for terrain, volumetrics, and spatial anchors.
 - Layer 1: 2D canvas for grids, contours, and fast vector overlays.
-- Layer 2: DOM overlay for labels, pins, and interactive UI widgets.
+- Layer 2: WebGL overlay scene (Three.js orthographic) for pins, edges, and sprite labels.
+- Layer 3: DOM panels and popups (docks, menus, action sheets).
 - HUD layer: persistent status, timeline, and alert rails.
 
-Each layer receives a unified camera transform so 2D/3D and DOM pins align.
+Each layer receives a unified camera transform so 2D/3D and overlay sprites align.
 
 Current globe rendering uses locally stored 8k Earth textures from Solar System Scope
 (day/night/clouds/normal/specular) for offline-capable visualization. Swap with an internal
@@ -32,17 +33,18 @@ tile server or terrain service when available.
 
 - Entities are numeric IDs.
 - Components are typed data blobs (Transform, Renderable, Status, Assignment, etc.).
-- Systems are pure update loops (Render2D, Render3D, StatusColoring, PinSync).
+- Systems are update loops in the WASM ECS runtime (Bevy ECS).
 
 Key patterns:
-- `World.query([Transform, Renderable])` for fast iteration.
+- ECS render buffers drive Three.js positions (globe + overlay sprites).
 - Instanced meshes in WebGL for thousands of markers.
-- 2D canvas batch rendering for labels and overlays.
+- JS holds only UI metadata (labels/colors), not world state.
 
 ## Realtime Data Flow
 
 - SSE/WS streams feed an EventBus.
 - EventBus normalizes updates into ECS component changes.
+- ECS render cache feeds Three.js marker/overlay updates.
 - UI partial updates continue via existing Tera partials for non-map panels.
 
 ## Panel + Overlay Model
@@ -50,7 +52,7 @@ Key patterns:
 - Left dock: tools, layers, and mission controls.
 - Right dock: inspector, entity details, and alerts.
 - Bottom bar: timeline, playback, and filters.
-- Overlay stack: popups and pin-bound inspectors.
+- Overlay stack: WebGL pin/edge sprites with DOM popups for actions.
 
 ## Performance Guardrails
 
@@ -58,6 +60,7 @@ Key patterns:
 - Debounced UI updates for panels.
 - Entity culling by camera bounds.
 - Progressive detail (icons first, labels later).
+- Avoid DOM per-entity elements; keep overlays in sprites/particles.
 
 ## Security/Offline Considerations
 
