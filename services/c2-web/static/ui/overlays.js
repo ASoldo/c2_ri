@@ -295,12 +295,10 @@ class FlightOverlay {
     this.store = store;
     this.visible = false;
     this.trails = new FlightTrailLayer(renderer);
-    this.planes = renderer?.particlesEnabled ? null : new FlightMeshLayer(renderer);
+    this.planes = new FlightMeshLayer(renderer);
     this.lastSnapshot = null;
     this.trails.setVisible(false);
-    if (this.planes) {
-      this.planes.setVisible(false);
-    }
+    this.planes.setVisible(false);
   }
 
   setVisible(visible) {
@@ -424,11 +422,9 @@ class SatelliteOverlay {
     this.renderer = renderer;
     this.store = store;
     this.visible = false;
-    this.meshes = renderer?.particlesEnabled ? null : new SatelliteMeshLayer(renderer);
+    this.meshes = new SatelliteMeshLayer(renderer);
     this.lastSnapshot = null;
-    if (this.meshes) {
-      this.meshes.setVisible(false);
-    }
+    this.meshes.setVisible(false);
   }
 
   setVisible(visible) {
@@ -553,11 +549,9 @@ class ShipOverlay {
     this.renderer = renderer;
     this.store = store;
     this.visible = false;
-    this.meshes = renderer?.particlesEnabled ? null : new ShipMeshLayer(renderer);
+    this.meshes = new ShipMeshLayer(renderer);
     this.lastSnapshot = null;
-    if (this.meshes) {
-      this.meshes.setVisible(false);
-    }
+    this.meshes.setVisible(false);
   }
 
   setVisible(visible) {

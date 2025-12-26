@@ -14,6 +14,7 @@ This document defines the frontend design patterns for a layered C2 console with
 - Layer 0: 3D map canvas (WebGL) for terrain, volumetrics, and spatial anchors.
 - Layer 1: 2D canvas for grids, contours, and fast vector overlays.
 - Layer 2: WebGL overlay scene (Three.js orthographic) for pins, edges, and sprite labels.
+- Layer 2b: WebGL sprite/icon overlays (planes, ships, satellites) layered on top of ECS particle markers.
 - Layer 3: DOM panels and popups (docks, menus, action sheets).
 - HUD layer: persistent status, timeline, and alert rails.
 
@@ -37,7 +38,7 @@ tile server or terrain service when available.
 
 Key patterns:
 - ECS render buffers drive Three.js positions (globe + overlay sprites).
-- Instanced meshes in WebGL for thousands of markers.
+- Particle field markers for high-density entity rendering, with sprite/mesh icons for flight/ship/satellite overlays.
 - JS holds only UI metadata (labels/colors), not world state.
 
 ## Realtime Data Flow

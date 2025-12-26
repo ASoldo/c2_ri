@@ -151,9 +151,15 @@ async fn main() -> io::Result<()> {
         })
         .unwrap_or(true);
     let flight_provider =
-        env::var("C2_WEB_FLIGHT_PROVIDER").unwrap_or_else(|_| "opensky".to_string());
-    let flight_base_url = env::var("C2_WEB_FLIGHT_BASE_URL")
-        .unwrap_or_else(|_| "https://opensky-network.org/api/states/all".to_string());
+        env::var("C2_WEB_FLIGHT_PROVIDER").unwrap_or_else(|_| "adsb_lol".to_string());
+    let flight_provider_key = flight_provider.trim().to_ascii_lowercase();
+    let flight_base_url = env::var("C2_WEB_FLIGHT_BASE_URL").unwrap_or_else(|_| {
+        if flight_provider_key.contains("adsb") {
+            "https://api.adsb.lol/v2/lat/{lat}/lon/{lon}/dist/{dist}".to_string()
+        } else {
+            "https://opensky-network.org/api/states/all".to_string()
+        }
+    });
     let flight_username = env::var("C2_WEB_FLIGHT_USER").ok();
     let flight_password = env::var("C2_WEB_FLIGHT_PASS").ok();
     let flight_update_ms = env::var("C2_WEB_FLIGHT_UPDATE_MS")
@@ -203,6 +209,13 @@ async fn main() -> io::Result<()> {
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(5);
+    let flight_source_label = if flight_provider_key.contains("adsb") {
+        "ADSB.lol".to_string()
+    } else if flight_provider_key == "opensky" {
+        "OpenSky".to_string()
+    } else {
+        flight_provider.clone()
+    };
     let flight_config_json = serde_json::json!({
         "enabled": flight_enabled,
         "provider": flight_provider.clone(),
@@ -214,7 +227,7 @@ async fn main() -> io::Result<()> {
         "spanMinDeg": flight_span_min_deg,
         "spanMaxDeg": flight_span_max_deg,
         "altitudeScale": flight_altitude_scale,
-        "source": "OpenSky",
+        "source": flight_source_label,
         "sample": flight_sample_enabled,
     })
     .to_string();

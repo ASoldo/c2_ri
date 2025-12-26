@@ -47,12 +47,15 @@ Added
 - UI-002 Entity feeds wired into ECS with UI entity stream endpoint
 - UI-002 OSM globe texture layer for 3D map sphere rendering
 - UI-003 Modular c2-web UI runtime under services/c2-web/static/ui with main bootstrap and focused UI modules
+- UI-003 Flight/satellite/ship icon overlays restored (plane mesh + sprite icons) alongside ECS particle markers
+- SA-001 ADSB.lol flight provider support with ADS-B feed parsing for higher-density live aircraft previews
 
 Changed
 - Moved observability manifests to k8s/ overlays and updated ArgoCD repo refs
 - Added dev overlay SurrealDB manifest for minikube testing
 - UI-003 Overlay markers and edges now render via Three.js sprite overlay (DOM pin layers removed)
 - UI-003 Three.js renderer now consumes WASM ECS render cache for marker positioning
+- SA-001 Default flight feed now uses ADSB.lol (template URL) when no provider is configured
 
 Fixed
 - Disambiguated storage adapter trait calls across API and Timescale wrappers

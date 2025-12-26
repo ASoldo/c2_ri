@@ -1,7 +1,9 @@
 use actix_web::{get, web, Error, HttpResponse};
 use serde::Deserialize;
 
-use crate::flights::{now_epoch_millis, sample_flights, sample_flights_near, FlightSnapshot, FlightState};
+use crate::flights::{
+    now_epoch_millis, sample_flights, sample_flights_near, FlightSnapshot, FlightState,
+};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -26,6 +28,74 @@ fn clamp_lon(value: f64) -> f64 {
         lon = -180.0;
     }
     lon
+}
+
+fn value_as_f64(value: Option<&serde_json::Value>) -> Option<f64> {
+    match value {
+        Some(serde_json::Value::Number(number)) => number.as_f64(),
+        Some(serde_json::Value::String(text)) => text.parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn value_as_string(value: Option<&serde_json::Value>) -> Option<String> {
+    value
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn haversine_nm(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let r_km = 6371.0_f64;
+    let dlat = (lat2 - lat1).to_radians();
+    let dlon = (lon2 - lon1).to_radians();
+    let lat1 = lat1.to_radians();
+    let lat2 = lat2.to_radians();
+    let a = (dlat / 2.0).sin().powi(2)
+        + (dlon / 2.0).sin().powi(2) * lat1.cos() * lat2.cos();
+    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
+    let km = r_km * c;
+    km / 1.852
+}
+
+fn adsb_center_dist_nm(
+    bbox: Option<(f64, f64, f64, f64)>,
+) -> (f64, f64, f64) {
+    let (lat, lon) = if let Some((lamin, lomin, lamax, lomax)) = bbox {
+        ((lamin + lamax) / 2.0, (lomin + lomax) / 2.0)
+    } else {
+        (0.0, 0.0)
+    };
+    let dist_nm: f64 = if let Some((lamin, lomin, lamax, lomax)) = bbox {
+        let corners = [
+            (lamin, lomin),
+            (lamin, lomax),
+            (lamax, lomin),
+            (lamax, lomax),
+        ];
+        let mut max_nm: f64 = 0.0;
+        for (clat, clon) in corners {
+            max_nm = max_nm.max(haversine_nm(lat, lon, clat, clon));
+        }
+        max_nm
+    } else {
+        250.0
+    };
+    (lat, lon, dist_nm.clamp(25.0, 600.0))
+}
+
+fn build_adsb_url(
+    base_url: &str,
+    bbox: Option<(f64, f64, f64, f64)>,
+) -> Result<reqwest::Url, Error> {
+    let (lat, lon, dist_nm) = adsb_center_dist_nm(bbox);
+    let mut url = base_url.to_string();
+    url = url.replace("{lat}", &format!("{lat:.4}"));
+    url = url.replace("{lon}", &format!("{lon:.4}"));
+    url = url.replace("{dist}", &format!("{dist_nm:.0}"));
+    let parsed = reqwest::Url::parse(&url)
+        .map_err(|_| actix_web::error::ErrorBadRequest("invalid flight base url"))?;
+    Ok(parsed)
 }
 
 fn parse_opensky(value: serde_json::Value, provider: &str, limit: usize) -> FlightSnapshot {
@@ -97,6 +167,70 @@ fn parse_opensky(value: serde_json::Value, provider: &str, limit: usize) -> Flig
     }
 }
 
+fn parse_adsb_lol(value: serde_json::Value, provider: &str, limit: usize) -> FlightSnapshot {
+    let now_ms = value
+        .get("now")
+        .and_then(|v| v.as_u64())
+        .unwrap_or_else(now_epoch_millis);
+    let mut records = Vec::new();
+    if let Some(states) = value.get("ac").and_then(|v| v.as_array()) {
+        for (idx, state) in states.iter().enumerate() {
+            let lat = value_as_f64(state.get("lat"));
+            let lon = value_as_f64(state.get("lon"));
+            let (Some(lat), Some(lon)) = (lat, lon) else { continue };
+            let alt_geom = value_as_f64(state.get("alt_geom"));
+            let alt_baro_raw = state.get("alt_baro");
+            let alt_baro = value_as_f64(alt_baro_raw);
+            let altitude_m = alt_geom
+                .or(alt_baro)
+                .map(|feet| feet * 0.3048);
+            let velocity_mps = value_as_f64(state.get("gs"))
+                .map(|knots| knots * 0.514444);
+            let heading = value_as_f64(state.get("track"));
+            let on_ground = matches!(alt_baro_raw, Some(serde_json::Value::String(text)) if text == "ground")
+                || alt_baro.map(|value| value <= 0.5).unwrap_or(false);
+            let callsign = value_as_string(state.get("flight"));
+            let origin = value_as_string(state.get("r"))
+                .or_else(|| value_as_string(state.get("t")));
+            let hex = value_as_string(state.get("hex"));
+            let id = if let Some(hex) = hex.as_deref() {
+                format!("{provider}:{hex}")
+            } else if let Some(callsign) = callsign.as_deref() {
+                format!("{provider}:{callsign}")
+            } else {
+                format!("{provider}:unknown-{idx}")
+            };
+            let last_contact = value_as_f64(state.get("seen_pos"))
+                .map(|seen| now_ms.saturating_sub((seen * 1000.0) as u64))
+                .map(|ms| (ms / 1000) as i64);
+
+            records.push(FlightState {
+                id,
+                callsign,
+                origin_country: origin,
+                lat,
+                lon,
+                altitude_m,
+                velocity_mps,
+                heading_deg: heading,
+                on_ground,
+                last_contact,
+            });
+
+            if records.len() >= limit {
+                break;
+            }
+        }
+    }
+
+    FlightSnapshot {
+        provider: provider.to_string(),
+        source: "live".to_string(),
+        timestamp_ms: now_ms,
+        flights: records,
+    }
+}
+
 #[get("/ui/flights")]
 pub async fn flights(
     state: web::Data<AppState>,
@@ -127,32 +261,39 @@ pub async fn flights(
         }
     }
 
-    let mut url = reqwest::Url::parse(&state.flight_base_url)
-        .map_err(|_| actix_web::error::ErrorBadRequest("invalid flight base url"))?;
+    let provider_key = state.flight_provider.trim().to_ascii_lowercase();
+    let is_adsb = provider_key.contains("adsb");
     let bbox = (
         query.lamin.map(clamp_lat),
         query.lomin.map(clamp_lon),
         query.lamax.map(clamp_lat),
         query.lomax.map(clamp_lon),
     );
-    let center_hint = if let (Some(lamin), Some(lomin), Some(lamax), Some(lomax)) = bbox {
-        if lamin < lamax && lomin < lomax {
-            Some(((lamin + lamax) / 2.0, (lomin + lomax) / 2.0))
-        } else {
-            None
+    let bbox_resolved = match bbox {
+        (Some(lamin), Some(lomin), Some(lamax), Some(lomax))
+            if lamin < lamax && lomin < lomax =>
+        {
+            Some((lamin, lomin, lamax, lomax))
         }
-    } else {
-        None
+        _ => None,
     };
-    if let (Some(lamin), Some(lomin), Some(lamax), Some(lomax)) = bbox {
-        if lamin < lamax && lomin < lomax {
+    let center_hint = bbox_resolved.map(|(lamin, lomin, lamax, lomax)| {
+        ((lamin + lamax) / 2.0, (lomin + lomax) / 2.0)
+    });
+    let url = if is_adsb {
+        build_adsb_url(&state.flight_base_url, bbox_resolved)?
+    } else {
+        let mut url = reqwest::Url::parse(&state.flight_base_url)
+            .map_err(|_| actix_web::error::ErrorBadRequest("invalid flight base url"))?;
+        if let Some((lamin, lomin, lamax, lomax)) = bbox_resolved {
             url.query_pairs_mut()
                 .append_pair("lamin", &lamin.to_string())
                 .append_pair("lomin", &lomin.to_string())
                 .append_pair("lamax", &lamax.to_string())
                 .append_pair("lomax", &lomax.to_string());
         }
-    }
+        url
+    };
 
     let mut request = state
         .tile_client
@@ -172,7 +313,11 @@ pub async fn flights(
                 .json::<serde_json::Value>()
                 .await
                 .map_err(actix_web::error::ErrorBadGateway)?;
-            parse_opensky(value, &state.flight_provider, limit)
+            if is_adsb {
+                parse_adsb_lol(value, &state.flight_provider, limit)
+            } else {
+                parse_opensky(value, &state.flight_provider, limit)
+            }
         }
         Ok(response) => {
             tracing::warn!(status = %response.status(), "flight provider error");

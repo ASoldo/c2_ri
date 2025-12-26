@@ -69,6 +69,17 @@ Optional overrides:
 - `C2_UI_POLL_INTERVAL_MS=2000`
 - `C2_UI_LIST_LIMIT=200`
 - `C2_WEB_STATIC_DIR=services/c2-web/static`
+- `C2_WEB_FLIGHT_PROVIDER=adsb_lol`
+- `C2_WEB_FLIGHT_BASE_URL=https://api.adsb.lol/v2/lat/{lat}/lon/{lon}/dist/{dist}`
+- `C2_WEB_FLIGHT_MAX=200`
+- `C2_WEB_FLIGHT_SAMPLE_ENABLED=false`
+
+To switch back to OpenSky (optional credentials for higher limits):
+
+- `C2_WEB_FLIGHT_PROVIDER=opensky`
+- `C2_WEB_FLIGHT_BASE_URL=https://opensky-network.org/api/states/all`
+- `C2_WEB_FLIGHT_USER=...`
+- `C2_WEB_FLIGHT_PASS=...`
 
 UI module layout:
 

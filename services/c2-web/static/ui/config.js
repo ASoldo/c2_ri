@@ -157,7 +157,7 @@ export const WEATHER_CONFIG = buildWeatherConfig();
 
 export const DEFAULT_FLIGHT_CONFIG = {
   enabled: true,
-  provider: "opensky",
+  provider: "adsb_lol",
   updateIntervalMs: 5000,
   minIntervalMs: 3500,
   maxFlights: 80,
@@ -166,7 +166,7 @@ export const DEFAULT_FLIGHT_CONFIG = {
   spanMinDeg: 8,
   spanMaxDeg: 60,
   altitudeScale: 0.08,
-  source: "OpenSky",
+  source: "ADSB.lol",
   sample: true,
 };
 
