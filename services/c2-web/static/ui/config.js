@@ -1,4 +1,17 @@
 export const MEDIA_OVERLAY_RENDER_ORDER = 55;
+export const MARKER_ALTITUDE = 3.0;
+export const SHIP_BASE_ALTITUDE = 0.6;
+export const PARTICLE_SIZES = {
+  default: 6.0,
+  asset: 6.5,
+  unit: 6.5,
+  mission: 6.5,
+  incident: 6.5,
+  flight: 5.5,
+  satellite: 4.5,
+  ship: 5.5,
+};
+export const LABEL_LOD_MAX = 2200;
 
 export const DEFAULT_TILE_PROVIDERS = {
   osm: {

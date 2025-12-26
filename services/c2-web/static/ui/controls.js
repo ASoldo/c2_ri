@@ -5,24 +5,32 @@ import {
   TILE_CONFIG,
   WEATHER_CONFIG,
 } from "/static/ui/config.js";
+import { ECS_KIND } from "/static/ui/ecs.js";
 import { clampLat, parseNumber, wrapLon } from "/static/ui/utils.js";
 import { els } from "/static/ui/dom.js";
 
-export const setupLayerToggles = (bubbleOverlay) => {
+export const setupLayerToggles = (renderer3d, bubbleOverlay) => {
   document.querySelectorAll("[data-layer-toggle]").forEach((button) => {
     const layerName = button.dataset.layerToggle;
     if (!layerName) return;
-    const initial =
-      layerName === "pins" ? bubbleOverlay?.visible?.pins !== false : true;
+    const initial = true;
     button.dataset.active = initial ? "true" : "false";
     if (layerName === "pins") {
-      bubbleOverlay?.setPinsVisible(initial);
+      renderer3d?.setKindVisibility?.(ECS_KIND.asset, initial);
+      renderer3d?.setKindVisibility?.(ECS_KIND.unit, initial);
+      renderer3d?.setKindVisibility?.(ECS_KIND.mission, initial);
+      renderer3d?.setKindVisibility?.(ECS_KIND.incident, initial);
+      bubbleOverlay?.setPinsVisible?.(initial);
     }
     button.addEventListener("click", () => {
       const next = button.dataset.active !== "true";
       button.dataset.active = next ? "true" : "false";
       if (layerName === "pins") {
-        bubbleOverlay?.setPinsVisible(next);
+        renderer3d?.setKindVisibility?.(ECS_KIND.asset, next);
+        renderer3d?.setKindVisibility?.(ECS_KIND.unit, next);
+        renderer3d?.setKindVisibility?.(ECS_KIND.mission, next);
+        renderer3d?.setKindVisibility?.(ECS_KIND.incident, next);
+        bubbleOverlay?.setPinsVisible?.(next);
       }
     });
   });
@@ -226,11 +234,14 @@ export const setupFlightControls = (renderer3d, bus, overlay, bubbleOverlay) => 
   const toggle = document.querySelector("[data-flight-toggle]");
   if (toggle) {
     toggle.setAttribute("aria-pressed", "false");
+    renderer3d?.setKindVisibility?.(ECS_KIND.flight, false);
+    bubbleOverlay?.setFlightsVisible?.(false);
     toggle.addEventListener("click", () => {
       const next = toggle.getAttribute("aria-pressed") !== "true";
       toggle.setAttribute("aria-pressed", next.toString());
       overlay?.setVisible(next);
-      bubbleOverlay?.setFlightsVisible(next);
+      renderer3d?.setKindVisibility?.(ECS_KIND.flight, next);
+      bubbleOverlay?.setFlightsVisible?.(next);
       if (next) {
         fetchFlights(renderer3d, bus, overlay);
       }
@@ -251,11 +262,14 @@ export const setupSatelliteControls = (renderer3d, bus, overlay, bubbleOverlay) 
   const toggle = document.querySelector("[data-satellite-toggle]");
   if (toggle) {
     toggle.setAttribute("aria-pressed", "false");
+    renderer3d?.setKindVisibility?.(ECS_KIND.satellite, false);
+    bubbleOverlay?.setSatellitesVisible?.(false);
     toggle.addEventListener("click", () => {
       const next = toggle.getAttribute("aria-pressed") !== "true";
       toggle.setAttribute("aria-pressed", next.toString());
       overlay?.setVisible(next);
-      bubbleOverlay?.setSatellitesVisible(next);
+      renderer3d?.setKindVisibility?.(ECS_KIND.satellite, next);
+      bubbleOverlay?.setSatellitesVisible?.(next);
       if (next) {
         fetchSatellites(renderer3d, bus, overlay);
       }
@@ -276,11 +290,14 @@ export const setupShipControls = (renderer3d, bus, overlay, bubbleOverlay) => {
   const toggle = document.querySelector("[data-ship-toggle]");
   if (toggle) {
     toggle.setAttribute("aria-pressed", "false");
+    renderer3d?.setKindVisibility?.(ECS_KIND.ship, false);
+    bubbleOverlay?.setShipsVisible?.(false);
     toggle.addEventListener("click", () => {
       const next = toggle.getAttribute("aria-pressed") !== "true";
       toggle.setAttribute("aria-pressed", next.toString());
       overlay?.setVisible(next);
-      bubbleOverlay?.setShipsVisible(next);
+      renderer3d?.setKindVisibility?.(ECS_KIND.ship, next);
+      bubbleOverlay?.setShipsVisible?.(next);
       if (next) {
         fetchShips(renderer3d, bus, overlay);
       }

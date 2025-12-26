@@ -24,7 +24,7 @@ import { syncFlights, syncSatellites, syncShips } from "./store.js";
 const positionForEntity = (entity, renderer, geo, altitude) => {
   if (!renderer || !geo) return null;
   if (renderer.mode === "globe") {
-    const pos = ecsRuntime.positionForId(entity, altitude, renderer.globeRadius);
+    const pos = ecsRuntime.positionForId(entity);
     if (pos) return pos;
   }
   return renderer.positionForGeo(geo, altitude);
@@ -295,16 +295,20 @@ class FlightOverlay {
     this.store = store;
     this.visible = false;
     this.trails = new FlightTrailLayer(renderer);
-    this.planes = new FlightMeshLayer(renderer);
+    this.planes = renderer?.particlesEnabled ? null : new FlightMeshLayer(renderer);
     this.lastSnapshot = null;
     this.trails.setVisible(false);
-    this.planes.setVisible(false);
+    if (this.planes) {
+      this.planes.setVisible(false);
+    }
   }
 
   setVisible(visible) {
     this.visible = visible;
     this.trails.setVisible(this.visible && this.renderer?.mode === "globe");
-    this.planes.setVisible(this.visible && this.renderer?.mode === "globe");
+    if (this.planes) {
+      this.planes.setVisible(this.visible && this.renderer?.mode === "globe");
+    }
   }
 
   ingest(snapshot) {
@@ -317,9 +321,13 @@ class FlightOverlay {
     if (!this.visible) return;
     const flights = ecsRuntime.kindCache.get(ECS_KIND.flight) || [];
     this.trails.setVisible(this.visible && this.renderer?.mode === "globe");
-    this.planes.setVisible(this.visible && this.renderer?.mode === "globe");
+    if (this.planes) {
+      this.planes.setVisible(this.visible && this.renderer?.mode === "globe");
+    }
     this.trails.ingest(this.lastSnapshot?.flights || []);
-    this.planes.sync(flights, this.store);
+    if (this.planes) {
+      this.planes.sync(flights, this.store);
+    }
   }
 }
 
@@ -416,14 +424,18 @@ class SatelliteOverlay {
     this.renderer = renderer;
     this.store = store;
     this.visible = false;
-    this.meshes = new SatelliteMeshLayer(renderer);
+    this.meshes = renderer?.particlesEnabled ? null : new SatelliteMeshLayer(renderer);
     this.lastSnapshot = null;
-    this.meshes.setVisible(false);
+    if (this.meshes) {
+      this.meshes.setVisible(false);
+    }
   }
 
   setVisible(visible) {
     this.visible = visible;
-    this.meshes.setVisible(visible && this.renderer?.mode === "globe");
+    if (this.meshes) {
+      this.meshes.setVisible(visible && this.renderer?.mode === "globe");
+    }
   }
 
   ingest(snapshot) {
@@ -435,8 +447,10 @@ class SatelliteOverlay {
   sync() {
     if (!this.visible) return;
     const satellites = ecsRuntime.kindCache.get(ECS_KIND.satellite) || [];
-    this.meshes.setVisible(this.visible && this.renderer?.mode === "globe");
-    this.meshes.sync(satellites, this.store);
+    if (this.meshes) {
+      this.meshes.setVisible(this.visible && this.renderer?.mode === "globe");
+      this.meshes.sync(satellites, this.store);
+    }
   }
 }
 
@@ -539,14 +553,18 @@ class ShipOverlay {
     this.renderer = renderer;
     this.store = store;
     this.visible = false;
-    this.meshes = new ShipMeshLayer(renderer);
+    this.meshes = renderer?.particlesEnabled ? null : new ShipMeshLayer(renderer);
     this.lastSnapshot = null;
-    this.meshes.setVisible(false);
+    if (this.meshes) {
+      this.meshes.setVisible(false);
+    }
   }
 
   setVisible(visible) {
     this.visible = visible;
-    this.meshes.setVisible(visible && this.renderer?.mode === "globe");
+    if (this.meshes) {
+      this.meshes.setVisible(visible && this.renderer?.mode === "globe");
+    }
   }
 
   ingest(snapshot) {
@@ -558,8 +576,10 @@ class ShipOverlay {
   sync() {
     if (!this.visible) return;
     const ships = ecsRuntime.kindCache.get(ECS_KIND.ship) || [];
-    this.meshes.setVisible(this.visible && this.renderer?.mode === "globe");
-    this.meshes.sync(ships, this.store);
+    if (this.meshes) {
+      this.meshes.setVisible(this.visible && this.renderer?.mode === "globe");
+      this.meshes.sync(ships, this.store);
+    }
   }
 }
 
@@ -1035,6 +1055,8 @@ class BubbleOverlay {
     this.renderer = renderer;
     this.boundsEl = boundsEl;
     this.popup = popup;
+    this.onSelect = null;
+    this.lodEnabled = true;
     this.scene = new THREE.Scene();
     this.camera = new THREE.OrthographicCamera(0, 1, 1, 0, -1000, 1000);
     this.camera.position.z = 10;
@@ -1075,6 +1097,28 @@ class BubbleOverlay {
       this.renderer.setOverlayScene(this.scene, this.camera);
     }
     this.bindEvents();
+  }
+
+  setLodEnabled(enabled) {
+    this.lodEnabled = Boolean(enabled);
+    if (!this.lodEnabled) {
+      Object.values(this.groups).forEach((group) => {
+        if (group) group.visible = false;
+      });
+      this.clearSelection();
+      this.popup?.close(true);
+      return;
+    }
+    this.applyGroupVisibility();
+  }
+
+  applyGroupVisibility() {
+    if (!this.lodEnabled) return;
+    this.groups.pins.visible = this.visible.pins;
+    this.groups.flights.visible = this.visible.flights;
+    this.groups.satellites.visible = this.visible.satellites;
+    this.groups.ships.visible = this.visible.ships;
+    this.groups.edges.visible = true;
   }
 
   bindEvents() {
@@ -1138,25 +1182,33 @@ class BubbleOverlay {
 
   setPinsVisible(visible) {
     this.visible.pins = visible;
-    this.groups.pins.visible = visible;
+    if (this.lodEnabled) {
+      this.groups.pins.visible = visible;
+    }
     if (!visible) this.clearSelectionForGroup("pins");
   }
 
   setFlightsVisible(visible) {
     this.visible.flights = visible;
-    this.groups.flights.visible = visible;
+    if (this.lodEnabled) {
+      this.groups.flights.visible = visible;
+    }
     if (!visible) this.clearSelectionForGroup("flights");
   }
 
   setSatellitesVisible(visible) {
     this.visible.satellites = visible;
-    this.groups.satellites.visible = visible;
+    if (this.lodEnabled) {
+      this.groups.satellites.visible = visible;
+    }
     if (!visible) this.clearSelectionForGroup("satellites");
   }
 
   setShipsVisible(visible) {
     this.visible.ships = visible;
-    this.groups.ships.visible = visible;
+    if (this.lodEnabled) {
+      this.groups.ships.visible = visible;
+    }
     if (!visible) this.clearSelectionForGroup("ships");
   }
 
@@ -1170,6 +1222,7 @@ class BubbleOverlay {
     if (!this.selected?.entry) return;
     this.applySelection(this.selected.entry, false);
     this.selected = null;
+    this.onSelect?.(null);
   }
 
   pick(event) {
@@ -1207,6 +1260,7 @@ class BubbleOverlay {
     this.selected = { entry, group: entry.group, entityId: entry.entityId };
     this.applySelection(entry, true);
     this.popup?.openFor(entry.entityId, entry.label, entry.details);
+    this.onSelect?.(entry.entityId);
   }
 
   applySelection(entry, selected) {
@@ -1301,6 +1355,7 @@ class BubbleOverlay {
   }
 
   syncPins(entities, store) {
+    if (!this.lodEnabled) return;
     const seen = new Set();
     if (!this.visible.pins) {
       this.groups.pins.visible = false;
@@ -1362,6 +1417,7 @@ class BubbleOverlay {
   }
 
   syncFlights(entities, store) {
+    if (!this.lodEnabled) return;
     const seen = new Set();
     if (!this.visible.flights) {
       this.groups.flights.visible = false;
@@ -1423,6 +1479,7 @@ class BubbleOverlay {
   }
 
   syncSatellites(entities, store) {
+    if (!this.lodEnabled) return;
     const seen = new Set();
     if (!this.visible.satellites) {
       this.groups.satellites.visible = false;
@@ -1490,6 +1547,7 @@ class BubbleOverlay {
   }
 
   syncShips(entities, store) {
+    if (!this.lodEnabled) return;
     const seen = new Set();
     if (!this.visible.ships) {
       this.groups.ships.visible = false;
@@ -1551,6 +1609,7 @@ class BubbleOverlay {
   }
 
   syncEdges(entities, store) {
+    if (!this.lodEnabled) return;
     const seen = new Set();
     const clamp = {
       left: 0,

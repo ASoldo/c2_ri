@@ -18,6 +18,33 @@ const KIND_FLIGHT: u8 = 5;
 const KIND_SATELLITE: u8 = 6;
 const KIND_SHIP: u8 = 7;
 const KIND_MAX: usize = 8;
+const DEFAULT_ALTITUDE: f32 = 0.0;
+const DEFAULT_SIZE: f32 = 6.0;
+
+#[derive(Component, Debug, Clone, Copy)]
+struct Altitude(f32);
+
+#[derive(Component, Debug, Clone, Copy)]
+struct RenderSize(f32);
+
+#[derive(Component, Debug, Clone, Copy)]
+struct RenderColor {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
+impl Default for RenderColor {
+    fn default() -> Self {
+        Self {
+            r: 0x38,
+            g: 0xbd,
+            b: 0xf8,
+            a: 0xff,
+        }
+    }
+}
 
 #[derive(Component, Debug, Clone, Copy)]
 struct GeoPosition {
@@ -43,9 +70,15 @@ struct WorldState {
     id_map: HashMap<u64, Entity>,
     render_ids: Vec<u64>,
     render_positions: Vec<f32>,
+    render_colors: Vec<u8>,
+    render_sizes: Vec<f32>,
+    render_kinds: Vec<u8>,
     ingest_ids: Vec<u64>,
     ingest_geos: Vec<f32>,
     ingest_kinds: Vec<u8>,
+    ingest_alts: Vec<f32>,
+    ingest_sizes: Vec<f32>,
+    ingest_colors: Vec<u8>,
     kind_ids: Vec<Vec<u64>>,
 }
 
@@ -60,9 +93,15 @@ impl WorldState {
             id_map: HashMap::new(),
             render_ids: Vec::new(),
             render_positions: Vec::new(),
+            render_colors: Vec::new(),
+            render_sizes: Vec::new(),
+            render_kinds: Vec::new(),
             ingest_ids: Vec::new(),
             ingest_geos: Vec::new(),
             ingest_kinds: Vec::new(),
+            ingest_alts: Vec::new(),
+            ingest_sizes: Vec::new(),
+            ingest_colors: Vec::new(),
             kind_ids: (0..KIND_MAX).map(|_| Vec::new()).collect(),
         };
         state
@@ -81,12 +120,24 @@ impl WorldState {
                 lon_deg: 16.0,
             },
             EntityKind(KIND_ASSET),
+            Altitude(DEFAULT_ALTITUDE),
+            RenderSize(DEFAULT_SIZE),
+            RenderColor::default(),
             Cartesian::default(),
         ));
         self.id_map.insert(id, entity.id());
     }
 
-    fn upsert_entity(&mut self, id: u64, lat_deg: f32, lon_deg: f32, kind: u8) {
+    fn upsert_entity(
+        &mut self,
+        id: u64,
+        lat_deg: f32,
+        lon_deg: f32,
+        kind: u8,
+        altitude: f32,
+        size: f32,
+        color: RenderColor,
+    ) {
         if let Some(entity) = self.id_map.get(&id).copied() {
             if let Some(mut geo) = self.world.get_mut::<GeoPosition>(entity) {
                 geo.lat_deg = lat_deg;
@@ -97,6 +148,21 @@ impl WorldState {
             } else {
                 self.world.entity_mut(entity).insert(EntityKind(kind));
             }
+            if let Some(mut altitude_component) = self.world.get_mut::<Altitude>(entity) {
+                altitude_component.0 = altitude;
+            } else {
+                self.world.entity_mut(entity).insert(Altitude(altitude));
+            }
+            if let Some(mut size_component) = self.world.get_mut::<RenderSize>(entity) {
+                size_component.0 = size;
+            } else {
+                self.world.entity_mut(entity).insert(RenderSize(size));
+            }
+            if let Some(mut color_component) = self.world.get_mut::<RenderColor>(entity) {
+                *color_component = color;
+            } else {
+                self.world.entity_mut(entity).insert(color);
+            }
             return;
         }
         let entity = self.world.spawn((
@@ -106,6 +172,9 @@ impl WorldState {
                 lon_deg,
             },
             EntityKind(kind),
+            Altitude(altitude),
+            RenderSize(size),
+            color,
             Cartesian::default(),
         ));
         self.id_map.insert(id, entity.id());
@@ -139,6 +208,37 @@ impl WorldState {
         if self.ingest_kinds.len() < count {
             self.ingest_kinds.resize(count, KIND_UNKNOWN);
         }
+        if self.ingest_alts.len() < count {
+            let old_len = self.ingest_alts.len();
+            self.ingest_alts.resize(count, DEFAULT_ALTITUDE);
+            if old_len < count {
+                for value in &mut self.ingest_alts[old_len..count] {
+                    *value = DEFAULT_ALTITUDE;
+                }
+            }
+        }
+        if self.ingest_sizes.len() < count {
+            let old_len = self.ingest_sizes.len();
+            self.ingest_sizes.resize(count, DEFAULT_SIZE);
+            if old_len < count {
+                for value in &mut self.ingest_sizes[old_len..count] {
+                    *value = DEFAULT_SIZE;
+                }
+            }
+        }
+        let color_len = count * 4;
+        if self.ingest_colors.len() < color_len {
+            let old_len = self.ingest_colors.len();
+            self.ingest_colors.resize(color_len, 0);
+            if old_len < color_len {
+                for chunk in self.ingest_colors[old_len..color_len].chunks_exact_mut(4) {
+                    chunk[0] = RenderColor::default().r;
+                    chunk[1] = RenderColor::default().g;
+                    chunk[2] = RenderColor::default().b;
+                    chunk[3] = RenderColor::default().a;
+                }
+            }
+        }
     }
 
     fn ingest_commit(&mut self, count: usize) {
@@ -150,47 +250,93 @@ impl WorldState {
         if self.ingest_kinds.len() < count {
             return;
         }
+        if self.ingest_alts.len() < count {
+            return;
+        }
+        if self.ingest_sizes.len() < count {
+            return;
+        }
+        if self.ingest_colors.len() < count * 4 {
+            return;
+        }
         for index in 0..count {
             let id = self.ingest_ids[index];
             let geo_index = index * 2;
             let lat = self.ingest_geos[geo_index];
             let lon = self.ingest_geos[geo_index + 1];
             let kind = self.ingest_kinds[index];
-            self.upsert_entity(id, lat, lon, kind);
+            let altitude = self.ingest_alts[index];
+            let size = self.ingest_sizes[index];
+            let color_index = index * 4;
+            let color = RenderColor {
+                r: self.ingest_colors[color_index],
+                g: self.ingest_colors[color_index + 1],
+                b: self.ingest_colors[color_index + 2],
+                a: self.ingest_colors[color_index + 3],
+            };
+            self.upsert_entity(id, lat, lon, kind, altitude, size, color);
         }
     }
 
     fn refresh_render_buffers(&mut self) {
         self.render_ids.clear();
         self.render_positions.clear();
+        self.render_colors.clear();
+        self.render_sizes.clear();
+        self.render_kinds.clear();
         self.render_ids.reserve(self.id_map.len());
         self.render_positions.reserve(self.id_map.len() * 3);
+        self.render_colors.reserve(self.id_map.len() * 4);
+        self.render_sizes.reserve(self.id_map.len());
+        self.render_kinds.reserve(self.id_map.len());
         for list in &mut self.kind_ids {
             list.clear();
         }
         let mut query = self
             .world
-            .query::<(&EntityId, &Cartesian, Option<&EntityKind>)>();
-        for (entity_id, cart, kind) in query.iter(&self.world) {
+            .query::<(
+                &EntityId,
+                &Cartesian,
+                Option<&EntityKind>,
+                Option<&RenderColor>,
+                Option<&RenderSize>,
+            )>();
+        for (entity_id, cart, kind, color, size) in query.iter(&self.world) {
             self.render_ids.push(entity_id.0);
             self.render_positions.push(cart.x);
             self.render_positions.push(cart.y);
             self.render_positions.push(cart.z);
+            let render_color = color.copied().unwrap_or_default();
+            self.render_colors.push(render_color.r);
+            self.render_colors.push(render_color.g);
+            self.render_colors.push(render_color.b);
+            self.render_colors.push(render_color.a);
+            let render_size = size.map(|value| value.0).unwrap_or(DEFAULT_SIZE);
+            self.render_sizes.push(render_size);
             let index = kind.map(|value| value.0 as usize).unwrap_or(KIND_UNKNOWN as usize);
             if index < self.kind_ids.len() {
                 self.kind_ids[index].push(entity_id.0);
             }
+            let kind_value = kind.map(|value| value.0).unwrap_or(KIND_UNKNOWN);
+            self.render_kinds.push(kind_value);
         }
     }
 }
 
-fn update_cartesian(radius: Res<GlobeRadius>, mut query: Query<(&GeoPosition, &mut Cartesian)>) {
+fn update_cartesian(
+    radius: Res<GlobeRadius>,
+    mut query: Query<(&GeoPosition, Option<&Altitude>, &mut Cartesian)>,
+) {
     update_cartesian_with_radius(radius.value, &mut query);
 }
 
-fn update_cartesian_with_radius(radius: f32, query: &mut Query<(&GeoPosition, &mut Cartesian)>) {
-    for (geo, mut cart) in query.iter_mut() {
-        let (x, y, z) = geo_to_cartesian(geo.lat_deg, geo.lon_deg, radius);
+fn update_cartesian_with_radius(
+    radius: f32,
+    query: &mut Query<(&GeoPosition, Option<&Altitude>, &mut Cartesian)>,
+) {
+    for (geo, altitude, mut cart) in query.iter_mut() {
+        let altitude = altitude.map(|value| value.0).unwrap_or(DEFAULT_ALTITUDE);
+        let (x, y, z) = geo_to_cartesian(geo.lat_deg, geo.lon_deg, radius + altitude);
         cart.x = x;
         cart.y = y;
         cart.z = z;
@@ -253,7 +399,17 @@ pub extern "C" fn ecs_set_globe_radius(radius: f32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn ecs_upsert_entity(id: u64, lat_deg: f32, lon_deg: f32) {
-    with_state(|state| state.upsert_entity(id, lat_deg, lon_deg, KIND_UNKNOWN));
+    with_state(|state| {
+        state.upsert_entity(
+            id,
+            lat_deg,
+            lon_deg,
+            KIND_UNKNOWN,
+            DEFAULT_ALTITUDE,
+            DEFAULT_SIZE,
+            RenderColor::default(),
+        )
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -287,6 +443,36 @@ pub extern "C" fn ecs_positions_len() -> usize {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn ecs_colors_ptr() -> *const u8 {
+    with_state(|state| state.render_colors.as_ptr())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ecs_colors_len() -> usize {
+    with_state(|state| state.render_colors.len())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ecs_sizes_ptr() -> *const f32 {
+    with_state(|state| state.render_sizes.as_ptr())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ecs_sizes_len() -> usize {
+    with_state(|state| state.render_sizes.len())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ecs_kinds_ptr() -> *const u8 {
+    with_state(|state| state.render_kinds.as_ptr())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ecs_kinds_len() -> usize {
+    with_state(|state| state.render_kinds.len())
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn ecs_ingest_reserve(count: usize) {
     with_state(|state| state.reserve_ingest(count));
 }
@@ -307,6 +493,21 @@ pub extern "C" fn ecs_ingest_kinds_ptr() -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn ecs_ingest_alts_ptr() -> *mut f32 {
+    with_state(|state| state.ingest_alts.as_mut_ptr())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ecs_ingest_sizes_ptr() -> *mut f32 {
+    with_state(|state| state.ingest_sizes.as_mut_ptr())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ecs_ingest_colors_ptr() -> *mut u8 {
+    with_state(|state| state.ingest_colors.as_mut_ptr())
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn ecs_ingest_commit(count: usize) {
     with_state(|state| state.ingest_commit(count));
 }
@@ -314,7 +515,35 @@ pub extern "C" fn ecs_ingest_commit(count: usize) {
 #[unsafe(no_mangle)]
 pub extern "C" fn ecs_upsert_entity_kind(id: u64, lat_deg: f32, lon_deg: f32, kind: u32) {
     let kind = kind.min(u8::MAX as u32) as u8;
-    with_state(|state| state.upsert_entity(id, lat_deg, lon_deg, kind));
+    with_state(|state| {
+        state.upsert_entity(
+            id,
+            lat_deg,
+            lon_deg,
+            kind,
+            DEFAULT_ALTITUDE,
+            DEFAULT_SIZE,
+            RenderColor::default(),
+        )
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ecs_upsert_entity_style(
+    id: u64,
+    lat_deg: f32,
+    lon_deg: f32,
+    kind: u32,
+    altitude: f32,
+    size: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+) {
+    let kind = kind.min(u8::MAX as u32) as u8;
+    let color = RenderColor { r, g, b, a };
+    with_state(|state| state.upsert_entity(id, lat_deg, lon_deg, kind, altitude, size, color));
 }
 
 #[unsafe(no_mangle)]

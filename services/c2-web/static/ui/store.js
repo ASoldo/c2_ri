@@ -1,4 +1,9 @@
 import {
+  MARKER_ALTITUDE,
+  PARTICLE_SIZES,
+  SHIP_BASE_ALTITUDE,
+} from "./config.js";
+import {
   ecsRuntime,
   ECS_KIND,
   ecsKindForType,
@@ -6,6 +11,10 @@ import {
   hashToGeo,
 } from "./ecs.js";
 import {
+  altitudeForFlight,
+  altitudeForSatellite,
+  altitudeForShip,
+  colorToRgba,
   colorForAsset,
   colorForUnit,
   colorForMission,
@@ -33,6 +42,24 @@ const resolveGeo = (data, fallbackKey) => {
     return { lat, lon };
   }
   return hashToGeo(String(data?.id ?? fallbackKey));
+};
+
+const particleSizeForKind = (kind) => {
+  if (!kind) return PARTICLE_SIZES.default ?? 6.0;
+  return PARTICLE_SIZES[kind] ?? PARTICLE_SIZES.default ?? 6.0;
+};
+
+const altitudeForKind = (kind, data) => {
+  switch (kind) {
+    case "flight":
+      return MARKER_ALTITUDE + altitudeForFlight(data);
+    case "satellite":
+      return MARKER_ALTITUDE + altitudeForSatellite(data);
+    case "ship":
+      return SHIP_BASE_ALTITUDE + altitudeForShip();
+    default:
+      return MARKER_ALTITUDE;
+  }
 };
 
 export class EntityStore {
@@ -93,8 +120,17 @@ export const syncEntities = (payload, store) => {
     const geo = resolveGeo(data, key);
     store.addComponent(entity, "Geo", geo);
     if (ingest) {
-      const kind = ecsKindForType(key.split(":")[0]);
-      ingest.push({ id: ecsId, lat: geo.lat, lon: geo.lon, kind });
+      const kindName = key.split(":")[0];
+      const kind = ecsKindForType(kindName);
+      ingest.push({
+        id: ecsId,
+        lat: geo.lat,
+        lon: geo.lon,
+        kind,
+        altitude: altitudeForKind(kindName, data),
+        size: particleSizeForKind(kindName),
+        color: colorToRgba(color),
+      });
     }
     store.addComponent(entity, "Renderable", { color });
     store.addComponent(entity, "Meta", { kind: key.split(":")[0], data });
@@ -157,16 +193,20 @@ export const syncFlights = (payload, store) => {
     store.ensureEntity(entity);
     seen.add(entity);
     store.addComponent(entity, "Geo", { lat: flight.lat, lon: flight.lon });
+    const color = colorForFlight(flight);
     if (ingest) {
       ingest.push({
         id: ecsId,
         lat: flight.lat,
         lon: flight.lon,
         kind: ECS_KIND.flight,
+        altitude: altitudeForKind("flight", flight),
+        size: particleSizeForKind("flight"),
+        color: colorToRgba(color),
       });
     }
     store.addComponent(entity, "Flight", flight);
-    store.addComponent(entity, "Renderable", { color: colorForFlight(flight) });
+    store.addComponent(entity, "Renderable", { color });
     store.addComponent(entity, "Meta", { kind: "flight", data: flight });
     store.addComponent(entity, "Pin", {
       label: formatFlightLabel(flight),
@@ -206,16 +246,20 @@ export const syncSatellites = (payload, store) => {
     store.ensureEntity(entity);
     seen.add(entity);
     store.addComponent(entity, "Geo", { lat: satellite.lat, lon: satellite.lon });
+    const color = colorForSatellite(satellite);
     if (ingest) {
       ingest.push({
         id: ecsId,
         lat: satellite.lat,
         lon: satellite.lon,
         kind: ECS_KIND.satellite,
+        altitude: altitudeForKind("satellite", satellite),
+        size: particleSizeForKind("satellite"),
+        color: colorToRgba(color),
       });
     }
     store.addComponent(entity, "Satellite", satellite);
-    store.addComponent(entity, "Renderable", { color: colorForSatellite(satellite) });
+    store.addComponent(entity, "Renderable", { color });
     store.addComponent(entity, "Meta", { kind: "satellite", data: satellite });
     store.addComponent(entity, "Pin", {
       label: formatSatelliteLabel(satellite),
@@ -250,16 +294,20 @@ export const syncShips = (payload, store) => {
     store.ensureEntity(entity);
     seen.add(entity);
     store.addComponent(entity, "Geo", { lat: ship.lat, lon: ship.lon });
+    const color = colorForShip(ship);
     if (ingest) {
       ingest.push({
         id: ecsId,
         lat: ship.lat,
         lon: ship.lon,
         kind: ECS_KIND.ship,
+        altitude: altitudeForKind("ship", ship),
+        size: particleSizeForKind("ship"),
+        color: colorToRgba(color),
       });
     }
     store.addComponent(entity, "Ship", ship);
-    store.addComponent(entity, "Renderable", { color: colorForShip(ship) });
+    store.addComponent(entity, "Renderable", { color });
     store.addComponent(entity, "Meta", { kind: "ship", data: ship });
     store.addComponent(entity, "Pin", { label: formatShipLabel(ship) });
   });

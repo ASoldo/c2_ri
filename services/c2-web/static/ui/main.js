@@ -7,8 +7,11 @@ import {
   SatelliteOverlay,
   ShipOverlay,
 } from "/static/ui/overlays.js";
-import { shipBaseAltitude, altitudeForShip } from "/static/ui/entity-utils.js";
-import { forEachEntity } from "/static/ui/utils.js";
+import {
+  formatFlightDetails,
+  formatSatelliteDetails,
+  formatShipDetails,
+} from "/static/ui/entity-utils.js";
 import { EventBus } from "/static/ui/bus.js";
 import { BoardView } from "/static/ui/board.js";
 import { Renderer3D, MediaOverlay } from "/static/ui/renderer.js";
@@ -33,7 +36,12 @@ import {
   setDockState,
   allDocks,
 } from "/static/ui/docks.js";
-import { FLIGHT_CONFIG, SATELLITE_CONFIG, SHIP_CONFIG } from "/static/ui/config.js";
+import {
+  FLIGHT_CONFIG,
+  SATELLITE_CONFIG,
+  SHIP_CONFIG,
+  LABEL_LOD_MAX,
+} from "/static/ui/config.js";
 import { els } from "/static/ui/dom.js";
 
 export const boot = async () => {
@@ -51,25 +59,88 @@ export const boot = async () => {
   renderer3d.init();
   ecsRuntime.setGlobeRadius(renderer3d.globeRadius);
 
-  const bubbleOverlay = new BubbleOverlay(
-    renderer3d,
-    els.board,
-    new BubblePopup((action, entityId) => {
-      if (action === "focus") {
-        const entity = parseEntityId(entityId);
-        if (entity === null) return;
-        const geo = store.getComponent(entity, "Geo");
-        if (geo) renderer3d.focusOnGeo(geo);
-      } else {
-        console.info("bubble action", { action, entityId });
-      }
-    }, () => bubbleOverlay?.clearSelection?.()),
-  );
+  const popup = new BubblePopup((action, entityId) => {
+    if (action === "focus") {
+      const entity = parseEntityId(entityId);
+      if (entity === null) return;
+      const geo = store.getComponent(entity, "Geo");
+      if (geo) renderer3d.focusOnGeo(geo);
+    } else {
+      console.info("bubble action", { action, entityId });
+    }
+  }, () => {
+    renderer3d.setSelectedEntity(null);
+  });
+  const bubbleOverlay = new BubbleOverlay(renderer3d, els.board, popup);
+  bubbleOverlay.onSelect = (entityId) => {
+    renderer3d.setSelectedEntity(entityId);
+  };
   bubbleOverlay.resize(window.innerWidth, window.innerHeight);
+  bubbleOverlay.setLodEnabled(false);
   const flightOverlay = new FlightOverlay(renderer3d, store);
   const satelliteOverlay = new SatelliteOverlay(renderer3d, store);
   const shipOverlay = new ShipOverlay(renderer3d, store);
   const mediaOverlay = new MediaOverlay(renderer3d);
+
+  const buildPopupDetails = (entity) => {
+    const meta = store.getComponent(entity, "Meta");
+    if (!meta) return { label: "Entity", details: "" };
+    if (meta.kind === "flight") {
+      const flight = store.getComponent(entity, "Flight");
+      return {
+        label: store.getComponent(entity, "Pin")?.label || "Flight",
+        details: formatFlightDetails(flight),
+      };
+    }
+    if (meta.kind === "satellite") {
+      const satellite = store.getComponent(entity, "Satellite");
+      return {
+        label: store.getComponent(entity, "Pin")?.label || "Satellite",
+        details: formatSatelliteDetails(satellite),
+      };
+    }
+    if (meta.kind === "ship") {
+      const ship = store.getComponent(entity, "Ship");
+      return {
+        label: store.getComponent(entity, "Pin")?.label || "Ship",
+        details: formatShipDetails(ship),
+      };
+    }
+    const label =
+      store.getComponent(entity, "Pin")?.label ||
+      meta?.data?.name ||
+      meta?.data?.summary ||
+      meta.kind ||
+      "Entity";
+    return { label, details: "" };
+  };
+
+  const attachParticlePicker = () => {
+    const canvas = renderer3d.canvas;
+    if (!canvas) return;
+    let pointerDown = null;
+    const onPointerDown = (event) => {
+      pointerDown = { x: event.clientX, y: event.clientY };
+    };
+    const onPointerUp = (event) => {
+      if (!pointerDown) return;
+      const dx = event.clientX - pointerDown.x;
+      const dy = event.clientY - pointerDown.y;
+      pointerDown = null;
+      if (Math.hypot(dx, dy) > 6) return;
+      const entity = renderer3d.pickEntity(event.clientX, event.clientY);
+      if (!entity) {
+        popup.close(true);
+        renderer3d.setSelectedEntity(null);
+        return;
+      }
+      const { label, details } = buildPopupDetails(entity);
+      popup.openFor(entity, label, details);
+      renderer3d.setSelectedEntity(entity);
+    };
+    canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointerup", onPointerUp);
+  };
 
   bus.on("entities:update", (payload) => {
     syncEntities(payload, store);
@@ -92,6 +163,14 @@ export const boot = async () => {
   setupShipControls(renderer3d, bus, shipOverlay, bubbleOverlay);
   setupMediaOverlayControls(renderer3d, mediaOverlay);
 
+  let labelsEnabled = false;
+  const updateLabelLod = (entityCount) => {
+    const next = entityCount > 0 && entityCount <= LABEL_LOD_MAX;
+    if (next === labelsEnabled) return;
+    labelsEnabled = next;
+    bubbleOverlay.setLodEnabled(labelsEnabled);
+  };
+
   const renderLoop = (() => {
     let lastFpsSample = performance.now();
     let lastTick = performance.now();
@@ -111,7 +190,7 @@ export const boot = async () => {
 
       ecsRuntime.tick();
       const ecsFrame = ecsRuntime.refreshRenderCache();
-      const kindCache = ecsRuntime.refreshKindCache([
+      ecsRuntime.refreshKindCache([
         ECS_KIND.asset,
         ECS_KIND.unit,
         ECS_KIND.mission,
@@ -122,51 +201,31 @@ export const boot = async () => {
       ]);
       board.drawGrid();
 
-      const assetIds = kindCache.get(ECS_KIND.asset) || [];
-      const unitIds = kindCache.get(ECS_KIND.unit) || [];
-      const missionIds = kindCache.get(ECS_KIND.mission) || [];
-      const incidentIds = kindCache.get(ECS_KIND.incident) || [];
-      const flightIds = kindCache.get(ECS_KIND.flight) || [];
-      const satelliteIds = kindCache.get(ECS_KIND.satellite) || [];
-      const shipIds = kindCache.get(ECS_KIND.ship) || [];
-      const markerLists = [assetIds, unitIds, missionIds, incidentIds];
-      if (flightOverlay.visible) markerLists.push(flightIds);
-      if (satelliteOverlay.visible) markerLists.push(satelliteIds);
-      if (shipOverlay.visible) markerLists.push(shipIds);
-      const shipAltitude = shipBaseAltitude(renderer3d) + altitudeForShip();
-      const useEcsPositions = ecsFrame && renderer3d.mode === "globe";
-      let entityCount = 0;
-      const points = [];
-      forEachEntity(markerLists, (entity) => {
-        const geo = store.getComponent(entity, "Geo");
-        const renderable = store.getComponent(entity, "Renderable") || {};
-        const meta = store.getComponent(entity, "Meta");
-        const altitude =
-          meta?.kind === "ship" ? shipAltitude : renderer3d.markerAltitude;
-        let pos = null;
-        if (useEcsPositions) {
-          pos = ecsRuntime.positionForId(entity, altitude, renderer3d.globeRadius);
-        }
-        if (!pos) {
-          pos = renderer3d.positionForGeo(geo, altitude);
-        }
-        points.push({ ...pos, color: renderable.color });
-        entityCount += 1;
-      });
-      renderer3d.setInstances(points);
+      const entityCount = ecsFrame?.ids?.length || 0;
+      renderer3d.setParticles(ecsFrame);
+      updateLabelLod(entityCount);
       flightOverlay.sync();
       satelliteOverlay.sync();
       shipOverlay.sync();
       mediaOverlay.update(now);
       renderer3d.render(delta, () => {
-        const pinLists = [assetIds, unitIds, missionIds, incidentIds];
-        const flightEntities = flightOverlay.visible ? flightIds : [];
-        const satelliteEntities = satelliteOverlay.visible ? satelliteIds : [];
-        const shipEntities = shipOverlay.visible ? shipIds : [];
-        bubbleOverlay.syncPins(pinLists, store);
-        bubbleOverlay.syncFlights(flightEntities, store);
-        bubbleOverlay.syncSatellites(satelliteEntities, store);
-        bubbleOverlay.syncShips(shipEntities, store);
+        if (!labelsEnabled) return;
+        const kindCache = ecsRuntime.kindCache;
+        const assetIds = kindCache.get(ECS_KIND.asset) || [];
+        const unitIds = kindCache.get(ECS_KIND.unit) || [];
+        const missionIds = kindCache.get(ECS_KIND.mission) || [];
+        const incidentIds = kindCache.get(ECS_KIND.incident) || [];
+        const flightIds = kindCache.get(ECS_KIND.flight) || [];
+        const satelliteIds = kindCache.get(ECS_KIND.satellite) || [];
+        const shipIds = kindCache.get(ECS_KIND.ship) || [];
+        const markerLists = [assetIds, unitIds, missionIds, incidentIds];
+        if (flightOverlay.visible) markerLists.push(flightIds);
+        if (satelliteOverlay.visible) markerLists.push(satelliteIds);
+        if (shipOverlay.visible) markerLists.push(shipIds);
+        bubbleOverlay.syncPins(markerLists, store);
+        bubbleOverlay.syncFlights(flightOverlay.visible ? flightIds : [], store);
+        bubbleOverlay.syncSatellites(satelliteOverlay.visible ? satelliteIds : [], store);
+        bubbleOverlay.syncShips(shipOverlay.visible ? shipIds : [], store);
         bubbleOverlay.syncEdges(markerLists, store);
       });
 
@@ -208,6 +267,7 @@ export const boot = async () => {
 
   window.addEventListener("resize", resize);
   resize();
+  attachParticlePicker();
 
   updateStatus();
   fetchEntities(bus);
@@ -233,7 +293,7 @@ export const boot = async () => {
   allDocks().forEach((dock) => {
     setDockState(dock, dock.dataset.state || "open");
   });
-  setupLayerToggles(bubbleOverlay);
+  setupLayerToggles(renderer3d, bubbleOverlay);
 
   requestAnimationFrame(renderLoop);
 };

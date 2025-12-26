@@ -1,4 +1,10 @@
-import { FLIGHT_CONFIG, SATELLITE_CONFIG, SHIP_CONFIG } from "./config.js";
+import {
+  FLIGHT_CONFIG,
+  MARKER_ALTITUDE,
+  SATELLITE_CONFIG,
+  SHIP_BASE_ALTITUDE,
+  SHIP_CONFIG,
+} from "./config.js";
 
 export const colorForAsset = (asset) => {
   if (!asset) return "#38bdf8";
@@ -181,8 +187,8 @@ export const altitudeForShip = () =>
   Number.isFinite(SHIP_CONFIG.altitude) ? SHIP_CONFIG.altitude : 0.12;
 
 export const shipBaseAltitude = (renderer) => {
-  const base = renderer?.markerAltitude ?? 3.0;
-  return Math.max(0.25, base * 0.2);
+  const base = renderer?.markerAltitude ?? MARKER_ALTITUDE;
+  return Math.max(0.25, SHIP_BASE_ALTITUDE || base * 0.2);
 };
 
 export const formatShipLabel = (ship) => {
@@ -222,4 +228,27 @@ export const altitudeForFlight = (flight) => {
     ? flight.altitude_m / 1000
     : 8;
   return Math.min(8, Math.max(0.6, altitudeKm * FLIGHT_CONFIG.altitudeScale));
+};
+
+export const colorToRgba = (value, fallback = [0x38, 0xbd, 0xf8, 0xff]) => {
+  if (!value || typeof value !== "string") return fallback.slice();
+  const input = value.trim();
+  if (!input.startsWith("#")) return fallback.slice();
+  const hex = input.slice(1);
+  if (hex.length === 3) {
+    const r = Number.parseInt(hex[0] + hex[0], 16);
+    const g = Number.parseInt(hex[1] + hex[1], 16);
+    const b = Number.parseInt(hex[2] + hex[2], 16);
+    if ([r, g, b].some((c) => Number.isNaN(c))) return fallback.slice();
+    return [r, g, b, 0xff];
+  }
+  if (hex.length === 6 || hex.length === 8) {
+    const r = Number.parseInt(hex.slice(0, 2), 16);
+    const g = Number.parseInt(hex.slice(2, 4), 16);
+    const b = Number.parseInt(hex.slice(4, 6), 16);
+    const a = hex.length === 8 ? Number.parseInt(hex.slice(6, 8), 16) : 0xff;
+    if ([r, g, b, a].some((c) => Number.isNaN(c))) return fallback.slice();
+    return [r, g, b, a];
+  }
+  return fallback.slice();
 };

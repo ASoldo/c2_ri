@@ -101,6 +101,9 @@ export const ecsRuntime = {
   renderCache: {
     ids: null,
     positions: null,
+    colors: null,
+    sizes: null,
+    kinds: null,
     index: new Map(),
   },
   kindCache: new Map(),
@@ -145,10 +148,28 @@ export const ecsRuntime = {
     const kindsPtr = exports.ecs_ingest_kinds_ptr
       ? exports.ecs_ingest_kinds_ptr()
       : 0;
+    const altsPtr = exports.ecs_ingest_alts_ptr
+      ? exports.ecs_ingest_alts_ptr()
+      : 0;
+    const sizesPtr = exports.ecs_ingest_sizes_ptr
+      ? exports.ecs_ingest_sizes_ptr()
+      : 0;
+    const colorsPtr = exports.ecs_ingest_colors_ptr
+      ? exports.ecs_ingest_colors_ptr()
+      : 0;
     const ids = new BigUint64Array(this.memory.buffer, idsPtr, count);
     const geos = new Float32Array(this.memory.buffer, geosPtr, count * 2);
     const kinds = kindsPtr
       ? new Uint8Array(this.memory.buffer, kindsPtr, count)
+      : null;
+    const alts = altsPtr
+      ? new Float32Array(this.memory.buffer, altsPtr, count)
+      : null;
+    const sizes = sizesPtr
+      ? new Float32Array(this.memory.buffer, sizesPtr, count)
+      : null;
+    const colors = colorsPtr
+      ? new Uint8Array(this.memory.buffer, colorsPtr, count * 4)
       : null;
     items.forEach((item, index) => {
       const id = typeof item.id === "bigint" ? item.id : BigInt(item.id);
@@ -160,14 +181,46 @@ export const ecsRuntime = {
         kinds[index] =
           typeof item.kind === "number" ? item.kind : ECS_KIND.unknown;
       }
+      if (alts) {
+        alts[index] = Number.isFinite(item.altitude) ? item.altitude : 0;
+      }
+      if (sizes) {
+        sizes[index] = Number.isFinite(item.size) ? item.size : 6.0;
+      }
+      if (colors) {
+        const cOffset = index * 4;
+        const color = Array.isArray(item.color)
+          ? item.color
+          : [0x38, 0xbd, 0xf8, 0xff];
+        colors[cOffset] = color[0] ?? 0x38;
+        colors[cOffset + 1] = color[1] ?? 0xbd;
+        colors[cOffset + 2] = color[2] ?? 0xf8;
+        colors[cOffset + 3] = color[3] ?? 0xff;
+      }
     });
     exports.ecs_ingest_commit(count);
     return true;
   },
-  upsertEntity(id, lat, lon, kind = ECS_KIND.unknown) {
+  upsertEntity(id, lat, lon, kind = ECS_KIND.unknown, style = null) {
     if (!this.ready || !this.instance?.exports) return;
     const ecsId = typeof id === "bigint" ? id : BigInt(id);
-    if (this.instance.exports.ecs_upsert_entity_kind) {
+    if (this.instance.exports.ecs_upsert_entity_style && style) {
+      const color = Array.isArray(style.color) ? style.color : [0x38, 0xbd, 0xf8, 0xff];
+      const altitude = Number.isFinite(style.altitude) ? style.altitude : 0;
+      const size = Number.isFinite(style.size) ? style.size : 6.0;
+      this.instance.exports.ecs_upsert_entity_style(
+        ecsId,
+        lat,
+        lon,
+        kind,
+        altitude,
+        size,
+        color[0] ?? 0x38,
+        color[1] ?? 0xbd,
+        color[2] ?? 0xf8,
+        color[3] ?? 0xff,
+      );
+    } else if (this.instance.exports.ecs_upsert_entity_kind) {
       this.instance.exports.ecs_upsert_entity_kind(ecsId, lat, lon, kind);
     } else if (this.instance.exports.ecs_upsert_entity) {
       this.instance.exports.ecs_upsert_entity(ecsId, lat, lon);
@@ -190,21 +243,64 @@ export const ecsRuntime = {
     const idsLen = exports.ecs_ids_len();
     const posPtr = exports.ecs_positions_ptr();
     const posLen = exports.ecs_positions_len();
-    const ids = new BigUint64Array(this.memory.buffer, idsPtr, idsLen);
-    const positions = new Float32Array(this.memory.buffer, posPtr, posLen);
-    return { ids, positions };
+    const colorsPtr = exports.ecs_colors_ptr ? exports.ecs_colors_ptr() : 0;
+    const colorsLen = exports.ecs_colors_len ? exports.ecs_colors_len() : 0;
+    const sizesPtr = exports.ecs_sizes_ptr ? exports.ecs_sizes_ptr() : 0;
+    const sizesLen = exports.ecs_sizes_len ? exports.ecs_sizes_len() : 0;
+    const kindsPtr = exports.ecs_kinds_ptr ? exports.ecs_kinds_ptr() : 0;
+    const kindsLen = exports.ecs_kinds_len ? exports.ecs_kinds_len() : 0;
+    const ids =
+      this.renderCache.ids &&
+      this.renderCache.ids.byteOffset === idsPtr &&
+      this.renderCache.ids.length === idsLen
+        ? this.renderCache.ids
+        : new BigUint64Array(this.memory.buffer, idsPtr, idsLen);
+    const positions =
+      this.renderCache.positions &&
+      this.renderCache.positions.byteOffset === posPtr &&
+      this.renderCache.positions.length === posLen
+        ? this.renderCache.positions
+        : new Float32Array(this.memory.buffer, posPtr, posLen);
+    const colors = colorsPtr && colorsLen
+      ? this.renderCache.colors &&
+        this.renderCache.colors.byteOffset === colorsPtr &&
+        this.renderCache.colors.length === colorsLen
+        ? this.renderCache.colors
+        : new Uint8Array(this.memory.buffer, colorsPtr, colorsLen)
+      : null;
+    const sizes = sizesPtr && sizesLen
+      ? this.renderCache.sizes &&
+        this.renderCache.sizes.byteOffset === sizesPtr &&
+        this.renderCache.sizes.length === sizesLen
+        ? this.renderCache.sizes
+        : new Float32Array(this.memory.buffer, sizesPtr, sizesLen)
+      : null;
+    const kinds = kindsPtr && kindsLen
+      ? this.renderCache.kinds &&
+        this.renderCache.kinds.byteOffset === kindsPtr &&
+        this.renderCache.kinds.length === kindsLen
+        ? this.renderCache.kinds
+        : new Uint8Array(this.memory.buffer, kindsPtr, kindsLen)
+      : null;
+    return { ids, positions, colors, sizes, kinds };
   },
   refreshRenderCache() {
     const data = this.readRenderBuffers();
     if (!data) {
       this.renderCache.ids = null;
       this.renderCache.positions = null;
+      this.renderCache.colors = null;
+      this.renderCache.sizes = null;
+      this.renderCache.kinds = null;
       this.renderCache.index.clear();
       this.kindCache.clear();
       return null;
     }
     this.renderCache.ids = data.ids;
     this.renderCache.positions = data.positions;
+    this.renderCache.colors = data.colors;
+    this.renderCache.sizes = data.sizes;
+    this.renderCache.kinds = data.kinds;
     this.renderCache.index.clear();
     for (let i = 0; i < data.ids.length; i += 1) {
       this.renderCache.index.set(data.ids[i], i * 3);

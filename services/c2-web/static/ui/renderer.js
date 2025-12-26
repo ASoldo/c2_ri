@@ -1,6 +1,11 @@
 import * as THREE from "/static/vendor/three.module.js";
 import { OrbitControls } from "/static/vendor/OrbitControls.js";
-import { MEDIA_OVERLAY_RENDER_ORDER, TILE_CONFIG, WEATHER_CONFIG } from "/static/ui/config.js";
+import {
+  MEDIA_OVERLAY_RENDER_ORDER,
+  MARKER_ALTITUDE,
+  TILE_CONFIG,
+  WEATHER_CONFIG,
+} from "/static/ui/config.js";
 
 const clampLat = (lat) => Math.max(-85.05112878, Math.min(85.05112878, lat));
 const TWO_PI = Math.PI * 2;
@@ -53,6 +58,220 @@ const sphereToGeoTile = (point) => {
   const lon = (phi * 180) / Math.PI - 180;
   return { lat, lon };
 };
+
+class ParticleField {
+  constructor(renderer) {
+    this.renderer = renderer;
+    this.points = null;
+    this.geometry = null;
+    this.material = null;
+    this.ids = null;
+    this.count = 0;
+    this.kindMask = new Float32Array(8).fill(1.0);
+    this.kindMask0 = new THREE.Vector4(1, 1, 1, 1);
+    this.kindMask1 = new THREE.Vector4(1, 1, 1, 1);
+    this.raycaster = new THREE.Raycaster();
+    this.pointer = new THREE.Vector2();
+    this.sizeScale = 1.0;
+    this.attenuation = 1.0;
+  }
+
+  init() {
+    const vertexShader = `
+      attribute float size;
+      attribute vec4 color;
+      attribute float kind;
+      uniform float sizeScale;
+      uniform float sizeAttenuation;
+      varying vec4 vColor;
+      varying float vKind;
+
+      void main() {
+        vColor = color;
+        vKind = kind;
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        float attenuate = sizeAttenuation > 0.5 ? (300.0 / -mvPosition.z) : 1.0;
+        gl_PointSize = size * sizeScale * attenuate;
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `;
+    const fragmentShader = `
+      varying vec4 vColor;
+      varying float vKind;
+      uniform vec4 kindMask0;
+      uniform vec4 kindMask1;
+
+      float kindVisible(float kind) {
+        int k = int(kind + 0.5);
+        if (k == 0) return kindMask0.x;
+        if (k == 1) return kindMask0.y;
+        if (k == 2) return kindMask0.z;
+        if (k == 3) return kindMask0.w;
+        if (k == 4) return kindMask1.x;
+        if (k == 5) return kindMask1.y;
+        if (k == 6) return kindMask1.z;
+        if (k == 7) return kindMask1.w;
+        return 1.0;
+      }
+
+      void main() {
+        float mask = kindVisible(vKind);
+        if (mask < 0.5) discard;
+        vec2 coord = gl_PointCoord - vec2(0.5);
+        float dist = length(coord);
+        if (dist > 0.5) discard;
+        gl_FragColor = vec4(vColor.rgb, vColor.a);
+      }
+    `;
+    this.geometry = new THREE.BufferGeometry();
+    this.material = new THREE.ShaderMaterial({
+      uniforms: {
+        sizeScale: { value: this.sizeScale },
+        sizeAttenuation: { value: this.attenuation },
+        kindMask0: { value: this.kindMask0 },
+        kindMask1: { value: this.kindMask1 },
+      },
+      vertexShader,
+      fragmentShader,
+      transparent: true,
+      depthTest: true,
+      depthWrite: false,
+    });
+    this.points = new THREE.Points(this.geometry, this.material);
+    this.points.renderOrder = 62;
+    this.points.frustumCulled = false;
+    if (this.renderer?.scene) {
+      this.renderer.scene.add(this.points);
+    }
+    if (this.raycaster?.params?.Points) {
+      this.raycaster.params.Points.threshold = this.renderer?.globeRadius * 0.03;
+    }
+  }
+
+  setVisible(visible) {
+    if (this.points) {
+      this.points.visible = visible;
+    }
+  }
+
+  setKindVisible(kind, visible) {
+    if (kind === null || kind === undefined) return;
+    const index = Number(kind);
+    if (!Number.isFinite(index) || index < 0 || index >= this.kindMask.length) return;
+    this.kindMask[index] = visible ? 1.0 : 0.0;
+    this.kindMask0.set(
+      this.kindMask[0],
+      this.kindMask[1],
+      this.kindMask[2],
+      this.kindMask[3],
+    );
+    this.kindMask1.set(
+      this.kindMask[4],
+      this.kindMask[5],
+      this.kindMask[6],
+      this.kindMask[7],
+    );
+    if (this.material?.uniforms?.kindMask0) {
+      this.material.uniforms.kindMask0.value = this.kindMask0;
+    }
+    if (this.material?.uniforms?.kindMask1) {
+      this.material.uniforms.kindMask1.value = this.kindMask1;
+    }
+  }
+
+  setSizeScale(value) {
+    if (!Number.isFinite(value)) return;
+    this.sizeScale = value;
+    if (this.material?.uniforms?.sizeScale) {
+      this.material.uniforms.sizeScale.value = this.sizeScale;
+    }
+  }
+
+  setAttenuation(value) {
+    const next = value ? 1.0 : 0.0;
+    this.attenuation = next;
+    if (this.material?.uniforms?.sizeAttenuation) {
+      this.material.uniforms.sizeAttenuation.value = next;
+    }
+  }
+
+  update(renderCache) {
+    if (!this.geometry || !this.points) return;
+    if (!renderCache || !renderCache.positions || !renderCache.ids) {
+      this.points.visible = false;
+      return;
+    }
+    const count = renderCache.ids.length;
+    this.points.visible = true;
+    this.ids = renderCache.ids;
+    this.count = count;
+    this.geometry.setDrawRange(0, count);
+
+    this.updateAttribute(
+      "position",
+      renderCache.positions,
+      3,
+      THREE.BufferAttribute,
+      false,
+    );
+    if (renderCache.colors) {
+      this.updateAttribute(
+        "color",
+        renderCache.colors,
+        4,
+        THREE.Uint8BufferAttribute,
+        true,
+      );
+    }
+    if (renderCache.sizes) {
+      this.updateAttribute(
+        "size",
+        renderCache.sizes,
+        1,
+        THREE.BufferAttribute,
+        false,
+      );
+    }
+    if (renderCache.kinds) {
+      this.updateAttribute(
+        "kind",
+        renderCache.kinds,
+        1,
+        THREE.Uint8BufferAttribute,
+        false,
+      );
+    }
+  }
+
+  updateAttribute(name, array, itemSize, AttributeType, normalized) {
+    if (!array) return;
+    const current = this.geometry.getAttribute(name);
+    if (!current || current.array !== array || current.itemSize !== itemSize) {
+      const attribute = new AttributeType(array, itemSize, normalized);
+      attribute.setUsage(THREE.DynamicDrawUsage);
+      this.geometry.setAttribute(name, attribute);
+      return;
+    }
+    current.needsUpdate = true;
+  }
+
+  pick(clientX, clientY) {
+    const canvas = this.renderer?.canvas;
+    if (!canvas || !this.renderer?.camera || !this.points || !this.ids) return null;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    const y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    this.pointer.set(x, y);
+    this.raycaster.setFromCamera(this.pointer, this.renderer.camera);
+    const hits = this.raycaster.intersectObject(this.points, false);
+    if (!hits || !hits.length) return null;
+    const index = hits[0].index;
+    if (index === undefined || index === null) return null;
+    if (index < 0 || index >= this.ids.length) return null;
+    return this.ids[index];
+  }
+}
 
 class TileManager {
   constructor(scene, radius, renderer, rotationY = 0) {
@@ -590,12 +809,14 @@ class Renderer3D {
     this.globe = null;
     this.atmosphere = null;
     this.mapPlane = null;
+    this.particles = null;
+    this.particlesEnabled = true;
     this.globeRadius = 120;
     this.mode = "globe";
     this.size = { width: 1, height: 1 };
     this.planeSize = { width: this.globeRadius * 4, height: this.globeRadius * 2 };
     this.isoFrustum = this.planeSize.height * 1.4;
-    this.markerAltitude = 3.0;
+    this.markerAltitude = MARKER_ALTITUDE;
     this.clouds = null;
     this.axisHelper = null;
     this.gridLines = null;
@@ -645,6 +866,8 @@ class Renderer3D {
     this.tmpAxis = new THREE.Vector3();
     this.tmpQuat = new THREE.Quaternion();
     this.tmpSpherical = new THREE.Spherical();
+    this.selectedEntity = null;
+    this.selectionRing = null;
   }
 
   init() {
@@ -808,6 +1031,16 @@ class Renderer3D {
     this.gridLines = this.buildLatLonGrid(this.globeRadius + 0.6, 20, 10);
     this.gridLines.renderOrder = 10010;
     this.scene.add(this.gridLines);
+
+    this.selectionRing = this.buildSelectionRing();
+    if (this.selectionRing) {
+      this.scene.add(this.selectionRing);
+    }
+
+    if (this.particlesEnabled) {
+      this.particles = new ParticleField(this);
+      this.particles.init();
+    }
 
     this.setLightingMode("day");
     this.setCloudsVisible(false);
@@ -989,6 +1222,10 @@ class Renderer3D {
     if (this.clouds) this.clouds.visible = mode === "globe" && this.showClouds;
     if (this.axisHelper) this.axisHelper.visible = mode === "globe" && this.showAxes;
     if (this.gridLines) this.gridLines.visible = mode === "globe" && this.showGrid;
+    if (this.particles) {
+      this.particles.setVisible(mode === "globe");
+      this.particles.setAttenuation(mode === "globe");
+    }
     if (this.tileManager) {
       this.tileManager.group.visible = mode === "globe" && Boolean(this.tileProvider);
     }
@@ -1078,6 +1315,82 @@ class Renderer3D {
     if (this.instances.instanceColor) {
       this.instances.instanceColor.needsUpdate = true;
     }
+  }
+
+  setParticles(renderCache) {
+    if (!this.particles) return;
+    this.particles.update(renderCache);
+    this.updateSelection(renderCache);
+  }
+
+  setKindVisibility(kind, visible) {
+    if (!this.particles) return;
+    this.particles.setKindVisible(kind, visible);
+  }
+
+  pickEntity(clientX, clientY) {
+    if (!this.particles) return null;
+    return this.particles.pick(clientX, clientY);
+  }
+
+  setSelectedEntity(entityId) {
+    this.selectedEntity =
+      entityId === null || entityId === undefined ? null : entityId;
+    if (this.selectionRing) {
+      this.selectionRing.visible = Boolean(this.selectedEntity);
+    }
+  }
+
+  buildSelectionRing() {
+    const inner = this.globeRadius * 0.006;
+    const outer = this.globeRadius * 0.012;
+    const geometry = new THREE.RingGeometry(inner, outer, 48);
+    const material = new THREE.MeshBasicMaterial({
+      color: 0xfacc15,
+      transparent: true,
+      opacity: 0.9,
+      depthTest: false,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.renderOrder = 90;
+    mesh.visible = false;
+    return mesh;
+  }
+
+  updateSelection(renderCache) {
+    if (!this.selectionRing || !this.selectedEntity) {
+      if (this.selectionRing) this.selectionRing.visible = false;
+      return;
+    }
+    if (!renderCache?.positions || !renderCache?.index) {
+      this.selectionRing.visible = false;
+      return;
+    }
+    const key =
+      typeof this.selectedEntity === "bigint"
+        ? this.selectedEntity
+        : BigInt(this.selectedEntity);
+    const index = renderCache.index.get(key);
+    if (index === undefined) {
+      this.selectionRing.visible = false;
+      return;
+    }
+    const positions = renderCache.positions;
+    this.selectionRing.position.set(
+      positions[index],
+      positions[index + 1],
+      positions[index + 2],
+    );
+    const distance = this.camera?.position?.length?.() || this.defaultDistance;
+    const ratio = this.defaultDistance ? distance / this.defaultDistance : 1;
+    const scale = Math.max(0.6, Math.min(2.4, ratio));
+    this.selectionRing.scale.set(scale, scale, scale);
+    if (this.camera) {
+      this.selectionRing.lookAt(this.camera.position);
+    }
+    this.selectionRing.visible = this.mode === "globe";
   }
 
   render(deltaMs = 16, onBeforeOverlay = null) {
