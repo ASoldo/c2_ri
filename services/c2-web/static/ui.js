@@ -3124,8 +3124,9 @@ class MediaOverlay {
     if (!this.group.visible) return;
     if (!this.needsFrameUpdate || !this.texture || !this.image) return;
     const hasFrame =
-      (this.image.naturalWidth && this.image.naturalHeight) ||
-      (this.image.width && this.image.height);
+      this.image.complete &&
+      ((this.image.naturalWidth && this.image.naturalHeight) ||
+        (this.image.width && this.image.height));
     if (!hasFrame) return;
     if (this.lastFrameAt === 0 || now - this.lastFrameAt > this.frameIntervalMs) {
       this.texture.needsUpdate = true;
@@ -3305,7 +3306,7 @@ class MediaOverlay {
     if (Number.isFinite(this.rotationDeg) && this.rotationDeg !== 0) {
       this.mesh.rotateOnAxis(
         normal,
-        THREE.MathUtils.degToRad(this.rotationDeg),
+        -THREE.MathUtils.degToRad(this.rotationDeg),
       );
     }
   }
