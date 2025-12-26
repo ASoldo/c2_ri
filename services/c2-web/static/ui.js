@@ -2915,7 +2915,7 @@ class MediaOverlay {
   constructor(renderer) {
     this.renderer = renderer;
     this.group = new THREE.Group();
-    this.group.renderOrder = 55;
+    this.group.renderOrder = 90;
     this.rotationY = renderer?.globeRotation || 0;
     this.group.rotation.y = this.rotationY;
     this.group.visible = false;
@@ -2924,6 +2924,8 @@ class MediaOverlay {
     this.texture = null;
     this.video = null;
     this.image = null;
+    this.hls = null;
+    this.staging = null;
     this.enabled = false;
     this.kind = "mjpg";
     this.url = "";
@@ -2940,6 +2942,15 @@ class MediaOverlay {
     this.audioMuted = true;
     this.playState = "playing";
     this.volume = 0.8;
+    if (typeof document !== "undefined") {
+      this.staging = document.getElementById("media-overlay-staging");
+      if (!this.staging) {
+        const div = document.createElement("div");
+        div.id = "media-overlay-staging";
+        document.body.appendChild(div);
+        this.staging = div;
+      }
+    }
     if (this.renderer?.scene) {
       this.renderer.scene.add(this.group);
     }
@@ -2996,10 +3007,18 @@ class MediaOverlay {
       if (this.mesh) this.mesh.visible = false;
       return;
     }
-    if (nextKind === "video" || nextKind === "rtsp") {
+    if (nextKind === "video") {
       const video = document.createElement("video");
-      video.src = nextUrl;
-      video.crossOrigin = "anonymous";
+      try {
+        const parsed = new URL(nextUrl, window.location.href);
+        if (parsed.origin !== window.location.origin) {
+          video.crossOrigin = "anonymous";
+        } else {
+          video.removeAttribute("crossorigin");
+        }
+      } catch (err) {
+        video.crossOrigin = "anonymous";
+      }
       video.muted = this.audioMuted;
       video.volume = this.volume;
       video.playsInline = true;
@@ -3007,6 +3026,29 @@ class MediaOverlay {
       video.autoplay = false;
       video.preload = "auto";
       this.video = video;
+      const isHls = nextUrl.toLowerCase().includes(".m3u8");
+      const Hls = window.Hls;
+      if (isHls && Hls && typeof Hls.isSupported === "function" && Hls.isSupported()) {
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: false,
+        });
+        this.hls = hls;
+        hls.loadSource(nextUrl);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (this.enabled && this.playState === "playing") {
+            video.play().catch(() => {});
+          }
+        });
+        hls.on(Hls.Events.ERROR, (_, data) => {
+          if (data?.fatal) {
+            console.warn("HLS media error.", data);
+          }
+        });
+      } else {
+        video.src = nextUrl;
+      }
       const texture = new THREE.VideoTexture(video);
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.minFilter = THREE.LinearFilter;
@@ -3025,6 +3067,9 @@ class MediaOverlay {
       image.decoding = "async";
       image.src = nextUrl;
       this.image = image;
+      if (this.staging && !this.staging.contains(image)) {
+        this.staging.appendChild(image);
+      }
       const texture = new THREE.Texture(image);
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.minFilter = THREE.LinearFilter;
@@ -3042,9 +3087,9 @@ class MediaOverlay {
         });
       };
       this.texture = texture;
-      if (nextKind === "gif") {
+      if (nextKind === "gif" || nextKind === "mjpg" || nextKind === "rtsp") {
         this.needsFrameUpdate = true;
-        this.frameIntervalMs = 66;
+        this.frameIntervalMs = nextKind === "gif" ? 66 : 33;
       } else {
         this.needsFrameUpdate = false;
         this.frameIntervalMs = 33;
@@ -3107,6 +3152,10 @@ class MediaOverlay {
   }
 
   disposeMedia() {
+    if (this.hls) {
+      this.hls.destroy();
+    }
+    this.hls = null;
     if (this.video) {
       this.video.pause();
       this.video.removeAttribute("src");
@@ -3114,6 +3163,9 @@ class MediaOverlay {
     }
     this.video = null;
     if (this.image) {
+      if (this.image.parentNode) {
+        this.image.parentNode.removeChild(this.image);
+      }
       this.image.onload = null;
       this.image.onerror = null;
       this.image.src = "";
@@ -3143,15 +3195,15 @@ class MediaOverlay {
       depthWrite: false,
     });
     material.polygonOffset = true;
-    material.polygonOffsetFactor = -6;
-    material.polygonOffsetUnits = -6;
+    material.polygonOffsetFactor = -10;
+    material.polygonOffsetUnits = -10;
     const geometry = new THREE.SphereGeometry(
       (this.renderer?.globeRadius || 120) + this.altitude,
       32,
       24,
     );
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.renderOrder = 55;
+    mesh.renderOrder = 90;
     mesh.frustumCulled = true;
     this.mesh = mesh;
     this.material = material;
@@ -3265,7 +3317,7 @@ const resolveMediaUrl = (rawUrl, kind) => {
     return rawUrl;
   }
   if (parsed.protocol === "rtsp:") {
-    return rawUrl;
+    return `/ui/rtsp-proxy?url=${encodeURIComponent(parsed.toString())}`;
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return rawUrl;
@@ -3274,6 +3326,28 @@ const resolveMediaUrl = (rawUrl, kind) => {
     return parsed.toString();
   }
   return `/ui/media-proxy?url=${encodeURIComponent(parsed.toString())}`;
+};
+
+const inferMediaKind = (rawUrl, selected) => {
+  if (!rawUrl) return selected || "mjpg";
+  const lowered = rawUrl.toLowerCase();
+  if (lowered.startsWith("rtsp://")) return "rtsp";
+  const clean = lowered.split("?")[0].split("#")[0];
+  if (clean.endsWith(".m3u8") || clean.endsWith(".mpd")) return "video";
+  if (
+    clean.endsWith(".mp4") ||
+    clean.endsWith(".m4v") ||
+    clean.endsWith(".webm") ||
+    clean.endsWith(".mov")
+  ) {
+    return "video";
+  }
+  if (clean.endsWith(".gif")) return "gif";
+  if (clean.endsWith(".jpg") || clean.endsWith(".jpeg") || clean.endsWith(".png") || clean.endsWith(".webp")) {
+    return "image";
+  }
+  if (clean.endsWith(".mjpg") || clean.endsWith(".mjpeg")) return "mjpg";
+  return selected || "mjpg";
 };
 
 const colorForAsset = (asset) => {
@@ -5437,8 +5511,13 @@ const setupMediaOverlayControls = (renderer3d, overlay) => {
   };
 
   const applySource = () => {
-    const kind = typeSelect?.value || "mjpg";
+    let kind = typeSelect?.value || "mjpg";
     const url = (urlInput?.value || "").trim();
+    const inferred = inferMediaKind(url, kind);
+    if (inferred !== kind) {
+      kind = inferred;
+      if (typeSelect) typeSelect.value = inferred;
+    }
     const resolvedUrl = resolveMediaUrl(url, kind);
     overlay.setSource(kind, resolvedUrl);
     applyTransform();
@@ -5446,7 +5525,7 @@ const setupMediaOverlayControls = (renderer3d, overlay) => {
   };
 
   const syncTransportButtons = () => {
-    const isVideo = overlay.kind === "video" || overlay.kind === "rtsp";
+    const isVideo = overlay.kind === "video";
     const active = overlay.enabled && isVideo && overlay.video;
     [playButton, pauseButton, stopButton, muteButton].forEach((button) => {
       if (!button) return;

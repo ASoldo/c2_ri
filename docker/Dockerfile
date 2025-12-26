@@ -33,6 +33,7 @@ ARG BIN
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        ffmpeg \
         libssl3 \
         libzmq5 \
     && rm -rf /var/lib/apt/lists/*

@@ -705,6 +705,18 @@ body {
   background: rgba(14, 116, 144, 0.12);
 }
 
+#media-overlay-staging {
+  position: fixed;
+  top: -10000px;
+  left: -10000px;
+  width: 2px;
+  height: 2px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  z-index: -1;
+}
+
 .layer-toggle {
   display: flex;
   gap: 6px;

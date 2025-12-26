@@ -22,6 +22,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(satellites::satellites)
         .service(ships::ships)
         .service(media::media_proxy)
+        .service(media::rtsp_proxy)
         .service(tiles::weather_tile)
         .service(tiles::tile)
         .service(partials::mission_feed)
