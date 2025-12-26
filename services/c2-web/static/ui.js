@@ -5035,11 +5035,29 @@ const positionDockCenter = (dock) => {
   dock.dataset.positioned = "true";
 };
 
+const releaseDockFocus = (dock) => {
+  const active = document.activeElement;
+  if (!active || !dock.contains(active)) return;
+  if (active.blur) active.blur();
+  const fallback = document.querySelector(".pill-menu-trigger");
+  if (fallback && fallback.focus) {
+    fallback.focus({ preventScroll: true });
+  }
+};
+
 const setDockState = (dock, state) => {
   if (!dock) return;
   const next = normalizeDockState(state);
+  if (next === "closed") {
+    releaseDockFocus(dock);
+  }
   dock.dataset.state = next;
-  dock.setAttribute("aria-hidden", next === "open" ? "false" : "true");
+  dock.setAttribute("aria-hidden", next === "closed" ? "true" : "false");
+  if (next === "closed") {
+    dock.setAttribute("inert", "");
+  } else {
+    dock.removeAttribute("inert");
+  }
   if (next === "open") {
     if (dock.dataset.positioned !== "true") {
       positionDockCenter(dock);
