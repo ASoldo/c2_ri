@@ -707,10 +707,10 @@ body {
 
 #media-overlay-staging {
   position: fixed;
-  top: -10000px;
-  left: -10000px;
-  width: 2px;
-  height: 2px;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
   overflow: hidden;
   opacity: 0;
   pointer-events: none;

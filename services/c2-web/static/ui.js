@@ -552,6 +552,7 @@ class BoardView {
 
 const clampLat = (lat) => Math.max(-85.05112878, Math.min(85.05112878, lat));
 const TWO_PI = Math.PI * 2;
+const MEDIA_OVERLAY_RENDER_ORDER = 55;
 
 const tileXForLon = (lon, zoom) => {
   const n = 2 ** zoom;
@@ -645,7 +646,8 @@ class TileManager {
     this.provider = provider || null;
     this.zoom = null;
     this.group.visible = Boolean(this.provider);
-    this.group.renderOrder = this.provider?.renderOrder ?? 10;
+    const desiredOrder = this.provider?.renderOrder ?? 10;
+    this.group.renderOrder = Math.min(desiredOrder, MEDIA_OVERLAY_RENDER_ORDER - 5);
     if (this.loader) {
       this.loader.crossOrigin = this.provider?.proxy ? null : "anonymous";
     }
@@ -1029,7 +1031,9 @@ class TileManager {
         });
         material.depthTest = this.provider.depthTest ?? true;
         material.depthWrite =
-          this.provider.depthWrite ?? (!material.transparent && material.depthTest);
+          typeof this.provider.depthWrite === "boolean"
+            ? this.provider.depthWrite
+            : !material.transparent && material.depthTest;
         if (Number.isFinite(this.provider.alphaTest)) {
           material.alphaTest = this.provider.alphaTest;
         }
@@ -1043,7 +1047,8 @@ class TileManager {
         material.polygonOffsetFactor = offsetFactor;
         material.polygonOffsetUnits = offsetUnits;
         const mesh = new THREE.Mesh(geometry, material);
-        mesh.renderOrder = this.provider.renderOrder ?? 10;
+        const desiredOrder = this.provider.renderOrder ?? 10;
+        mesh.renderOrder = Math.min(desiredOrder, MEDIA_OVERLAY_RENDER_ORDER - 5);
         geometry.computeBoundingSphere();
         mesh.frustumCulled = true;
         const visible = this.desiredKeys?.has(tile.key);
@@ -2915,7 +2920,7 @@ class MediaOverlay {
   constructor(renderer) {
     this.renderer = renderer;
     this.group = new THREE.Group();
-    this.group.renderOrder = 90;
+    this.group.renderOrder = MEDIA_OVERLAY_RENDER_ORDER;
     this.rotationY = renderer?.globeRotation || 0;
     this.group.rotation.y = this.rotationY;
     this.group.visible = false;
@@ -3117,13 +3122,12 @@ class MediaOverlay {
     if (!this.enabled) return;
     this.group.visible = this.renderer?.mode === "globe";
     if (!this.group.visible) return;
-    if (
-      this.needsFrameUpdate &&
-      this.texture &&
-      this.image &&
-      this.image.complete &&
-      now - this.lastFrameAt > this.frameIntervalMs
-    ) {
+    if (!this.needsFrameUpdate || !this.texture || !this.image) return;
+    const hasFrame =
+      (this.image.naturalWidth && this.image.naturalHeight) ||
+      (this.image.width && this.image.height);
+    if (!hasFrame) return;
+    if (this.lastFrameAt === 0 || now - this.lastFrameAt > this.frameIntervalMs) {
       this.texture.needsUpdate = true;
       this.lastFrameAt = now;
     }
@@ -3191,19 +3195,20 @@ class MediaOverlay {
       opacity: 1,
       color: new THREE.Color(0xffffff),
       side: THREE.FrontSide,
-      depthTest: true,
+      depthTest: false,
       depthWrite: false,
     });
-    material.polygonOffset = true;
-    material.polygonOffsetFactor = -10;
-    material.polygonOffsetUnits = -10;
+    material.alphaTest = 0.01;
+    material.polygonOffset = false;
+    material.polygonOffsetFactor = 0;
+    material.polygonOffsetUnits = 0;
     const geometry = new THREE.SphereGeometry(
       (this.renderer?.globeRadius || 120) + this.altitude,
       32,
       24,
     );
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.renderOrder = 90;
+    mesh.renderOrder = MEDIA_OVERLAY_RENDER_ORDER;
     mesh.frustumCulled = true;
     this.mesh = mesh;
     this.material = material;
