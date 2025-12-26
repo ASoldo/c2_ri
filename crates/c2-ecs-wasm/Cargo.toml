@@ -1,0 +1,11 @@
+[package]
+name = "c2-ecs-wasm"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bevy_ecs = { version = "0.17.3", features = ["bevy_reflect"] }

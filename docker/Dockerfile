@@ -13,18 +13,24 @@ RUN apt-get update \
         build-essential \
         clang \
         cmake \
+        binaryen \
         pkg-config \
         libssl-dev \
         libzmq3-dev \
     && rm -rf /var/lib/apt/lists/*
 
+RUN rustup target add wasm32-unknown-unknown
+
 COPY Cargo.toml Cargo.lock ./
+COPY scripts ./scripts
 COPY crates ./crates
 COPY services ./services
 
 RUN --mount=type=cache,id=c2-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=c2-cargo-target-bookworm,target=/app/target \
-    cargo build --release -p ${BIN} \
+    chmod +x /app/scripts/build-wasm.sh \
+    && /app/scripts/build-wasm.sh \
+    && cargo build --release -p ${BIN} \
     && cp /app/target/release/${BIN} /app/bin/${BIN}
 
 FROM debian:bookworm-slim AS runtime

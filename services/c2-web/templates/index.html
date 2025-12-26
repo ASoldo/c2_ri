@@ -1,188 +1,527 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div id="c2-root">
-  <header class="topbar">
-    <div class="status-pill">
-      <div class="pill-brand">
-        <span class="pill-title">C2 Walaris</span>
+<div
+  id="c2-root"
+  class="relative z-[5] grid min-h-screen h-screen grid-rows-[auto_1fr_auto]"
+>
+  <div
+    id="ecs-loader"
+    x-data="{ ready: false, error: '' }"
+    x-init="
+      window.addEventListener('ecs-loading', () => { ready = false; error = ''; });
+      window.addEventListener('ecs-ready', () => { ready = true; error = ''; });
+      window.addEventListener('ecs-error', (event) => {
+        ready = false;
+        error = event.detail?.message || 'ECS failed to initialize';
+      });
+    "
+  >
+    <div
+      x-cloak
+      x-show="!ready"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm"
+      aria-live="polite"
+    >
+      <div class="w-[320px] rounded-2xl bg-white/90 px-6 py-5 text-slate-900 shadow-2xl">
+        <div class="flex items-center gap-4">
+          <div class="h-10 w-10 rounded-full border-4 border-slate-200/80 border-t-emerald-500 animate-spin"></div>
+          <div>
+            <p class="text-[10px] font-semibold uppercase tracking-[0.3em] text-emerald-700">
+              C2 ECS
+            </p>
+            <p class="text-base font-semibold">Initializing battlefield state</p>
+            <p class="mt-1 text-xs text-slate-500">
+              Loading simulation core and entity cache...
+            </p>
+          </div>
+        </div>
+        <p x-show="error" class="mt-3 text-xs text-rose-600" x-text="error"></p>
       </div>
-      <div class="pill-menu-group">
-        <div class="pill-menu" data-menu="tray">
-          <button class="pill-menu-trigger" type="button" aria-expanded="false">
+    </div>
+  </div>
+  <header class="fixed top-4 left-0 right-0 z-40 flex justify-center px-4" data-menu-driver="alpine">
+    <div class="pointer-events-auto flex flex-wrap items-center gap-3 rounded-full border border-slate-200/70 bg-white/80 px-4 py-2 shadow-xl backdrop-blur">
+      <div class="flex items-center gap-2">
+        <span class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-600">
+          C2 Walaris
+        </span>
+      </div>
+      <div class="flex items-center gap-2">
+        <div class="relative" x-data="{ open: false }" @keydown.escape.window="open = false">
+          <button
+            class="inline-flex items-center gap-2 rounded-full border border-slate-200/70 bg-white/70 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100"
+            type="button"
+            @click="open = !open"
+            :aria-expanded="open.toString()"
+            data-focus-fallback="true"
+          >
             Operating System Tray
-            <span class="pill-menu-caret" aria-hidden="true">▾</span>
+            <span class="text-[10px] text-slate-400" aria-hidden="true">▾</span>
           </button>
-          <div class="pill-menu-panel" role="menu" aria-label="Operating System Tray">
-            <button class="pill-menu-item" type="button" data-window-action="toggle" data-window-id="dock-left">
-              Operations Menu
-              <span class="pill-menu-state" data-window-state="dock-left">Minimized</span>
+          <div
+            x-cloak
+            x-show="open"
+            x-transition
+            @click.outside="open = false"
+            class="absolute left-0 top-[calc(100%+0.6rem)] z-50 w-56 rounded-2xl border border-slate-200/70 bg-white/95 p-2 shadow-2xl"
+            role="menu"
+            aria-label="Operating System Tray"
+          >
+            <button
+              class="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100"
+              type="button"
+              data-window-action="toggle"
+              data-window-id="dock-left"
+              @click="open = false"
+            >
+              <span>Operations Menu</span>
+              <span class="text-[9px] uppercase tracking-[0.2em] text-slate-400" data-window-state="dock-left">
+                Minimized
+              </span>
             </button>
-            <button class="pill-menu-item" type="button" data-window-action="toggle" data-window-id="dock-right">
-              Inspector Panel
-              <span class="pill-menu-state" data-window-state="dock-right">Minimized</span>
+            <button
+              class="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100"
+              type="button"
+              data-window-action="toggle"
+              data-window-id="dock-right"
+              @click="open = false"
+            >
+              <span>Inspector Panel</span>
+              <span class="text-[9px] uppercase tracking-[0.2em] text-slate-400" data-window-state="dock-right">
+                Minimized
+              </span>
             </button>
           </div>
         </div>
-        <div class="pill-menu" data-menu="windows">
-          <button class="pill-menu-trigger" type="button" aria-expanded="false">
+        <div class="relative" x-data="{ open: false }" @keydown.escape.window="open = false">
+          <button
+            class="inline-flex items-center gap-2 rounded-full border border-slate-200/70 bg-white/70 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100"
+            type="button"
+            @click="open = !open"
+            :aria-expanded="open.toString()"
+          >
             Window Manager
-            <span class="pill-menu-caret" aria-hidden="true">▾</span>
+            <span class="text-[10px] text-slate-400" aria-hidden="true">▾</span>
           </button>
-          <div class="pill-menu-panel" role="menu" aria-label="Window Manager">
-            <button class="pill-menu-item" type="button" data-window-action="open-all">Open all windows</button>
-            <button class="pill-menu-item" type="button" data-window-action="minimize-all">Minimize all windows</button>
-            <button class="pill-menu-item" type="button" data-window-action="close-all">Close all windows</button>
+          <div
+            x-cloak
+            x-show="open"
+            x-transition
+            @click.outside="open = false"
+            class="absolute left-0 top-[calc(100%+0.6rem)] z-50 w-56 rounded-2xl border border-slate-200/70 bg-white/95 p-2 shadow-2xl"
+            role="menu"
+            aria-label="Window Manager"
+          >
+            <button
+              class="w-full rounded-xl px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100"
+              type="button"
+              data-window-action="open-all"
+              @click="open = false"
+            >
+              Open all windows
+            </button>
+            <button
+              class="w-full rounded-xl px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100"
+              type="button"
+              data-window-action="minimize-all"
+              @click="open = false"
+            >
+              Minimize all windows
+            </button>
+            <button
+              class="w-full rounded-xl px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100"
+              type="button"
+              data-window-action="close-all"
+              @click="open = false"
+            >
+              Close all windows
+            </button>
           </div>
         </div>
       </div>
-      <div class="pill-status">
-        <span class="status-dot" id="api-dot"></span>
+      <div class="flex flex-wrap items-center gap-2 text-[10px] font-semibold text-slate-600">
+        <span
+          class="inline-flex h-2.5 w-2.5 rounded-full bg-orange-500 shadow-[0_0_12px_rgba(214,90,49,0.2)]"
+          id="api-dot"
+        ></span>
         <span id="api-status">API: booting</span>
-        <span class="status-sep">|</span>
+        <span class="text-slate-300">|</span>
         <span id="stream-status">SSE: offline</span>
-        <span class="status-sep">|</span>
+        <span class="text-slate-300">|</span>
         <span id="ws-status">WS: offline</span>
-        <span class="status-sep">|</span>
+        <span class="text-slate-300">|</span>
         <span id="runtime-stats">Entities: 0 · FPS: --</span>
-        <span class="status-sep">|</span>
+        <span class="text-slate-300">|</span>
         <span id="camera-stats">View: Globe · Dist: --</span>
-        <span class="status-sep">|</span>
+        <span class="text-slate-300">|</span>
         <span id="tile-status">Tiles: --</span>
-        <span class="status-sep">|</span>
+        <span class="text-slate-300">|</span>
         {{ service_name }} · {{ environment | upper }}
       </div>
     </div>
   </header>
 
-  <div class="c2-body">
-    <aside class="dock window" id="dock-left" data-state="closed" data-window-title="Operations Menu">
-      <div class="dock-panel">
-        <div class="dock-header">
-          <div class="dock-title">Operations Menu</div>
-          <div class="dock-controls">
-            <button class="dock-control dock-move" type="button" data-dock-drag-handle="true" aria-label="Move operations menu">⠿</button>
-            <button class="dock-control" type="button" data-dock-action="minimize" aria-label="Minimize operations menu">—</button>
-            <button class="dock-control" type="button" data-dock-action="close" aria-label="Close operations menu">×</button>
+  <div class="c2-body relative grid h-full min-h-0 grid-cols-1 overflow-hidden">
+    <aside
+      class="dock window absolute left-1/2 top-1/2 z-20 h-[70vh] w-[320px] min-h-[320px] min-w-[260px] -translate-x-1/2 -translate-y-1/2 resize overflow-hidden rounded-2xl transition-opacity transition-transform duration-200 ease-out max-[1100px]:w-[260px] max-[900px]:h-[65vh] max-[900px]:w-[82vw]"
+      id="dock-left"
+      data-state="closed"
+      data-window-title="Operations Menu"
+      data-panel-driver="alpine"
+    >
+      <div class="dock-panel flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200/70 bg-white/85 shadow-xl backdrop-blur">
+        <div class="dock-header flex cursor-default items-center justify-between border-b border-slate-200/60 bg-white/90 px-4 py-3">
+          <div class="dock-title text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+            Operations Menu
+          </div>
+          <div class="dock-controls flex items-center gap-2">
+            <button
+              class="dock-control dock-move inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200/70 text-slate-500 transition hover:bg-slate-100 cursor-grab active:cursor-grabbing"
+              type="button"
+              data-dock-drag-handle="true"
+              aria-label="Move operations menu"
+            >⠿</button>
+            <button
+              class="dock-control inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200/70 text-slate-500 transition hover:bg-slate-100"
+              type="button"
+              data-dock-action="minimize"
+              aria-label="Minimize operations menu"
+            >—</button>
+            <button
+              class="dock-control inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200/70 text-slate-500 transition hover:bg-slate-100"
+              type="button"
+              data-dock-action="close"
+              aria-label="Close operations menu"
+            >×</button>
           </div>
         </div>
-        <div class="dock-content">
-          <section class="panel-section" data-collapsible="true" data-collapsed="false">
-            <button class="panel-header" type="button" aria-expanded="true">
-              <span class="panel-title">Live Mission Feed</span>
-              <span class="panel-toggle-icon" aria-hidden="true">-</span>
+        <div class="dock-content flex flex-1 min-h-0 flex-col gap-3 overflow-y-auto overflow-x-hidden px-4 py-4 text-sm text-slate-600 overscroll-contain [scrollbar-gutter:stable]">
+          <section
+            x-data="{ open: true }"
+            class="rounded-2xl border border-slate-200/70 bg-white/90 shadow-sm"
+          >
+            <button
+              class="flex w-full items-center justify-between px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-600"
+              type="button"
+              @click="open = !open"
+              :aria-expanded="open.toString()"
+            >
+              <span>Live Mission Feed</span>
+              <span class="text-sm text-slate-400" x-text="open ? '–' : '+'"></span>
             </button>
-            <div class="panel-body">
-              <div id="mission-feed-panel" data-partial="/partials/mission-feed">
+            <div
+              x-cloak
+              x-show="open"
+              x-transition
+              class="border-t border-slate-200/60 px-4 py-3 flex flex-col gap-3"
+            >
+              <div
+                id="mission-feed-panel"
+                hx-get="/partials/mission-feed"
+                hx-trigger="load, every 12s"
+                hx-swap="innerHTML"
+              >
                 {% include "partials/mission_feed.html" %}
               </div>
             </div>
           </section>
-          <section class="panel-section" data-collapsible="true" data-collapsed="false">
-            <button class="panel-header" type="button" aria-expanded="true">
-              <span class="panel-title">Priority Incidents</span>
-              <span class="panel-toggle-icon" aria-hidden="true">-</span>
+          <section
+            x-data="{ open: true }"
+            class="rounded-2xl border border-slate-200/70 bg-white/90 shadow-sm"
+          >
+            <button
+              class="flex w-full items-center justify-between px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-600"
+              type="button"
+              @click="open = !open"
+              :aria-expanded="open.toString()"
+            >
+              <span>Priority Incidents</span>
+              <span class="text-sm text-slate-400" x-text="open ? '–' : '+'"></span>
             </button>
-            <div class="panel-body">
-              <div id="incident-panel" data-partial="/partials/incidents">
+            <div
+              x-cloak
+              x-show="open"
+              x-transition
+              class="border-t border-slate-200/60 px-4 py-3 flex flex-col gap-3"
+            >
+              <div
+                id="incident-panel"
+                hx-get="/partials/incidents"
+                hx-trigger="load, every 12s"
+                hx-swap="innerHTML"
+              >
                 {% include "partials/incidents.html" %}
               </div>
             </div>
           </section>
-          <section class="panel-section" data-collapsible="true" data-collapsed="false">
-            <button class="panel-header" type="button" aria-expanded="true">
-              <span class="panel-title">Asset Readiness</span>
-              <span class="panel-toggle-icon" aria-hidden="true">-</span>
+          <section
+            x-data="{ open: true }"
+            class="rounded-2xl border border-slate-200/70 bg-white/90 shadow-sm"
+          >
+            <button
+              class="flex w-full items-center justify-between px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-600"
+              type="button"
+              @click="open = !open"
+              :aria-expanded="open.toString()"
+            >
+              <span>Asset Readiness</span>
+              <span class="text-sm text-slate-400" x-text="open ? '–' : '+'"></span>
             </button>
-            <div class="panel-body">
-              <div id="asset-panel" data-partial="/partials/assets">
+            <div
+              x-cloak
+              x-show="open"
+              x-transition
+              class="border-t border-slate-200/60 px-4 py-3 flex flex-col gap-3"
+            >
+              <div
+                id="asset-panel"
+                hx-get="/partials/assets"
+                hx-trigger="load, every 12s"
+                hx-swap="innerHTML"
+              >
                 {% include "partials/assets.html" %}
               </div>
             </div>
           </section>
-          <section class="panel-section" data-collapsible="true" data-collapsed="false">
-            <button class="panel-header" type="button" aria-expanded="true">
-              <span class="panel-title">Globe Layers</span>
-              <span class="panel-toggle-icon" aria-hidden="true">-</span>
+          <section
+            x-data="{ open: true }"
+            class="rounded-2xl border border-slate-200/70 bg-white/90 shadow-sm"
+          >
+            <button
+              class="flex w-full items-center justify-between px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-600"
+              type="button"
+              @click="open = !open"
+              :aria-expanded="open.toString()"
+            >
+              <span>Globe Layers</span>
+              <span class="text-sm text-slate-400" x-text="open ? '–' : '+'"></span>
             </button>
-            <div class="panel-body">
-              <div class="panel-field">
-                <label for="tile-provider">Tile provider</label>
-                <select id="tile-provider"></select>
+            <div
+              x-cloak
+              x-show="open"
+              x-transition
+              class="border-t border-slate-200/60 px-4 py-3 flex flex-col gap-3"
+            >
+              <div class="flex flex-col gap-1.5">
+                <label
+                  for="tile-provider"
+                  class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500"
+                >Tile provider</label>
+                <select
+                  id="tile-provider"
+                  class="w-full rounded-xl border border-slate-200/80 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm outline-none transition focus:border-slate-400"
+                ></select>
               </div>
-              <div class="panel-actions">
-                <button data-globe-mode="day" data-active="true">Day</button>
-                <button data-globe-mode="night">Night</button>
-                <button data-globe-toggle="axes" aria-pressed="true">Axes</button>
-                <button data-globe-toggle="grid" aria-pressed="true">Grid</button>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  data-globe-mode="day"
+                  data-active="true"
+                  class="rounded-full border border-slate-200/70 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 data-[active=true]:border-emerald-500/50 data-[active=true]:bg-emerald-100/60"
+                >Day</button>
+                <button
+                  type="button"
+                  data-globe-mode="night"
+                  class="rounded-full border border-slate-200/70 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 data-[active=true]:border-emerald-500/50 data-[active=true]:bg-emerald-100/60"
+                >Night</button>
+                <button
+                  type="button"
+                  data-globe-toggle="axes"
+                  aria-pressed="true"
+                  class="rounded-full border border-slate-200/70 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 aria-pressed:border-emerald-500/50 aria-pressed:bg-emerald-100/60"
+                >Axes</button>
+                <button
+                  type="button"
+                  data-globe-toggle="grid"
+                  aria-pressed="true"
+                  class="rounded-full border border-slate-200/70 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 aria-pressed:border-emerald-500/50 aria-pressed:bg-emerald-100/60"
+                >Grid</button>
               </div>
-              <div class="meta">Toggle globe lighting and debug layers.</div>
+              <div class="text-xs text-slate-500">
+                Toggle globe lighting and debug layers.
+              </div>
             </div>
           </section>
-          <section class="panel-section" id="weather-panel" data-collapsible="true" data-collapsed="false">
-            <button class="panel-header" type="button" aria-expanded="true">
-              <span class="panel-title">Weather Overlay</span>
-              <span class="panel-toggle-icon" aria-hidden="true">-</span>
+          <section
+            id="weather-panel"
+            x-data="{ open: true }"
+            class="rounded-2xl border border-slate-200/70 bg-white/90 shadow-sm"
+          >
+            <button
+              class="flex w-full items-center justify-between px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-600"
+              type="button"
+              @click="open = !open"
+              :aria-expanded="open.toString()"
+            >
+              <span>Weather Overlay</span>
+              <span class="text-sm text-slate-400" x-text="open ? '–' : '+'"></span>
             </button>
-            <div class="panel-body">
-              <div class="panel-field">
-                <label for="weather-field">Data layer</label>
-                <select id="weather-field"></select>
+            <div
+              x-cloak
+              x-show="open"
+              x-transition
+              class="border-t border-slate-200/60 px-4 py-3 flex flex-col gap-3"
+            >
+              <div class="flex flex-col gap-1.5">
+                <label
+                  for="weather-field"
+                  class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500"
+                >Data layer</label>
+                <select
+                  id="weather-field"
+                  class="w-full rounded-xl border border-slate-200/80 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm outline-none transition focus:border-slate-400"
+                ></select>
               </div>
-              <div class="panel-actions">
-                <button data-weather-toggle="overlay" aria-pressed="false">Weather</button>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  data-weather-toggle="overlay"
+                  aria-pressed="false"
+                  class="rounded-full border border-slate-200/70 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 aria-pressed:border-emerald-500/50 aria-pressed:bg-emerald-100/60"
+                >Weather</button>
               </div>
-              <div class="meta">NASA GIBS tiles layered above base maps.</div>
+              <div class="text-xs text-slate-500">
+                NASA GIBS tiles layered above base maps.
+              </div>
             </div>
           </section>
-          <section class="panel-section" id="flight-panel" data-collapsible="true" data-collapsed="false">
-            <button class="panel-header" type="button" aria-expanded="true">
-              <span class="panel-title">Air Traffic</span>
-              <span class="panel-toggle-icon" aria-hidden="true">-</span>
+          <section
+            id="flight-panel"
+            x-data="{ open: true }"
+            class="rounded-2xl border border-slate-200/70 bg-white/90 shadow-sm"
+          >
+            <button
+              class="flex w-full items-center justify-between px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-600"
+              type="button"
+              @click="open = !open"
+              :aria-expanded="open.toString()"
+            >
+              <span>Air Traffic</span>
+              <span class="text-sm text-slate-400" x-text="open ? '–' : '+'"></span>
             </button>
-            <div class="panel-body">
-              <div class="panel-actions">
-                <button data-flight-toggle="overlay" aria-pressed="false">Flights</button>
+            <div
+              x-cloak
+              x-show="open"
+              x-transition
+              class="border-t border-slate-200/60 px-4 py-3 flex flex-col gap-3"
+            >
+              <div class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  data-flight-toggle="overlay"
+                  aria-pressed="false"
+                  class="rounded-full border border-slate-200/70 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 aria-pressed:border-emerald-500/50 aria-pressed:bg-emerald-100/60"
+                >Flights</button>
               </div>
-              <div class="meta" id="flight-provider-label">Live flight tracks via OpenSky.</div>
+              <div class="text-xs text-slate-500" id="flight-provider-label">
+                Live flight tracks via OpenSky.
+              </div>
             </div>
           </section>
-          <section class="panel-section" id="satellite-panel" data-collapsible="true" data-collapsed="false">
-            <button class="panel-header" type="button" aria-expanded="true">
-              <span class="panel-title">Satellites</span>
-              <span class="panel-toggle-icon" aria-hidden="true">-</span>
+          <section
+            id="satellite-panel"
+            x-data="{ open: true }"
+            class="rounded-2xl border border-slate-200/70 bg-white/90 shadow-sm"
+          >
+            <button
+              class="flex w-full items-center justify-between px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-600"
+              type="button"
+              @click="open = !open"
+              :aria-expanded="open.toString()"
+            >
+              <span>Satellites</span>
+              <span class="text-sm text-slate-400" x-text="open ? '–' : '+'"></span>
             </button>
-            <div class="panel-body">
-              <div class="panel-actions">
-                <button data-satellite-toggle="overlay" aria-pressed="false">Satellites</button>
+            <div
+              x-cloak
+              x-show="open"
+              x-transition
+              class="border-t border-slate-200/60 px-4 py-3 flex flex-col gap-3"
+            >
+              <div class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  data-satellite-toggle="overlay"
+                  aria-pressed="false"
+                  class="rounded-full border border-slate-200/70 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 aria-pressed:border-emerald-500/50 aria-pressed:bg-emerald-100/60"
+                >Satellites</button>
               </div>
-              <div class="meta" id="satellite-provider-label">Live satellite tracks via CelesTrak.</div>
+              <div class="text-xs text-slate-500" id="satellite-provider-label">
+                Live satellite tracks via CelesTrak.
+              </div>
             </div>
           </section>
-          <section class="panel-section" id="ship-panel" data-collapsible="true" data-collapsed="false">
-            <button class="panel-header" type="button" aria-expanded="true">
-              <span class="panel-title">Maritime</span>
-              <span class="panel-toggle-icon" aria-hidden="true">-</span>
+          <section
+            id="ship-panel"
+            x-data="{ open: true }"
+            class="rounded-2xl border border-slate-200/70 bg-white/90 shadow-sm"
+          >
+            <button
+              class="flex w-full items-center justify-between px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-600"
+              type="button"
+              @click="open = !open"
+              :aria-expanded="open.toString()"
+            >
+              <span>Maritime</span>
+              <span class="text-sm text-slate-400" x-text="open ? '–' : '+'"></span>
             </button>
-            <div class="panel-body">
-              <div class="panel-actions">
-                <button data-ship-toggle="overlay" aria-pressed="false">Ships</button>
+            <div
+              x-cloak
+              x-show="open"
+              x-transition
+              class="border-t border-slate-200/60 px-4 py-3 flex flex-col gap-3"
+            >
+              <div class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  data-ship-toggle="overlay"
+                  aria-pressed="false"
+                  class="rounded-full border border-slate-200/70 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 aria-pressed:border-emerald-500/50 aria-pressed:bg-emerald-100/60"
+                >Ships</button>
               </div>
-              <div class="meta" id="ship-provider-label">Live vessel tracks via ArcGIS.</div>
+              <div class="text-xs text-slate-500" id="ship-provider-label">
+                Live vessel tracks via ArcGIS.
+              </div>
             </div>
           </section>
-          <section class="panel-section" id="media-overlay-panel" data-collapsible="true" data-collapsed="true">
-            <button class="panel-header" type="button" aria-expanded="false">
-              <span class="panel-title">Media Overlay</span>
-              <span class="panel-toggle-icon" aria-hidden="true">+</span>
+          <section
+            id="media-overlay-panel"
+            x-data="{ open: false }"
+            class="rounded-2xl border border-slate-200/70 bg-white/90 shadow-sm"
+          >
+            <button
+              class="flex w-full items-center justify-between px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-600"
+              type="button"
+              @click="open = !open"
+              :aria-expanded="open.toString()"
+            >
+              <span>Media Overlay</span>
+              <span class="text-sm text-slate-400" x-text="open ? '–' : '+'"></span>
             </button>
-            <div class="panel-body">
-              <div class="panel-actions">
-                <button data-media-overlay-toggle="overlay" aria-pressed="false">Overlay</button>
+            <div
+              x-cloak
+              x-show="open"
+              x-transition
+              class="border-t border-slate-200/60 px-4 py-3 flex flex-col gap-3"
+            >
+              <div class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  data-media-overlay-toggle="overlay"
+                  aria-pressed="false"
+                  class="rounded-full border border-slate-200/70 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 aria-pressed:border-emerald-500/50 aria-pressed:bg-emerald-100/60"
+                >Overlay</button>
               </div>
-              <div class="panel-field">
-                <label for="media-overlay-type">Source type</label>
-                <select id="media-overlay-type">
+              <div class="flex flex-col gap-1.5">
+                <label
+                  for="media-overlay-type"
+                  class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500"
+                >Source type</label>
+                <select
+                  id="media-overlay-type"
+                  class="w-full rounded-xl border border-slate-200/80 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm outline-none transition focus:border-slate-400"
+                >
                   <option value="mjpg">MJPG stream</option>
                   <option value="rtsp">RTSP stream</option>
                   <option value="video">Video (mp4/hls)</option>
@@ -190,110 +529,379 @@
                   <option value="image">Static image</option>
                 </select>
               </div>
-              <div class="panel-field">
-                <label for="media-overlay-url">Source URL</label>
+              <div class="flex flex-col gap-1.5">
+                <label
+                  for="media-overlay-url"
+                  class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500"
+                >Source URL</label>
                 <input
                   id="media-overlay-url"
                   type="text"
                   placeholder="rtsp://, http(s)://.../stream.mjpg, https://.../video.mp4"
+                  class="w-full rounded-xl border border-slate-200/80 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm outline-none transition focus:border-slate-400 placeholder:text-slate-400"
                 />
               </div>
-              <div class="panel-actions">
-                <button type="button" data-media-overlay-load>Load</button>
-                <button type="button" data-media-overlay-clear>Clear</button>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  data-media-overlay-load
+                  class="rounded-full border border-slate-200/70 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 data-[active=true]:border-emerald-500/50 data-[active=true]:bg-emerald-100/60"
+                >Load</button>
+                <button
+                  type="button"
+                  data-media-overlay-clear
+                  class="rounded-full border border-slate-200/70 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 data-[active=true]:border-emerald-500/50 data-[active=true]:bg-emerald-100/60"
+                >Clear</button>
               </div>
-              <div class="panel-actions">
-                <button type="button" data-media-overlay-play>Play</button>
-                <button type="button" data-media-overlay-pause>Pause</button>
-                <button type="button" data-media-overlay-stop>Stop</button>
-                <button type="button" data-media-overlay-mute aria-pressed="true">Mute</button>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  data-media-overlay-play
+                  class="rounded-full border border-slate-200/70 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 data-[active=true]:border-emerald-500/50 data-[active=true]:bg-emerald-100/60"
+                >Play</button>
+                <button
+                  type="button"
+                  data-media-overlay-pause
+                  class="rounded-full border border-slate-200/70 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 data-[active=true]:border-emerald-500/50 data-[active=true]:bg-emerald-100/60"
+                >Pause</button>
+                <button
+                  type="button"
+                  data-media-overlay-stop
+                  class="rounded-full border border-slate-200/70 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 data-[active=true]:border-emerald-500/50 data-[active=true]:bg-emerald-100/60"
+                >Stop</button>
+                <button
+                  type="button"
+                  data-media-overlay-mute
+                  aria-pressed="true"
+                  class="rounded-full border border-slate-200/70 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 aria-pressed:border-emerald-500/50 aria-pressed:bg-emerald-100/60"
+                >Mute</button>
               </div>
-              <div class="panel-field">
-                <label for="media-overlay-lat">Latitude</label>
-                <input id="media-overlay-lat" type="number" step="0.1" value="0" />
+              <div class="flex flex-col gap-1.5">
+                <label
+                  for="media-overlay-lat"
+                  class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500"
+                >Latitude</label>
+                <input
+                  id="media-overlay-lat"
+                  type="number"
+                  step="0.1"
+                  value="0"
+                  class="w-full rounded-xl border border-slate-200/80 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm outline-none transition focus:border-slate-400"
+                />
               </div>
-              <div class="panel-field">
-                <label for="media-overlay-lon">Longitude</label>
-                <input id="media-overlay-lon" type="number" step="0.1" value="0" />
+              <div class="flex flex-col gap-1.5">
+                <label
+                  for="media-overlay-lon"
+                  class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500"
+                >Longitude</label>
+                <input
+                  id="media-overlay-lon"
+                  type="number"
+                  step="0.1"
+                  value="0"
+                  class="w-full rounded-xl border border-slate-200/80 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm outline-none transition focus:border-slate-400"
+                />
               </div>
-              <div class="panel-field">
-                <label for="media-overlay-width">Width (deg)</label>
-                <input id="media-overlay-width" type="number" step="0.5" value="16" />
+              <div class="flex flex-col gap-1.5">
+                <label
+                  for="media-overlay-width"
+                  class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500"
+                >Width (deg)</label>
+                <input
+                  id="media-overlay-width"
+                  type="number"
+                  step="0.5"
+                  value="16"
+                  class="w-full rounded-xl border border-slate-200/80 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm outline-none transition focus:border-slate-400"
+                />
               </div>
-              <div class="panel-field">
-                <label for="media-overlay-height">Height (deg)</label>
-                <input id="media-overlay-height" type="number" step="0.5" value="9" />
+              <div class="flex flex-col gap-1.5">
+                <label
+                  for="media-overlay-height"
+                  class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500"
+                >Height (deg)</label>
+                <input
+                  id="media-overlay-height"
+                  type="number"
+                  step="0.5"
+                  value="9"
+                  class="w-full rounded-xl border border-slate-200/80 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm outline-none transition focus:border-slate-400"
+                />
               </div>
-              <div class="panel-field">
-                <label for="media-overlay-rotation">Rotation (deg)</label>
-                <input id="media-overlay-rotation" type="number" step="1" value="0" />
+              <div class="flex flex-col gap-1.5">
+                <label
+                  for="media-overlay-rotation"
+                  class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500"
+                >Rotation (deg)</label>
+                <input
+                  id="media-overlay-rotation"
+                  type="number"
+                  step="1"
+                  value="0"
+                  class="w-full rounded-xl border border-slate-200/80 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm outline-none transition focus:border-slate-400"
+                />
               </div>
-              <div class="panel-field">
-                <label for="media-overlay-altitude">Altitude</label>
-                <input id="media-overlay-altitude" type="number" step="0.01" value="0" />
+              <div class="flex flex-col gap-1.5">
+                <label
+                  for="media-overlay-altitude"
+                  class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500"
+                >Altitude</label>
+                <input
+                  id="media-overlay-altitude"
+                  type="number"
+                  step="0.01"
+                  value="0"
+                  class="w-full rounded-xl border border-slate-200/80 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm outline-none transition focus:border-slate-400"
+                />
               </div>
-              <div class="panel-field">
-                <label for="media-overlay-scale">Scale</label>
-                <input id="media-overlay-scale" type="number" step="0.05" value="1" />
+              <div class="flex flex-col gap-1.5">
+                <label
+                  for="media-overlay-scale"
+                  class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500"
+                >Scale</label>
+                <input
+                  id="media-overlay-scale"
+                  type="number"
+                  step="0.05"
+                  value="1"
+                  class="w-full rounded-xl border border-slate-200/80 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm outline-none transition focus:border-slate-400"
+                />
               </div>
-              <div class="meta">Curved media sheet mapped to the globe surface.</div>
+              <div class="text-xs text-slate-500">
+                Curved media sheet mapped to the globe surface.
+              </div>
             </div>
           </section>
-          <section class="panel-section" data-collapsible="true" data-collapsed="false">
-            <button class="panel-header" type="button" aria-expanded="true">
-              <span class="panel-title">Overlays</span>
-              <span class="panel-toggle-icon" aria-hidden="true">-</span>
+          <section
+            x-data="{ open: true }"
+            class="rounded-2xl border border-slate-200/70 bg-white/90 shadow-sm"
+          >
+            <button
+              class="flex w-full items-center justify-between px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-600"
+              type="button"
+              @click="open = !open"
+              :aria-expanded="open.toString()"
+            >
+              <span>Overlays</span>
+              <span class="text-sm text-slate-400" x-text="open ? '–' : '+'"></span>
             </button>
-            <div class="panel-body">
-              <div class="panel-actions">
-                <button data-layer-toggle="pins">Pins</button>
+            <div
+              x-cloak
+              x-show="open"
+              x-transition
+              class="border-t border-slate-200/60 px-4 py-3 flex flex-col gap-3"
+            >
+              <div class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  data-layer-toggle="pins"
+                  class="rounded-full border border-slate-200/70 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 data-[active=true]:border-emerald-500/50 data-[active=true]:bg-emerald-100/60"
+                >Pins</button>
               </div>
-              <div class="meta">Toggle overlays anchored to tracked entities.</div>
+              <div class="text-xs text-slate-500">
+                Toggle overlays anchored to tracked entities.
+              </div>
             </div>
           </section>
         </div>
       </div>
     </aside>
 
-    <main class="board" id="board">
-      <div class="layer-stack" id="layer-stack">
-        <canvas id="map-3d" data-layer="map-3d"></canvas>
-        <canvas id="map-2d" data-layer="map-2d"></canvas>
-        <div class="dom-layer" id="pin-layer" data-layer="pins"></div>
-        <div class="dom-layer flight-layer" id="flight-layer" data-layer="flights"></div>
-        <div class="dom-layer satellite-layer" id="satellite-layer" data-layer="satellites"></div>
-        <div class="dom-layer ship-layer" id="ship-layer" data-layer="ships"></div>
-        <div class="edge-layer" id="edge-layer" data-layer="edges"></div>
+    <main
+      class="board relative mx-3 mb-3 overflow-hidden rounded-[24px] bg-transparent shadow-none"
+      id="board"
+    >
+      <div class="layer-stack fixed inset-0 z-[1]" id="layer-stack">
+        <canvas
+          id="map-3d"
+          data-layer="map-3d"
+          class="absolute inset-0 h-full w-full touch-none z-[2]"
+        ></canvas>
+        <canvas
+          id="map-2d"
+          data-layer="map-2d"
+          class="absolute inset-0 h-full w-full pointer-events-none hidden z-[1]"
+        ></canvas>
+        <div
+          class="dom-layer pointer-events-none absolute inset-0 h-full w-full z-[3]"
+          id="pin-layer"
+          data-layer="pins"
+        ></div>
+        <div
+          class="dom-layer flight-layer pointer-events-none absolute inset-0 h-full w-full z-[3]"
+          id="flight-layer"
+          data-layer="flights"
+        ></div>
+        <div
+          class="dom-layer satellite-layer pointer-events-none absolute inset-0 h-full w-full z-[3]"
+          id="satellite-layer"
+          data-layer="satellites"
+        ></div>
+        <div
+          class="dom-layer ship-layer pointer-events-none absolute inset-0 h-full w-full z-[3]"
+          id="ship-layer"
+          data-layer="ships"
+        ></div>
+        <div
+          class="edge-layer pointer-events-none absolute inset-0 z-[4]"
+          id="edge-layer"
+          data-layer="edges"
+        ></div>
       </div>
-      <div class="crosshair" id="crosshair" aria-hidden="true"></div>
+      <div
+        class="fixed left-1/2 top-1/2 z-[4] h-7 w-7 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+        id="crosshair"
+        aria-hidden="true"
+      >
+        <span
+          class="absolute left-1/2 top-0 h-full w-[2px] -translate-x-1/2 bg-red-500 shadow-[0_0_12px_rgba(239,68,68,0.65)]"
+        ></span>
+        <span
+          class="absolute left-0 top-1/2 h-[2px] w-full -translate-y-1/2 bg-red-500 shadow-[0_0_12px_rgba(239,68,68,0.65)]"
+        ></span>
+      </div>
     </main>
 
-    <aside class="dock window" id="dock-right" data-state="closed" data-window-title="Inspector Panel">
-      <div class="dock-panel">
-        <div class="dock-header">
-          <div class="dock-title">Inspector Panel</div>
-          <div class="dock-controls">
-            <button class="dock-control dock-move" type="button" data-dock-drag-handle="true" aria-label="Move inspector panel">⠿</button>
-            <button class="dock-control" type="button" data-dock-action="minimize" aria-label="Minimize inspector panel">—</button>
-            <button class="dock-control" type="button" data-dock-action="close" aria-label="Close inspector panel">×</button>
+    <aside
+      class="dock window absolute left-1/2 top-1/2 z-20 h-[70vh] w-[320px] min-h-[320px] min-w-[260px] -translate-x-1/2 -translate-y-1/2 resize overflow-hidden rounded-2xl transition-opacity transition-transform duration-200 ease-out max-[1100px]:w-[260px] max-[900px]:h-[65vh] max-[900px]:w-[82vw]"
+      id="dock-right"
+      data-state="closed"
+      data-window-title="Inspector Panel"
+      data-panel-driver="alpine"
+    >
+      <div class="dock-panel flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200/70 bg-white/85 shadow-xl backdrop-blur">
+        <div class="dock-header flex cursor-default items-center justify-between border-b border-slate-200/60 bg-white/90 px-4 py-3">
+          <div class="dock-title text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+            Inspector Panel
+          </div>
+          <div class="dock-controls flex items-center gap-2">
+            <button
+              class="dock-control dock-move inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200/70 text-slate-500 transition hover:bg-slate-100 cursor-grab active:cursor-grabbing"
+              type="button"
+              data-dock-drag-handle="true"
+              aria-label="Move inspector panel"
+            >⠿</button>
+            <button
+              class="dock-control inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200/70 text-slate-500 transition hover:bg-slate-100"
+              type="button"
+              data-dock-action="minimize"
+              aria-label="Minimize inspector panel"
+            >—</button>
+            <button
+              class="dock-control inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200/70 text-slate-500 transition hover:bg-slate-100"
+              type="button"
+              data-dock-action="close"
+              aria-label="Close inspector panel"
+            >×</button>
           </div>
         </div>
-        <div class="dock-content">
-          <section class="panel-section">
-            <h2>Inspector</h2>
-            <p class="meta">Select an entity to view assignments, posture, and comms.</p>
+        <div class="dock-content flex flex-1 min-h-0 flex-col gap-3 overflow-y-auto overflow-x-hidden px-4 py-4 text-sm text-slate-600 overscroll-contain [scrollbar-gutter:stable]">
+          <section
+            x-data="{ open: true }"
+            class="rounded-2xl border border-slate-200/70 bg-white/90 shadow-sm"
+          >
+            <button
+              class="flex w-full items-center justify-between px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-600"
+              type="button"
+              @click="open = !open"
+              :aria-expanded="open.toString()"
+            >
+              <span>Inspector</span>
+              <span class="text-sm text-slate-400" x-text="open ? '–' : '+'"></span>
+            </button>
+            <div
+              x-cloak
+              x-show="open"
+              x-transition
+              class="border-t border-slate-200/60 px-4 py-3 flex flex-col gap-2"
+            >
+              <div class="text-xs text-slate-500">
+                Select an entity to view assignments, posture, and comms.
+              </div>
+            </div>
           </section>
-          <section class="panel-section">
-            <h2>Alerts</h2>
-            <p class="meta">Escalations and warnings appear here.</p>
+          <section
+            x-data="{ open: true }"
+            class="rounded-2xl border border-slate-200/70 bg-white/90 shadow-sm"
+          >
+            <button
+              class="flex w-full items-center justify-between px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-600"
+              type="button"
+              @click="open = !open"
+              :aria-expanded="open.toString()"
+            >
+              <span>Alerts</span>
+              <span class="text-sm text-slate-400" x-text="open ? '–' : '+'"></span>
+            </button>
+            <div
+              x-cloak
+              x-show="open"
+              x-transition
+              class="border-t border-slate-200/60 px-4 py-3 flex flex-col gap-2"
+            >
+              <div class="text-xs text-slate-500">
+                Escalations and warnings appear here.
+              </div>
+            </div>
           </section>
-          <section class="panel-section">
-            <h2>Overlays</h2>
-            <p class="meta">Toggle overlays tied to missions, units, and tasks.</p>
+          <section
+            x-data="{ open: true }"
+            class="rounded-2xl border border-slate-200/70 bg-white/90 shadow-sm"
+          >
+            <button
+              class="flex w-full items-center justify-between px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-600"
+              type="button"
+              @click="open = !open"
+              :aria-expanded="open.toString()"
+            >
+              <span>Overlays</span>
+              <span class="text-sm text-slate-400" x-text="open ? '–' : '+'"></span>
+            </button>
+            <div
+              x-cloak
+              x-show="open"
+              x-transition
+              class="border-t border-slate-200/60 px-4 py-3 flex flex-col gap-2"
+            >
+              <div class="text-xs text-slate-500">
+                Toggle overlays tied to missions, units, and tasks.
+              </div>
+            </div>
           </section>
         </div>
       </div>
     </aside>
+  </div>
+
+  <div class="hidden" aria-hidden="true" data-tailwind-bank="overlays">
+    <span class="pin absolute rounded-full bg-cyan-400/90 px-2.5 py-1 text-[11px] text-slate-900 cursor-pointer pointer-events-auto"></span>
+    <span class="font-semibold border border-cyan-400/55 shadow-[0_0_14px_rgba(34,211,238,0.25)]"></span>
+    <span class="font-semibold bg-slate-400/80 border border-slate-400/70 text-slate-900 shadow-[0_0_10px_rgba(148,163,184,0.3)]"></span>
+    <span class="font-semibold bg-amber-300/90 border border-amber-300/60 shadow-[0_0_14px_rgba(250,204,21,0.25)]"></span>
+    <span class="font-semibold bg-sky-400/85 border border-sky-400/70 shadow-[0_0_14px_rgba(56,189,248,0.25)]"></span>
+    <span class="font-semibold bg-lime-400/85 border border-lime-400/70 shadow-[0_0_14px_rgba(163,230,53,0.25)]"></span>
+    <span class="font-semibold bg-sky-400/90 border border-sky-400/60 shadow-[0_0_14px_rgba(56,189,248,0.25)]"></span>
+    <span class="font-semibold bg-orange-500/90 border border-orange-500/70 shadow-[0_0_14px_rgba(249,115,22,0.25)]"></span>
+    <span class="font-semibold bg-lime-400/90 border border-lime-400/70 shadow-[0_0_14px_rgba(163,230,53,0.25)]"></span>
+    <span class="font-semibold bg-amber-300/90 border border-amber-300/70 shadow-[0_0_14px_rgba(250,204,21,0.25)]"></span>
+    <span class="edge-marker absolute grid h-[34px] w-[34px] place-items-center rounded-full border text-[12px] font-bold uppercase tracking-[0.06em] text-slate-900 pointer-events-auto"></span>
+    <span class="bg-cyan-400/90 border-cyan-400/60 shadow-[0_0_16px_rgba(34,211,238,0.35)]"></span>
+    <span class="bg-slate-900/90 border-slate-400/50 text-slate-200 shadow-[0_0_16px_rgba(15,23,42,0.35)]"></span>
+    <span class="bg-amber-300/95 border-amber-600/80 text-slate-900 shadow-[0_0_16px_rgba(250,204,21,0.4)]"></span>
+    <span class="bg-sky-500/90 border-sky-500/70 shadow-[0_0_16px_rgba(14,165,233,0.35)]"></span>
+    <span class="bg-amber-400/90 border-amber-400/70 shadow-[0_0_16px_rgba(250,204,21,0.35)]"></span>
+    <span class="bg-sky-400/90 border-sky-400/70 shadow-[0_0_16px_rgba(56,189,248,0.35)]"></span>
+    <span class="fixed inset-0 z-40 hidden items-center justify-center bg-slate-900/20 backdrop-blur-sm flex"></span>
+    <span class="w-[260px] min-w-[220px] max-w-[320px] rounded-2xl bg-slate-900/95 px-4 py-3 text-white shadow-2xl"></span>
+    <span class="text-[13px] font-semibold"></span>
+    <span class="mt-2 text-xs text-slate-200/80"></span>
+    <span class="mt-3 flex flex-col gap-2"></span>
+    <span class="rounded-lg border border-slate-600/40 bg-slate-800/80 px-2.5 py-2 text-left text-[11px] font-semibold text-white transition hover:bg-slate-700/80"></span>
+    <span class="bg-orange-500 shadow-[0_0_12px_rgba(214,90,49,0.2)]"></span>
+    <span class="bg-emerald-500 shadow-[0_0_12px_rgba(22,163,74,0.35)]"></span>
+    <span class="bg-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.35)]"></span>
+    <span class="bg-red-600 shadow-[0_0_12px_rgba(220,38,38,0.35)]"></span>
+    <span class="opacity-0 opacity-100 pointer-events-none pointer-events-auto scale-95 scale-100 h-auto min-h-0 resize-none resize"></span>
   </div>
 
 </div>
