@@ -1755,7 +1755,7 @@ class Renderer3D {
       maxZoom: WEATHER_CONFIG.maxZoom,
       opacity: this.weatherOpacity,
       renderOrder: 50,
-      depthTest: true,
+      depthTest: false,
       depthWrite: false,
       polygonOffsetFactor: -4,
       polygonOffsetUnits: -4,
