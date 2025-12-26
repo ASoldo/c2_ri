@@ -2925,14 +2925,6 @@ class MediaOverlay {
     this.group.rotation.y = this.rotationY;
     this.group.visible = false;
     this.mesh = null;
-    this.debugLine = null;
-    this.debugLineMaterial = new THREE.LineBasicMaterial({
-      color: 0xf97316,
-      transparent: true,
-      opacity: 0.9,
-    });
-    this.debugLineMaterial.depthTest = false;
-    this.debugLineMaterial.depthWrite = false;
     this.material = null;
     this.texture = null;
     this.video = null;
@@ -3236,82 +3228,83 @@ class MediaOverlay {
       Math.max(0, this.altitude);
     const width = Math.max(0.5, Math.abs(this.widthDeg) * Math.max(0.1, this.scale));
     const height = Math.max(0.5, Math.abs(this.heightDeg) * Math.max(0.1, this.scale));
-    const halfW = width / 2;
-    const halfH = height / 2;
-    const latNorth = clampLat(this.lat + halfH);
-    const latSouth = clampLat(this.lat - halfH);
-    const lonWest = wrapLon(this.lon - halfW);
-    const lonEast = wrapLon(this.lon + halfW);
-    let phiStart = ((lonWest + 180) * Math.PI) / 180;
-    let phiLength = ((lonEast - lonWest) * Math.PI) / 180;
-    if (phiLength <= 0) {
-      phiLength += TWO_PI;
+    const widthRad = THREE.MathUtils.degToRad(width);
+    const heightRad = THREE.MathUtils.degToRad(height);
+    const widthSegments = Math.min(96, Math.max(10, Math.round(width / 1.8)));
+    const heightSegments = Math.min(72, Math.max(8, Math.round(height / 1.8)));
+    const lat = clampLat(this.lat);
+    const lon = wrapLon(this.lon);
+    const thetaCenter = THREE.MathUtils.degToRad(90 - lat);
+    const phiCenter = THREE.MathUtils.degToRad(lon + 180);
+    const sinTheta = Math.sin(thetaCenter);
+    const cosTheta = Math.cos(thetaCenter);
+    const sinPhi = Math.sin(phiCenter);
+    const cosPhi = Math.cos(phiCenter);
+    const normal = new THREE.Vector3(
+      -cosPhi * sinTheta,
+      cosTheta,
+      sinPhi * sinTheta,
+    ).normalize();
+    const east = new THREE.Vector3(sinPhi, 0, cosPhi);
+    if (east.lengthSq() < 1e-8) {
+      east.set(1, 0, 0);
+    } else {
+      east.normalize();
     }
-    const thetaStart = ((90 - latNorth) * Math.PI) / 180;
-    const thetaLength = ((latNorth - latSouth) * Math.PI) / 180;
-    const phiCenter = phiStart + phiLength * 0.5;
-    const thetaCenter = thetaStart + thetaLength * 0.5;
-    const lonSpan = Math.abs(lonEast - lonWest);
-    const latSpan = Math.abs(latNorth - latSouth);
-    const widthSegments = Math.min(96, Math.max(10, Math.round(lonSpan / 1.8)));
-    const heightSegments = Math.min(72, Math.max(8, Math.round(latSpan / 1.8)));
-    const geometry = new THREE.SphereGeometry(
-      radius,
-      widthSegments,
-      heightSegments,
-      phiStart,
-      phiLength,
-      thetaStart,
-      thetaLength,
-    );
+    const north = new THREE.Vector3().crossVectors(normal, east).normalize();
+    const columns = widthSegments + 1;
+    const rows = heightSegments + 1;
+    const positions = new Float32Array(columns * rows * 3);
+    const uvs = new Float32Array(columns * rows * 2);
+    let posIndex = 0;
+    let uvIndex = 0;
+    for (let row = 0; row < rows; row += 1) {
+      const v = row / heightSegments;
+      const vAngle = (0.5 - v) * heightRad;
+      const cosV = Math.cos(vAngle);
+      const sinV = Math.sin(vAngle);
+      for (let col = 0; col < columns; col += 1) {
+        const u = col / widthSegments;
+        const uAngle = (u - 0.5) * widthRad;
+        const cosU = Math.cos(uAngle);
+        const sinU = Math.sin(uAngle);
+        const dirX = normal.x * cosV * cosU + east.x * cosV * sinU + north.x * sinV;
+        const dirY = normal.y * cosV * cosU + east.y * cosV * sinU + north.y * sinV;
+        const dirZ = normal.z * cosV * cosU + east.z * cosV * sinU + north.z * sinV;
+        positions[posIndex++] = dirX * radius;
+        positions[posIndex++] = dirY * radius;
+        positions[posIndex++] = dirZ * radius;
+        uvs[uvIndex++] = u;
+        uvs[uvIndex++] = 1 - v;
+      }
+    }
+    const indices = new Uint16Array(widthSegments * heightSegments * 6);
+    let index = 0;
+    for (let row = 0; row < heightSegments; row += 1) {
+      for (let col = 0; col < widthSegments; col += 1) {
+        const a = row * columns + col;
+        const b = a + columns;
+        const c = b + 1;
+        const d = a + 1;
+        indices[index++] = a;
+        indices[index++] = b;
+        indices[index++] = d;
+        indices[index++] = b;
+        indices[index++] = c;
+        indices[index++] = d;
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
     geometry.computeBoundingSphere();
     this.mesh.geometry.dispose();
     this.mesh.geometry = geometry;
-    const position = geometry.getAttribute("position");
-    const axis = new THREE.Vector3();
-    if (position?.count) {
-      for (let i = 0; i < position.count; i += 1) {
-        axis.x += position.getX(i);
-        axis.y += position.getY(i);
-        axis.z += position.getZ(i);
-      }
-      axis.multiplyScalar(1 / position.count);
-      if (axis.lengthSq() > 0) {
-        axis.normalize();
-      } else {
-        axis.set(
-          Math.sin(thetaCenter) * Math.cos(phiCenter),
-          Math.cos(thetaCenter),
-          Math.sin(thetaCenter) * Math.sin(phiCenter),
-        );
-      }
-    } else {
-      axis.set(
-        Math.sin(thetaCenter) * Math.cos(phiCenter),
-        Math.cos(thetaCenter),
-        Math.sin(thetaCenter) * Math.sin(phiCenter),
-      );
-    }
-    const overshoot = Math.max(2, radius * 0.04);
-    const lineEnd = axis.clone().multiplyScalar(radius + overshoot);
-    const lineGeometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0, 0),
-      lineEnd,
-    ]);
-    if (!this.debugLine) {
-      this.debugLine = new THREE.Line(lineGeometry, this.debugLineMaterial);
-      this.debugLine.renderOrder = MEDIA_OVERLAY_RENDER_ORDER + 2;
-      this.debugLine.frustumCulled = false;
-      this.group.add(this.debugLine);
-    } else {
-      this.debugLine.geometry.dispose();
-      this.debugLine.geometry = lineGeometry;
-    }
-    this.debugLine.visible = Boolean(this.mesh?.visible);
     this.mesh.rotation.set(0, 0, 0);
     if (Number.isFinite(this.rotationDeg) && this.rotationDeg !== 0) {
       this.mesh.rotateOnAxis(
-        axis,
+        normal,
         THREE.MathUtils.degToRad(this.rotationDeg),
       );
     }
