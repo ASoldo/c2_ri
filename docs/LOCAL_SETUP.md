@@ -73,6 +73,9 @@ Optional overrides:
 - `C2_WEB_FLIGHT_BASE_URL=https://api.adsb.lol/v2/lat/{lat}/lon/{lon}/dist/{dist}`
 - `C2_WEB_FLIGHT_MAX=200`
 - `C2_WEB_FLIGHT_SAMPLE_ENABLED=false`
+- `C2_WEB_SHIP_PROVIDER=aishub`
+- `C2_WEB_SHIP_BASE_URL=https://data.aishub.net/ws.php`
+- `C2_WEB_SHIP_USER=your_aishub_username`
 
 To switch back to OpenSky (optional credentials for higher limits):
 
@@ -80,6 +83,11 @@ To switch back to OpenSky (optional credentials for higher limits):
 - `C2_WEB_FLIGHT_BASE_URL=https://opensky-network.org/api/states/all`
 - `C2_WEB_FLIGHT_USER=...`
 - `C2_WEB_FLIGHT_PASS=...`
+
+To switch ships back to ArcGIS ShipPositions:
+
+- `C2_WEB_SHIP_PROVIDER=arcgis`
+- `C2_WEB_SHIP_BASE_URL=https://services.arcgis.com/hRUr1F8lE8Jq2uJo/arcgis/rest/services/ShipPositions/FeatureServer/0/query`
 
 UI module layout:
 

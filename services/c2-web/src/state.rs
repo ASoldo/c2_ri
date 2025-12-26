@@ -55,6 +55,7 @@ pub struct AppState {
     pub ship_enabled: bool,
     pub ship_provider: String,
     pub ship_base_url: String,
+    pub ship_username: Option<String>,
     pub ship_min_interval: Duration,
     pub ship_cache_ttl: Duration,
     pub ship_max_ships: usize,

@@ -67,6 +67,12 @@ class ParticleField {
     this.material = null;
     this.ids = null;
     this.count = 0;
+    this.iconTextures = {};
+    this.iconReady = {
+      flight: 0,
+      satellite: 0,
+      ship: 0,
+    };
     this.kindMask = new Float32Array(8).fill(1.0);
     this.kindMask0 = new THREE.Vector4(1, 1, 1, 1);
     this.kindMask1 = new THREE.Vector4(1, 1, 1, 1);
@@ -77,18 +83,39 @@ class ParticleField {
   }
 
   init() {
+    const loader = new THREE.TextureLoader();
+    const loadIcon = (key, url) => {
+      const uniformKey = `iconReady${key.charAt(0).toUpperCase()}${key.slice(1)}`;
+      const texture = loader.load(url, () => {
+        this.iconReady[key] = 1;
+        if (this.material?.uniforms?.[uniformKey]) {
+          this.material.uniforms[uniformKey].value = 1.0;
+        }
+      });
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.generateMipmaps = false;
+      this.iconTextures[key] = texture;
+    };
+    loadIcon("flight", "/static/assets/plane.png");
+    loadIcon("satellite", "/static/assets/satellite.svg");
+    loadIcon("ship", "/static/assets/ship.svg");
     const vertexShader = `
       attribute float size;
       attribute vec4 color;
       attribute float kind;
+      attribute float heading;
       uniform float sizeScale;
       uniform float sizeAttenuation;
       varying vec4 vColor;
       varying float vKind;
+      varying float vHeading;
 
       void main() {
         vColor = color;
         vKind = kind;
+        vHeading = heading;
         vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
         float attenuate = sizeAttenuation > 0.5 ? (300.0 / -mvPosition.z) : 1.0;
         gl_PointSize = size * sizeScale * attenuate;
@@ -98,8 +125,15 @@ class ParticleField {
     const fragmentShader = `
       varying vec4 vColor;
       varying float vKind;
+      varying float vHeading;
       uniform vec4 kindMask0;
       uniform vec4 kindMask1;
+      uniform sampler2D iconFlight;
+      uniform sampler2D iconSatellite;
+      uniform sampler2D iconShip;
+      uniform float iconReadyFlight;
+      uniform float iconReadySatellite;
+      uniform float iconReadyShip;
 
       float kindVisible(float kind) {
         int k = int(kind + 0.5);
@@ -114,9 +148,43 @@ class ParticleField {
         return 1.0;
       }
 
+      vec2 rotateCoord(vec2 coord, float angle) {
+        float c = cos(angle);
+        float s = sin(angle);
+        return vec2(
+          coord.x * c - coord.y * s,
+          coord.x * s + coord.y * c
+        );
+      }
+
       void main() {
         float mask = kindVisible(vKind);
         if (mask < 0.5) discard;
+        int k = int(vKind + 0.5);
+        if (k == 5 && iconReadyFlight > 0.5) {
+          vec2 centered = gl_PointCoord - vec2(0.5);
+          vec2 rotated = rotateCoord(centered, -vHeading) + vec2(0.5);
+          if (rotated.x < 0.0 || rotated.x > 1.0 || rotated.y < 0.0 || rotated.y > 1.0) discard;
+          vec4 tex = texture2D(iconFlight, rotated);
+          if (tex.a < 0.05) discard;
+          gl_FragColor = vec4(tex.rgb * vColor.rgb, tex.a * vColor.a);
+          return;
+        }
+        if (k == 6 && iconReadySatellite > 0.5) {
+          vec4 tex = texture2D(iconSatellite, gl_PointCoord);
+          if (tex.a < 0.05) discard;
+          gl_FragColor = vec4(tex.rgb * vColor.rgb, tex.a * vColor.a);
+          return;
+        }
+        if (k == 7 && iconReadyShip > 0.5) {
+          vec2 centered = gl_PointCoord - vec2(0.5);
+          vec2 rotated = rotateCoord(centered, -vHeading) + vec2(0.5);
+          if (rotated.x < 0.0 || rotated.x > 1.0 || rotated.y < 0.0 || rotated.y > 1.0) discard;
+          vec4 tex = texture2D(iconShip, rotated);
+          if (tex.a < 0.05) discard;
+          gl_FragColor = vec4(tex.rgb * vColor.rgb, tex.a * vColor.a);
+          return;
+        }
         vec2 coord = gl_PointCoord - vec2(0.5);
         float dist = length(coord);
         if (dist > 0.5) discard;
@@ -130,6 +198,12 @@ class ParticleField {
         sizeAttenuation: { value: this.attenuation },
         kindMask0: { value: this.kindMask0 },
         kindMask1: { value: this.kindMask1 },
+        iconFlight: { value: this.iconTextures.flight || null },
+        iconSatellite: { value: this.iconTextures.satellite || null },
+        iconShip: { value: this.iconTextures.ship || null },
+        iconReadyFlight: { value: this.iconReady.flight },
+        iconReadySatellite: { value: this.iconReady.satellite },
+        iconReadyShip: { value: this.iconReady.ship },
       },
       vertexShader,
       fragmentShader,
@@ -238,6 +312,15 @@ class ParticleField {
         renderCache.kinds,
         1,
         THREE.Uint8BufferAttribute,
+        false,
+      );
+    }
+    if (renderCache.headings) {
+      this.updateAttribute(
+        "heading",
+        renderCache.headings,
+        1,
+        THREE.BufferAttribute,
         false,
       );
     }
@@ -856,6 +939,7 @@ class Renderer3D {
     this.trails = [];
     this.lastCameraVec = null;
     this.lastTrailAt = 0;
+    this.showCameraTrail = false;
     this.defaultDistance = this.globeRadius * 2.6;
     this.fillRatio = 0.72;
     this.focusTween = null;
@@ -1635,6 +1719,7 @@ class Renderer3D {
   }
 
   recordCameraTrail() {
+    if (!this.showCameraTrail) return;
     if (!this.camera || this.mode !== "globe") return;
     const now = performance.now();
     if (now - this.lastTrailAt < 120) return;

@@ -49,6 +49,22 @@ const particleSizeForKind = (kind) => {
   return PARTICLE_SIZES[kind] ?? PARTICLE_SIZES.default ?? 6.0;
 };
 
+const headingForFlight = (flight) => {
+  if (!flight) return 0;
+  const heading = Number.isFinite(flight.heading_deg) ? flight.heading_deg : 0;
+  return (heading * Math.PI) / 180;
+};
+
+const headingForShip = (ship) => {
+  if (!ship) return 0;
+  const heading = Number.isFinite(ship.heading_deg)
+    ? ship.heading_deg
+    : Number.isFinite(ship.course_deg)
+      ? ship.course_deg
+      : 0;
+  return (heading * Math.PI) / 180;
+};
+
 const altitudeForKind = (kind, data) => {
   switch (kind) {
     case "flight":
@@ -130,6 +146,7 @@ export const syncEntities = (payload, store) => {
         altitude: altitudeForKind(kindName, data),
         size: particleSizeForKind(kindName),
         color: colorToRgba(color),
+        heading: 0,
       });
     }
     store.addComponent(entity, "Renderable", { color });
@@ -203,6 +220,7 @@ export const syncFlights = (payload, store) => {
         altitude: altitudeForKind("flight", flight),
         size: particleSizeForKind("flight"),
         color: colorToRgba(color),
+        heading: headingForFlight(flight),
       });
     }
     store.addComponent(entity, "Flight", flight);
@@ -256,6 +274,7 @@ export const syncSatellites = (payload, store) => {
         altitude: altitudeForKind("satellite", satellite),
         size: particleSizeForKind("satellite"),
         color: colorToRgba(color),
+        heading: 0,
       });
     }
     store.addComponent(entity, "Satellite", satellite);
@@ -304,6 +323,7 @@ export const syncShips = (payload, store) => {
         altitude: altitudeForKind("ship", ship),
         size: particleSizeForKind("ship"),
         color: colorToRgba(color),
+        heading: headingForShip(ship),
       });
     }
     store.addComponent(entity, "Ship", ship);

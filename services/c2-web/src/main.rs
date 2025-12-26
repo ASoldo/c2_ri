@@ -307,13 +307,29 @@ async fn main() -> io::Result<()> {
             !(value == "0" || value == "false" || value == "no" || value == "off")
         })
         .unwrap_or(true);
-    let ship_provider =
-        env::var("C2_WEB_SHIP_PROVIDER").unwrap_or_else(|_| "arcgis".to_string());
-    let ship_base_url = env::var("C2_WEB_SHIP_BASE_URL").unwrap_or_else(|_| {
-        "https://services.arcgis.com/hRUr1F8lE8Jq2uJo/arcgis/rest/services/ShipPositions/FeatureServer/0/query".to_string()
+    let ship_username = env::var("C2_WEB_SHIP_USER").ok();
+    let ship_provider = env::var("C2_WEB_SHIP_PROVIDER").unwrap_or_else(|_| {
+        if ship_username.is_some() {
+            "aishub".to_string()
+        } else {
+            "arcgis".to_string()
+        }
     });
-    let ship_source_label =
-        env::var("C2_WEB_SHIP_SOURCE").unwrap_or_else(|_| "ArcGIS ShipPositions".to_string());
+    let ship_provider_key = ship_provider.trim().to_ascii_lowercase();
+    let ship_base_url = env::var("C2_WEB_SHIP_BASE_URL").unwrap_or_else(|_| {
+        if ship_provider_key.contains("aishub") {
+            "https://data.aishub.net/ws.php".to_string()
+        } else {
+            "https://services.arcgis.com/hRUr1F8lE8Jq2uJo/arcgis/rest/services/ShipPositions/FeatureServer/0/query".to_string()
+        }
+    });
+    let ship_source_label = env::var("C2_WEB_SHIP_SOURCE").unwrap_or_else(|_| {
+        if ship_provider_key.contains("aishub") {
+            "AISHub".to_string()
+        } else {
+            "ArcGIS ShipPositions".to_string()
+        }
+    });
     let ship_update_ms = env::var("C2_WEB_SHIP_UPDATE_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -409,6 +425,7 @@ async fn main() -> io::Result<()> {
         ship_enabled,
         ship_provider,
         ship_base_url,
+        ship_username,
         ship_min_interval: Duration::from_millis(ship_min_interval_ms),
         ship_cache_ttl: Duration::from_millis(ship_cache_ttl_ms),
         ship_max_ships: ship_max.max(1),

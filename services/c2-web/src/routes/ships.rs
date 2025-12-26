@@ -82,6 +82,86 @@ fn clamp_lon(value: f64) -> f64 {
     lon
 }
 
+fn value_as_f64(value: Option<&serde_json::Value>) -> Option<f64> {
+    match value {
+        Some(serde_json::Value::Number(number)) => number.as_f64(),
+        Some(serde_json::Value::String(text)) => text.parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn value_as_i64(value: Option<&serde_json::Value>) -> Option<i64> {
+    match value {
+        Some(serde_json::Value::Number(number)) => number.as_i64(),
+        Some(serde_json::Value::String(text)) => text.parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+fn value_as_string(value: Option<&serde_json::Value>) -> Option<String> {
+    value
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn haversine_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let r_km = 6371.0_f64;
+    let dlat = (lat2 - lat1).to_radians();
+    let dlon = (lon2 - lon1).to_radians();
+    let lat1 = lat1.to_radians();
+    let lat2 = lat2.to_radians();
+    let a = (dlat / 2.0).sin().powi(2)
+        + (dlon / 2.0).sin().powi(2) * lat1.cos() * lat2.cos();
+    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
+    r_km * c
+}
+
+fn center_radius_km(
+    bbox: Option<(f64, f64, f64, f64)>,
+) -> (f64, f64, f64) {
+    let (lat, lon) = if let Some((lamin, lomin, lamax, lomax)) = bbox {
+        ((lamin + lamax) / 2.0, (lomin + lomax) / 2.0)
+    } else {
+        (0.0, 0.0)
+    };
+    let radius_km: f64 = if let Some((lamin, lomin, lamax, lomax)) = bbox {
+        let corners = [
+            (lamin, lomin),
+            (lamin, lomax),
+            (lamax, lomin),
+            (lamax, lomax),
+        ];
+        let mut max_km: f64 = 0.0;
+        for (clat, clon) in corners {
+            max_km = max_km.max(haversine_km(lat, lon, clat, clon));
+        }
+        max_km
+    } else {
+        180.0
+    };
+    (lat, lon, radius_km.clamp(10.0, 800.0))
+}
+
+fn build_aishub_url(
+    base_url: &str,
+    username: &str,
+    bbox: Option<(f64, f64, f64, f64)>,
+) -> Result<reqwest::Url, Error> {
+    let (lat, lon, radius_km) = center_radius_km(bbox);
+    let mut url = reqwest::Url::parse(base_url)
+        .map_err(|_| actix_web::error::ErrorBadRequest("invalid ship base url"))?;
+    url.query_pairs_mut()
+        .append_pair("username", username)
+        .append_pair("format", "1")
+        .append_pair("output", "json")
+        .append_pair("compress", "0")
+        .append_pair("lat", &format!("{lat:.4}"))
+        .append_pair("lon", &format!("{lon:.4}"))
+        .append_pair("radius", &format!("{radius_km:.1}"));
+    Ok(url)
+}
+
 fn sanitize_heading(value: Option<f64>) -> Option<f64> {
     value.and_then(|heading| {
         if heading.is_finite() && heading >= 0.0 && heading < 360.0 {
@@ -157,6 +237,115 @@ fn parse_esri_response(
     }
 }
 
+fn parse_aishub_response(
+    response: serde_json::Value,
+    provider: &str,
+    limit: usize,
+) -> ShipSnapshot {
+    let mut records = Vec::with_capacity(limit.max(1));
+    let entries = match response {
+        serde_json::Value::Array(list) => list,
+        serde_json::Value::Object(mut map) => map
+            .remove("ships")
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    for (idx, entry) in entries.into_iter().enumerate() {
+        if records.len() >= limit {
+            break;
+        }
+        let Some(obj) = entry.as_object() else { continue };
+        let lat = value_as_f64(
+            obj.get("lat")
+                .or_else(|| obj.get("LAT"))
+                .or_else(|| obj.get("latitude"))
+                .or_else(|| obj.get("LATITUDE")),
+        );
+        let lon = value_as_f64(
+            obj.get("lon")
+                .or_else(|| obj.get("LON"))
+                .or_else(|| obj.get("longitude"))
+                .or_else(|| obj.get("LONGITUDE")),
+        );
+        let (Some(lat), Some(lon)) = (lat, lon) else { continue };
+        if !lat.is_finite() || !lon.is_finite() {
+            continue;
+        }
+        let mmsi = value_as_f64(obj.get("MMSI").or_else(|| obj.get("mmsi")))
+            .map(|value| value as u64);
+        let name = value_as_string(obj.get("NAME").or_else(|| obj.get("name")));
+        let callsign = value_as_string(
+            obj.get("CALLSIGN")
+                .or_else(|| obj.get("callsign"))
+                .or_else(|| obj.get("CallSign")),
+        );
+        let destination = value_as_string(
+            obj.get("DESTINATION")
+                .or_else(|| obj.get("destination"))
+                .or_else(|| obj.get("Destination")),
+        );
+        let speed_knots = value_as_f64(obj.get("SOG").or_else(|| obj.get("sog")))
+            .filter(|value| value.is_finite());
+        let course_deg = value_as_f64(obj.get("COG").or_else(|| obj.get("cog")))
+            .filter(|value| value.is_finite());
+        let heading_deg = sanitize_heading(
+            value_as_f64(obj.get("HEADING").or_else(|| obj.get("heading"))),
+        )
+        .or(course_deg);
+        let vessel_type = value_as_f64(
+            obj.get("TYPE")
+                .or_else(|| obj.get("type"))
+                .or_else(|| obj.get("VesselType")),
+        )
+        .map(|value| value as i32);
+        let draught_m = value_as_f64(
+            obj.get("DRAUGHT")
+                .or_else(|| obj.get("draught"))
+                .or_else(|| obj.get("Draught")),
+        );
+        let timestamp = value_as_i64(
+            obj.get("timestamp")
+                .or_else(|| obj.get("TIMESTAMP"))
+                .or_else(|| obj.get("time"))
+                .or_else(|| obj.get("TIME")),
+        );
+        let id = if let Some(mmsi) = mmsi {
+            format!("{provider}:{mmsi}")
+        } else if let Some(callsign) = callsign.as_deref() {
+            format!("{provider}:{callsign}")
+        } else {
+            format!("{provider}:unknown-{}", idx + 1)
+        };
+
+        records.push(ShipState {
+            id,
+            mmsi,
+            name,
+            callsign,
+            lat,
+            lon,
+            speed_knots,
+            course_deg,
+            heading_deg,
+            vessel_type,
+            status: None,
+            length_m: None,
+            width_m: None,
+            draught_m,
+            destination,
+            last_report_ms: timestamp,
+        });
+    }
+
+    ShipSnapshot {
+        provider: provider.to_string(),
+        source: "live".to_string(),
+        timestamp_ms: now_epoch_millis(),
+        ships: records,
+    }
+}
+
 #[get("/ui/ships")]
 pub async fn ships(
     state: web::Data<AppState>,
@@ -171,14 +360,23 @@ pub async fn ships(
         .unwrap_or(state.ship_max_ships)
         .clamp(1, state.ship_max_ships);
     let sample_limit = limit.min(state.ship_sample_count);
-    let center_hint = match (query.lamin, query.lomin, query.lamax, query.lomax) {
+    let bbox = (
+        query.lamin.map(clamp_lat),
+        query.lomin.map(clamp_lon),
+        query.lamax.map(clamp_lat),
+        query.lomax.map(clamp_lon),
+    );
+    let bbox_resolved = match bbox {
         (Some(lamin), Some(lomin), Some(lamax), Some(lomax))
             if lamin < lamax && lomin < lomax =>
         {
-            Some(((lamin + lamax) / 2.0, (lomin + lomax) / 2.0))
+            Some((lamin, lomin, lamax, lomax))
         }
         _ => None,
     };
+    let center_hint = bbox_resolved.map(|(lamin, lomin, lamax, lomax)| {
+        ((lamin + lamax) / 2.0, (lomin + lomax) / 2.0)
+    });
 
     let now = std::time::Instant::now();
     let mut cached_payload: Option<ShipSnapshot> = None;
@@ -223,62 +421,99 @@ pub async fn ships(
         None
     };
 
-    let mut url = reqwest::Url::parse(&state.ship_base_url)
-        .map_err(|_| actix_web::error::ErrorBadRequest("invalid ship base url"))?;
-    let bbox = (
-        query.lamin.map(clamp_lat),
-        query.lomin.map(clamp_lon),
-        query.lamax.map(clamp_lat),
-        query.lomax.map(clamp_lon),
-    );
-    let mut query_pairs = url.query_pairs_mut();
-    query_pairs.append_pair("where", "1=1");
-    query_pairs.append_pair("outFields", "*");
-    query_pairs.append_pair("f", "json");
-    query_pairs.append_pair("resultRecordCount", &limit.to_string());
-    query_pairs.append_pair("outSR", "4326");
-    query_pairs.append_pair("returnGeometry", "true");
-    if let (Some(lamin), Some(lomin), Some(lamax), Some(lomax)) = bbox {
-        if lamin < lamax && lomin < lomax {
+    let provider_key = state.ship_provider.trim().to_ascii_lowercase();
+    let use_aishub = provider_key.contains("aishub")
+        && state
+            .ship_username
+            .as_deref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+
+    let response = if use_aishub {
+        let username = state.ship_username.as_deref().unwrap_or_default();
+        let url = build_aishub_url(&state.ship_base_url, username, bbox_resolved)?;
+        state
+            .tile_client
+            .get(url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+    } else {
+        let mut url = reqwest::Url::parse(&state.ship_base_url)
+            .map_err(|_| actix_web::error::ErrorBadRequest("invalid ship base url"))?;
+        let mut query_pairs = url.query_pairs_mut();
+        query_pairs.append_pair("where", "1=1");
+        query_pairs.append_pair("outFields", "*");
+        query_pairs.append_pair("f", "json");
+        query_pairs.append_pair("resultRecordCount", &limit.to_string());
+        query_pairs.append_pair("outSR", "4326");
+        query_pairs.append_pair("returnGeometry", "true");
+        if let Some((lamin, lomin, lamax, lomax)) = bbox_resolved {
             let geometry = format!("{lomin},{lamin},{lomax},{lamax}");
             query_pairs.append_pair("geometry", &geometry);
             query_pairs.append_pair("geometryType", "esriGeometryEnvelope");
             query_pairs.append_pair("inSR", "4326");
             query_pairs.append_pair("spatialRel", "esriSpatialRelIntersects");
         }
-    }
-    drop(query_pairs);
-
-    let response = state
-        .tile_client
-        .get(url)
-        .header("Accept", "application/json")
-        .send()
-        .await;
+        drop(query_pairs);
+        state
+            .tile_client
+            .get(url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+    };
 
     let payload = match response {
         Ok(response) if response.status().is_success() => {
             match response.text().await {
-                Ok(body) => match serde_json::from_str::<EsriResponse>(&body) {
-                    Ok(value) => {
-                        let mut snapshot = parse_esri_response(value, &state.ship_provider, limit);
-                        if snapshot.ships.is_empty() && state.ship_sample_enabled {
-                            snapshot = sample_payload();
+                Ok(body) => {
+                    if use_aishub {
+                        match serde_json::from_str::<serde_json::Value>(&body) {
+                            Ok(value) => {
+                                let mut snapshot =
+                                    parse_aishub_response(value, &state.ship_provider, limit);
+                                if snapshot.ships.is_empty() && state.ship_sample_enabled {
+                                    snapshot = sample_payload();
+                                }
+                                snapshot
+                            }
+                            Err(err) => {
+                                tracing::warn!(error = %err, "ship provider parse failed");
+                                if let Some(payload) = fallback_payload() {
+                                    payload
+                                } else {
+                                    return Ok(HttpResponse::build(
+                                        actix_web::http::StatusCode::BAD_GATEWAY,
+                                    )
+                                    .finish());
+                                }
+                            }
                         }
-                        snapshot
-                    }
-                    Err(err) => {
-                        tracing::warn!(error = %err, "ship provider parse failed");
-                        if let Some(payload) = fallback_payload() {
-                            payload
-                        } else {
-                            return Ok(HttpResponse::build(
-                                actix_web::http::StatusCode::BAD_GATEWAY,
-                            )
-                            .finish());
+                    } else {
+                        match serde_json::from_str::<EsriResponse>(&body) {
+                            Ok(value) => {
+                                let mut snapshot =
+                                    parse_esri_response(value, &state.ship_provider, limit);
+                                if snapshot.ships.is_empty() && state.ship_sample_enabled {
+                                    snapshot = sample_payload();
+                                }
+                                snapshot
+                            }
+                            Err(err) => {
+                                tracing::warn!(error = %err, "ship provider parse failed");
+                                if let Some(payload) = fallback_payload() {
+                                    payload
+                                } else {
+                                    return Ok(HttpResponse::build(
+                                        actix_web::http::StatusCode::BAD_GATEWAY,
+                                    )
+                                    .finish());
+                                }
+                            }
                         }
                     }
-                },
+                }
                 Err(err) => {
                     tracing::warn!(error = %err, "ship provider response read failed");
                     if let Some(payload) = fallback_payload() {

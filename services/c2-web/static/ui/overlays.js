@@ -37,6 +37,7 @@ class FlightTrailLayer {
     this.group.renderOrder = 40;
     this.group.visible = false;
     this.tracks = new Map();
+    this.showStalks = false;
     if (this.renderer?.scene) {
       this.renderer.scene.add(this.group);
     }
@@ -77,6 +78,7 @@ class FlightTrailLayer {
     const stalk = new THREE.Line(stalkGeometry, stalkMaterial);
     stalk.renderOrder = 82;
     stalk.frustumCulled = true;
+    stalk.visible = this.showStalks;
     this.group.add(stalk);
 
     track = {
@@ -117,6 +119,11 @@ class FlightTrailLayer {
 
   updateStalk(track, flight) {
     if (!flight) return;
+    if (!this.showStalks) {
+      track.stalk.visible = false;
+      return;
+    }
+    track.stalk.visible = true;
     const ground = this.renderer.positionForGeo(
       { lat: flight.lat, lon: flight.lon },
       this.renderer.markerAltitude,
@@ -295,10 +302,12 @@ class FlightOverlay {
     this.store = store;
     this.visible = false;
     this.trails = new FlightTrailLayer(renderer);
-    this.planes = new FlightMeshLayer(renderer);
+    this.planes = null;
     this.lastSnapshot = null;
     this.trails.setVisible(false);
-    this.planes.setVisible(false);
+    if (this.planes) {
+      this.planes.setVisible(false);
+    }
   }
 
   setVisible(visible) {
@@ -422,9 +431,11 @@ class SatelliteOverlay {
     this.renderer = renderer;
     this.store = store;
     this.visible = false;
-    this.meshes = new SatelliteMeshLayer(renderer);
+    this.meshes = null;
     this.lastSnapshot = null;
-    this.meshes.setVisible(false);
+    if (this.meshes) {
+      this.meshes.setVisible(false);
+    }
   }
 
   setVisible(visible) {
@@ -549,9 +560,11 @@ class ShipOverlay {
     this.renderer = renderer;
     this.store = store;
     this.visible = false;
-    this.meshes = new ShipMeshLayer(renderer);
+    this.meshes = null;
     this.lastSnapshot = null;
-    this.meshes.setVisible(false);
+    if (this.meshes) {
+      this.meshes.setVisible(false);
+    }
   }
 
   setVisible(visible) {
@@ -611,8 +624,15 @@ const collapseLabel = (label) => {
   return trimmed.slice(0, 3).toUpperCase();
 };
 
+const ICON_ASSETS = {
+  flight: "/static/assets/plane.png",
+  satellite: "/static/assets/satellite.svg",
+  ship: "/static/assets/ship.svg",
+};
+
 const BUBBLE_FONT_STACK =
   '"IBM Plex Sans", "Space Grotesk", "Manrope", sans-serif';
+const BUBBLE_ICON_OFFSET = 26;
 
 const BUBBLE_PIN_BASE = {
   shape: "pill",
@@ -649,6 +669,9 @@ const PIN_STYLE_FLIGHT = {
   background: "rgba(34, 211, 238, 0.9)",
   borderColor: "rgba(34, 211, 238, 0.55)",
   shadowColor: "rgba(34, 211, 238, 0.25)",
+  icon: "flight",
+  iconAlpha: 0.22,
+  iconScale: 0.9,
 };
 
 const PIN_STYLE_FLIGHT_GROUND = {
@@ -656,6 +679,9 @@ const PIN_STYLE_FLIGHT_GROUND = {
   background: "rgba(148, 163, 184, 0.8)",
   borderColor: "rgba(148, 163, 184, 0.7)",
   shadowColor: "rgba(148, 163, 184, 0.3)",
+  icon: "flight",
+  iconAlpha: 0.22,
+  iconScale: 0.9,
 };
 
 const PIN_STYLE_SATELLITE = {
@@ -663,6 +689,9 @@ const PIN_STYLE_SATELLITE = {
   background: "rgba(250, 204, 21, 0.9)",
   borderColor: "rgba(250, 204, 21, 0.6)",
   shadowColor: "rgba(250, 204, 21, 0.25)",
+  icon: "satellite",
+  iconAlpha: 0.24,
+  iconScale: 0.85,
 };
 
 const PIN_STYLE_SATELLITE_MEO = {
@@ -670,6 +699,9 @@ const PIN_STYLE_SATELLITE_MEO = {
   background: "rgba(56, 189, 248, 0.85)",
   borderColor: "rgba(56, 189, 248, 0.7)",
   shadowColor: "rgba(56, 189, 248, 0.25)",
+  icon: "satellite",
+  iconAlpha: 0.24,
+  iconScale: 0.85,
 };
 
 const PIN_STYLE_SATELLITE_GEO = {
@@ -677,6 +709,9 @@ const PIN_STYLE_SATELLITE_GEO = {
   background: "rgba(163, 230, 53, 0.85)",
   borderColor: "rgba(163, 230, 53, 0.7)",
   shadowColor: "rgba(163, 230, 53, 0.25)",
+  icon: "satellite",
+  iconAlpha: 0.24,
+  iconScale: 0.85,
 };
 
 const PIN_STYLE_SATELLITE_UNKNOWN = {
@@ -684,6 +719,9 @@ const PIN_STYLE_SATELLITE_UNKNOWN = {
   background: "rgba(148, 163, 184, 0.8)",
   borderColor: "rgba(148, 163, 184, 0.7)",
   shadowColor: "rgba(148, 163, 184, 0.3)",
+  icon: "satellite",
+  iconAlpha: 0.2,
+  iconScale: 0.85,
 };
 
 const PIN_STYLE_SHIP = {
@@ -691,6 +729,9 @@ const PIN_STYLE_SHIP = {
   background: "rgba(56, 189, 248, 0.9)",
   borderColor: "rgba(56, 189, 248, 0.6)",
   shadowColor: "rgba(56, 189, 248, 0.25)",
+  icon: "ship",
+  iconAlpha: 0.22,
+  iconScale: 0.9,
 };
 
 const PIN_STYLE_SHIP_TANKER = {
@@ -698,6 +739,9 @@ const PIN_STYLE_SHIP_TANKER = {
   background: "rgba(249, 115, 22, 0.88)",
   borderColor: "rgba(249, 115, 22, 0.7)",
   shadowColor: "rgba(249, 115, 22, 0.25)",
+  icon: "ship",
+  iconAlpha: 0.22,
+  iconScale: 0.9,
 };
 
 const PIN_STYLE_SHIP_PASSENGER = {
@@ -705,6 +749,9 @@ const PIN_STYLE_SHIP_PASSENGER = {
   background: "rgba(163, 230, 53, 0.88)",
   borderColor: "rgba(163, 230, 53, 0.7)",
   shadowColor: "rgba(163, 230, 53, 0.25)",
+  icon: "ship",
+  iconAlpha: 0.22,
+  iconScale: 0.9,
 };
 
 const PIN_STYLE_SHIP_FISHING = {
@@ -712,6 +759,9 @@ const PIN_STYLE_SHIP_FISHING = {
   background: "rgba(250, 204, 21, 0.88)",
   borderColor: "rgba(250, 204, 21, 0.7)",
   shadowColor: "rgba(250, 204, 21, 0.25)",
+  icon: "ship",
+  iconAlpha: 0.22,
+  iconScale: 0.9,
 };
 
 const PIN_STYLE_SHIP_UNKNOWN = {
@@ -719,6 +769,9 @@ const PIN_STYLE_SHIP_UNKNOWN = {
   background: "rgba(148, 163, 184, 0.8)",
   borderColor: "rgba(148, 163, 184, 0.7)",
   shadowColor: "rgba(148, 163, 184, 0.3)",
+  icon: "ship",
+  iconAlpha: 0.2,
+  iconScale: 0.9,
 };
 
 const BUBBLE_EDGE_BASE = {
@@ -762,6 +815,11 @@ const EDGE_STYLE_FLIGHT = {
   background: "rgba(14, 165, 233, 0.9)",
   borderColor: "rgba(14, 165, 233, 0.7)",
   shadowColor: "rgba(14, 165, 233, 0.35)",
+  icon: "flight",
+  iconAlpha: 0.55,
+  iconScale: 0.62,
+  iconOffsetY: 6,
+  textOffsetY: -6,
 };
 
 const EDGE_STYLE_SATELLITE = {
@@ -769,6 +827,11 @@ const EDGE_STYLE_SATELLITE = {
   background: "rgba(250, 204, 21, 0.9)",
   borderColor: "rgba(250, 204, 21, 0.7)",
   shadowColor: "rgba(250, 204, 21, 0.35)",
+  icon: "satellite",
+  iconAlpha: 0.55,
+  iconScale: 0.6,
+  iconOffsetY: 6,
+  textOffsetY: -6,
 };
 
 const EDGE_STYLE_SHIP = {
@@ -776,6 +839,25 @@ const EDGE_STYLE_SHIP = {
   background: "rgba(56, 189, 248, 0.9)",
   borderColor: "rgba(56, 189, 248, 0.7)",
   shadowColor: "rgba(56, 189, 248, 0.35)",
+  icon: "ship",
+  iconAlpha: 0.55,
+  iconScale: 0.62,
+  iconOffsetY: 6,
+  textOffsetY: -6,
+};
+
+const EDGE_ICON_STYLE = {
+  iconAlpha: 0.5,
+  iconScale: 0.6,
+  iconOffsetY: 6,
+  textOffsetY: -6,
+};
+
+const edgeIconForKind = (kind) => {
+  if (kind === "flight") return { icon: "flight", ...EDGE_ICON_STYLE };
+  if (kind === "satellite") return { icon: "satellite", ...EDGE_ICON_STYLE };
+  if (kind === "ship") return { icon: "ship", ...EDGE_ICON_STYLE };
+  return {};
 };
 
 const EDGE_POPUP_BACKDROP_CLASS =
@@ -841,6 +923,7 @@ const buildBubbleCanvas = (text, style, pixelRatio) => {
   const paddingY = style.paddingY || 0;
   const borderWidth = style.borderWidth || 0;
   const shadowBlur = style.shadowBlur || 0;
+  const textOffsetY = style.textOffsetY || 0;
   const shadowPad = shadowBlur ? Math.ceil(shadowBlur * 0.9) : 0;
   const displayText = style.uppercase ? text.toUpperCase() : text;
 
@@ -900,6 +983,21 @@ const buildBubbleCanvas = (text, style, pixelRatio) => {
     ctx.restore();
   }
 
+  if (style.iconImage) {
+    const iconScale = Number.isFinite(style.iconScale) ? style.iconScale : 0.6;
+    const iconAlpha = Number.isFinite(style.iconAlpha) ? style.iconAlpha : 0.45;
+    const iconOffsetX = Number.isFinite(style.iconOffsetX) ? style.iconOffsetX : 0;
+    const iconOffsetY = Number.isFinite(style.iconOffsetY) ? style.iconOffsetY : 0;
+    const iconBase = Math.min(shapeWidth, shapeHeight);
+    const iconSize = Math.max(6, iconBase * iconScale);
+    const iconX = centerX - iconSize / 2 + iconOffsetX;
+    const iconY = centerY - iconSize / 2 + iconOffsetY;
+    ctx.save();
+    ctx.globalAlpha = iconAlpha;
+    ctx.drawImage(style.iconImage, iconX, iconY, iconSize, iconSize);
+    ctx.restore();
+  }
+
   ctx.fillStyle = style.textColor;
   ctx.font = font;
   ctx.textBaseline = "middle";
@@ -909,11 +1007,11 @@ const buildBubbleCanvas = (text, style, pixelRatio) => {
       ctx,
       displayText,
       centerX,
-      centerY,
+      centerY + textOffsetY,
       style.letterSpacing * fontSize,
     );
   } else {
-    ctx.fillText(displayText, centerX, centerY);
+    ctx.fillText(displayText, centerX, centerY + textOffsetY);
   }
 
   return {
@@ -948,7 +1046,7 @@ const pinBaseStyleKeyFor = (kind, variant) => {
 };
 
 const edgeBaseStyleFor = (kind, occluded) => {
-  if (occluded) return EDGE_STYLE_OCCLUDED;
+  if (occluded) return { ...EDGE_STYLE_OCCLUDED, ...edgeIconForKind(kind) };
   if (kind === "flight") return EDGE_STYLE_FLIGHT;
   if (kind === "satellite") return EDGE_STYLE_SATELLITE;
   if (kind === "ship") return EDGE_STYLE_SHIP;
@@ -965,15 +1063,29 @@ class BubbleTextureCache {
     this.renderer = renderer;
     this.cache = new Map();
     this.pixelRatio = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    this.icons = new Map();
+    this.version = 0;
+    Object.entries(ICON_ASSETS).forEach(([key, url]) => {
+      const image = new Image();
+      image.crossOrigin = "anonymous";
+      image.onload = () => {
+        this.version += 1;
+      };
+      image.src = url;
+      this.icons.set(key, image);
+    });
   }
 
   get(text, styleKey, style) {
-    const key = `${styleKey}|${text}`;
+    const key = `${styleKey}|${text}|${this.version}`;
     let cached = this.cache.get(key);
     if (cached) return cached;
+    const iconImage = style?.icon ? this.icons.get(style.icon) : null;
+    const iconReady = iconImage && iconImage.complete && iconImage.naturalWidth > 0;
+    const resolvedStyle = iconReady ? { ...style, iconImage } : style;
     const { canvas, width, height } = buildBubbleCanvas(
       text,
-      style,
+      resolvedStyle,
       this.pixelRatio,
     );
     const texture = new THREE.CanvasTexture(canvas);
@@ -1263,13 +1375,24 @@ class BubbleOverlay {
     const styleKey = selected
       ? entry.selectedStyleKey
       : entry.baseStyleKey;
-    const style = selected ? entry.selectedStyle : entry.baseStyle;
+    const style = selected
+      ? {
+          ...entry.selectedStyle,
+          icon: entry.baseStyle?.icon,
+          iconAlpha: entry.baseStyle?.iconAlpha,
+          iconScale: entry.baseStyle?.iconScale,
+          iconOffsetX: entry.baseStyle?.iconOffsetX,
+          iconOffsetY: entry.baseStyle?.iconOffsetY,
+          textOffsetY: entry.baseStyle?.textOffsetY,
+        }
+      : entry.baseStyle;
     this.applyStyle(entry, styleKey, style);
   }
 
   applyStyle(entry, styleKey, style) {
     const text = entry.text || "";
-    const textureKey = `${styleKey}|${text}`;
+    const version = this.textureCache?.version ?? 0;
+    const textureKey = `${styleKey}|${text}|${version}`;
     if (entry.textureKey === textureKey) return;
     const { texture, width, height } = this.textureCache.get(
       text,
@@ -1322,8 +1445,8 @@ class BubbleOverlay {
     return entry;
   }
 
-  positionEntry(entry, screenX, screenY) {
-    entry.sprite.position.set(screenX, this.size.height - screenY, 0);
+  positionEntry(entry, screenX, screenY, offsetY = 0) {
+    entry.sprite.position.set(screenX, this.size.height - (screenY + offsetY), 0);
   }
 
   hideEntry(entry) {
@@ -1401,7 +1524,7 @@ class BubbleOverlay {
       });
       entry.sprite.visible = visible;
       if (visible) {
-        this.positionEntry(entry, screen.x, screen.y);
+        this.positionEntry(entry, screen.x, screen.y, -BUBBLE_ICON_OFFSET);
       } else {
         this.hideEntry(entry);
       }
@@ -1463,7 +1586,7 @@ class BubbleOverlay {
       });
       entry.sprite.visible = visible;
       if (visible) {
-        this.positionEntry(entry, screen.x, screen.y);
+        this.positionEntry(entry, screen.x, screen.y, -BUBBLE_ICON_OFFSET);
       } else {
         this.hideEntry(entry);
       }
@@ -1531,7 +1654,7 @@ class BubbleOverlay {
       );
       entry.sprite.visible = visible;
       if (visible) {
-        this.positionEntry(entry, screen.x, screen.y);
+        this.positionEntry(entry, screen.x, screen.y, -BUBBLE_ICON_OFFSET);
       } else {
         this.hideEntry(entry);
       }

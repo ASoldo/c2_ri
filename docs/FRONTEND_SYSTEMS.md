@@ -38,7 +38,7 @@ tile server or terrain service when available.
 
 Key patterns:
 - ECS render buffers drive Three.js positions (globe + overlay sprites).
-- Particle field markers for high-density entity rendering, with sprite/mesh icons for flight/ship/satellite overlays.
+- Particle field markers for high-density entity rendering, including icon textures for flight/ship/satellite entities.
 - JS holds only UI metadata (labels/colors), not world state.
 
 ## Realtime Data Flow

@@ -104,6 +104,7 @@ export const ecsRuntime = {
     colors: null,
     sizes: null,
     kinds: null,
+    headings: null,
     index: new Map(),
   },
   kindCache: new Map(),
@@ -157,6 +158,9 @@ export const ecsRuntime = {
     const colorsPtr = exports.ecs_ingest_colors_ptr
       ? exports.ecs_ingest_colors_ptr()
       : 0;
+    const headingsPtr = exports.ecs_ingest_headings_ptr
+      ? exports.ecs_ingest_headings_ptr()
+      : 0;
     const ids = new BigUint64Array(this.memory.buffer, idsPtr, count);
     const geos = new Float32Array(this.memory.buffer, geosPtr, count * 2);
     const kinds = kindsPtr
@@ -170,6 +174,9 @@ export const ecsRuntime = {
       : null;
     const colors = colorsPtr
       ? new Uint8Array(this.memory.buffer, colorsPtr, count * 4)
+      : null;
+    const headings = headingsPtr
+      ? new Float32Array(this.memory.buffer, headingsPtr, count)
       : null;
     items.forEach((item, index) => {
       const id = typeof item.id === "bigint" ? item.id : BigInt(item.id);
@@ -197,6 +204,9 @@ export const ecsRuntime = {
         colors[cOffset + 2] = color[2] ?? 0xf8;
         colors[cOffset + 3] = color[3] ?? 0xff;
       }
+      if (headings) {
+        headings[index] = Number.isFinite(item.heading) ? item.heading : 0;
+      }
     });
     exports.ecs_ingest_commit(count);
     return true;
@@ -204,7 +214,25 @@ export const ecsRuntime = {
   upsertEntity(id, lat, lon, kind = ECS_KIND.unknown, style = null) {
     if (!this.ready || !this.instance?.exports) return;
     const ecsId = typeof id === "bigint" ? id : BigInt(id);
-    if (this.instance.exports.ecs_upsert_entity_style && style) {
+    if (this.instance.exports.ecs_upsert_entity_style_heading && style) {
+      const color = Array.isArray(style.color) ? style.color : [0x38, 0xbd, 0xf8, 0xff];
+      const altitude = Number.isFinite(style.altitude) ? style.altitude : 0;
+      const heading = Number.isFinite(style.heading) ? style.heading : 0;
+      const size = Number.isFinite(style.size) ? style.size : 6.0;
+      this.instance.exports.ecs_upsert_entity_style_heading(
+        ecsId,
+        lat,
+        lon,
+        kind,
+        altitude,
+        heading,
+        size,
+        color[0] ?? 0x38,
+        color[1] ?? 0xbd,
+        color[2] ?? 0xf8,
+        color[3] ?? 0xff,
+      );
+    } else if (this.instance.exports.ecs_upsert_entity_style && style) {
       const color = Array.isArray(style.color) ? style.color : [0x38, 0xbd, 0xf8, 0xff];
       const altitude = Number.isFinite(style.altitude) ? style.altitude : 0;
       const size = Number.isFinite(style.size) ? style.size : 6.0;
@@ -249,6 +277,8 @@ export const ecsRuntime = {
     const sizesLen = exports.ecs_sizes_len ? exports.ecs_sizes_len() : 0;
     const kindsPtr = exports.ecs_kinds_ptr ? exports.ecs_kinds_ptr() : 0;
     const kindsLen = exports.ecs_kinds_len ? exports.ecs_kinds_len() : 0;
+    const headingsPtr = exports.ecs_headings_ptr ? exports.ecs_headings_ptr() : 0;
+    const headingsLen = exports.ecs_headings_len ? exports.ecs_headings_len() : 0;
     const ids =
       this.renderCache.ids &&
       this.renderCache.ids.byteOffset === idsPtr &&
@@ -282,7 +312,14 @@ export const ecsRuntime = {
         ? this.renderCache.kinds
         : new Uint8Array(this.memory.buffer, kindsPtr, kindsLen)
       : null;
-    return { ids, positions, colors, sizes, kinds };
+    const headings = headingsPtr && headingsLen
+      ? this.renderCache.headings &&
+        this.renderCache.headings.byteOffset === headingsPtr &&
+        this.renderCache.headings.length === headingsLen
+        ? this.renderCache.headings
+        : new Float32Array(this.memory.buffer, headingsPtr, headingsLen)
+      : null;
+    return { ids, positions, colors, sizes, kinds, headings };
   },
   refreshRenderCache() {
     const data = this.readRenderBuffers();
@@ -292,6 +329,7 @@ export const ecsRuntime = {
       this.renderCache.colors = null;
       this.renderCache.sizes = null;
       this.renderCache.kinds = null;
+      this.renderCache.headings = null;
       this.renderCache.index.clear();
       this.kindCache.clear();
       return null;
@@ -301,6 +339,7 @@ export const ecsRuntime = {
     this.renderCache.colors = data.colors;
     this.renderCache.sizes = data.sizes;
     this.renderCache.kinds = data.kinds;
+    this.renderCache.headings = data.headings;
     this.renderCache.index.clear();
     for (let i = 0; i < data.ids.length; i += 1) {
       this.renderCache.index.set(data.ids[i], i * 3);

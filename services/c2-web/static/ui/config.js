@@ -7,9 +7,9 @@ export const PARTICLE_SIZES = {
   unit: 6.5,
   mission: 6.5,
   incident: 6.5,
-  flight: 5.5,
-  satellite: 4.5,
-  ship: 5.5,
+  flight: 13.5,
+  satellite: 11.0,
+  ship: 12.5,
 };
 export const LABEL_LOD_MAX = 2200;
 
@@ -248,13 +248,13 @@ export const SATELLITE_CONFIG = buildSatelliteConfig();
 
 export const DEFAULT_SHIP_CONFIG = {
   enabled: true,
-  provider: "arcgis",
+  provider: "aishub",
   updateIntervalMs: 9000,
   maxShips: 200,
   spanMinDeg: 6,
   spanMaxDeg: 70,
   altitude: 0.12,
-  source: "ArcGIS ShipPositions",
+  source: "AISHub",
   sample: true,
 };
 
