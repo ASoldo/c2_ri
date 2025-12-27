@@ -27,6 +27,11 @@
     window.C2_WEATHER_CONFIG = {{ weather_config_json | safe }};
   </script>
   {% endif %}
+  {% if sea_config_json and sea_config_json != "" %}
+  <script>
+    window.C2_SEA_CONFIG = {{ sea_config_json | safe }};
+  </script>
+  {% endif %}
   {% if flight_config_json and flight_config_json != "" %}
   <script>
     window.C2_FLIGHT_CONFIG = {{ flight_config_json | safe }};

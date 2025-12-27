@@ -155,6 +155,51 @@ const buildWeatherConfig = () => {
 
 export const WEATHER_CONFIG = buildWeatherConfig();
 
+export const DEFAULT_SEA_FIELDS = [
+  "OSCAR_Sea_Surface_Currents_Zonal",
+  "OSCAR_Sea_Surface_Currents_Meridional",
+  "AMSRU_Ocean_Wind_Speed_Day",
+  "JPL_MEaSUREs_L4_Sea_Surface_Height_Anomalies",
+];
+
+const buildSeaConfig = () => {
+  const config = window.C2_SEA_CONFIG || {};
+  let fields = Array.isArray(config.fields) && config.fields.length
+    ? config.fields.filter(Boolean)
+    : DEFAULT_SEA_FIELDS.slice();
+  if (!fields.length) fields = DEFAULT_SEA_FIELDS.slice();
+  const defaultField = fields.includes(config.defaultField)
+    ? config.defaultField
+    : fields[0];
+  const defaultTime = config.defaultTime || "default";
+  const defaultFormat = config.defaultFormat || "png";
+  const defaultOpacity = Number.isFinite(config.defaultOpacity)
+    ? config.defaultOpacity
+    : 0.45;
+  const maxTiles = Number.isFinite(config.maxTiles) ? config.maxTiles : 50;
+  const updateIntervalMs = Number.isFinite(config.updateIntervalMs)
+    ? config.updateIntervalMs
+    : 1100;
+  const maxInFlight = Number.isFinite(config.maxInFlight) ? config.maxInFlight : 2;
+  const minZoom = Number.isFinite(config.minZoom) ? config.minZoom : 0;
+  const maxZoom = Number.isFinite(config.maxZoom) ? config.maxZoom : 6;
+  return {
+    enabled: Boolean(config.enabled),
+    fields,
+    defaultField,
+    defaultTime,
+    defaultFormat,
+    defaultOpacity,
+    maxTiles,
+    updateIntervalMs,
+    maxInFlight,
+    minZoom,
+    maxZoom,
+  };
+};
+
+export const SEA_CONFIG = buildSeaConfig();
+
 export const DEFAULT_FLIGHT_CONFIG = {
   enabled: true,
   provider: "adsb_lol",

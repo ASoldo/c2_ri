@@ -31,34 +31,68 @@ struct EsriAttributes {
     object_id: Option<i64>,
     #[serde(rename = "MMSI")]
     mmsi: Option<u64>,
+    #[serde(rename = "AIS_MMSI")]
+    ais_mmsi: Option<u64>,
     #[serde(rename = "Name")]
     name: Option<String>,
+    #[serde(rename = "AIS_NAME")]
+    ais_name: Option<String>,
     #[serde(rename = "CallSign")]
     callsign: Option<String>,
+    #[serde(rename = "AIS_CALLSIGN")]
+    ais_callsign: Option<String>,
     #[serde(rename = "SOG")]
     sog: Option<f64>,
+    #[serde(rename = "AIS_SPEED")]
+    ais_sog: Option<f64>,
     #[serde(rename = "COG")]
     cog: Option<f64>,
+    #[serde(rename = "AIS_COURSE")]
+    ais_cog: Option<f64>,
     #[serde(rename = "Heading")]
     heading: Option<f64>,
+    #[serde(rename = "AIS_HEADING")]
+    ais_heading: Option<f64>,
     #[serde(rename = "VesselType")]
     vessel_type: Option<i32>,
+    #[serde(rename = "AIS_TYPE")]
+    ais_type: Option<i32>,
     #[serde(rename = "Status")]
     status: Option<i32>,
+    #[serde(rename = "AIS_NAVSTAT")]
+    ais_status: Option<i32>,
     #[serde(rename = "Length")]
     length: Option<f64>,
     #[serde(rename = "Width")]
     width: Option<f64>,
+    #[serde(rename = "AIS_A")]
+    ais_a: Option<f64>,
+    #[serde(rename = "AIS_B")]
+    ais_b: Option<f64>,
+    #[serde(rename = "AIS_C")]
+    ais_c: Option<f64>,
+    #[serde(rename = "AIS_D")]
+    ais_d: Option<f64>,
     #[serde(rename = "Draught")]
     draught: Option<f64>,
+    #[serde(rename = "AIS_DRAUGHT")]
+    ais_draught: Option<f64>,
     #[serde(rename = "Destination")]
     destination: Option<String>,
+    #[serde(rename = "AIS_DESTINATION")]
+    ais_destination: Option<String>,
     #[serde(rename = "BaseDateTime")]
     base_datetime: Option<i64>,
+    #[serde(rename = "AIS_TIMESTAMP")]
+    ais_timestamp: Option<i64>,
     #[serde(rename = "Latitude")]
     latitude: Option<f64>,
     #[serde(rename = "Longitude")]
     longitude: Option<f64>,
+    #[serde(rename = "AIS_LATITUDE")]
+    ais_latitude: Option<f64>,
+    #[serde(rename = "AIS_LONGITUDE")]
+    ais_longitude: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -172,6 +206,22 @@ fn sanitize_heading(value: Option<f64>) -> Option<f64> {
     })
 }
 
+fn resolve_dimension(
+    primary: Option<f64>,
+    a: Option<f64>,
+    b: Option<f64>,
+) -> Option<f64> {
+    if let Some(value) = primary.filter(|value| value.is_finite() && *value > 0.0) {
+        return Some(value);
+    }
+    let total = a.unwrap_or(0.0) + b.unwrap_or(0.0);
+    if total > 0.0 {
+        Some(total)
+    } else {
+        None
+    }
+}
+
 fn parse_esri_response(
     response: EsriResponse,
     provider: &str,
@@ -182,51 +232,76 @@ fn parse_esri_response(
         if records.len() >= limit {
             break;
         }
+        let attrs = feature.attributes;
         let lat = feature
             .geometry
             .as_ref()
             .map(|point| point.y)
-            .or(feature.attributes.latitude);
+            .or(attrs.latitude)
+            .or(attrs.ais_latitude);
         let lon = feature
             .geometry
             .as_ref()
             .map(|point| point.x)
-            .or(feature.attributes.longitude);
+            .or(attrs.longitude)
+            .or(attrs.ais_longitude);
         let (Some(lat), Some(lon)) = (lat, lon) else {
             continue;
         };
         if !lat.is_finite() || !lon.is_finite() {
             continue;
         }
-        let id = if let Some(mmsi) = feature.attributes.mmsi {
+        let mmsi = attrs.mmsi.or(attrs.ais_mmsi);
+        let callsign = attrs.callsign.or(attrs.ais_callsign);
+        let name = attrs.name.or(attrs.ais_name);
+        let destination = attrs.destination.or(attrs.ais_destination);
+        let id = if let Some(mmsi) = mmsi {
             format!("{provider}:{mmsi}")
-        } else if let Some(callsign) = feature.attributes.callsign.as_deref() {
+        } else if let Some(callsign) = callsign.as_deref() {
             format!("{provider}:{callsign}")
-        } else if let Some(object_id) = feature.attributes.object_id {
+        } else if let Some(object_id) = attrs.object_id {
             format!("{provider}:obj-{object_id}")
         } else {
             format!("{provider}:unknown-{}", records.len() + 1)
         };
-        let speed_knots = feature.attributes.sog.filter(|value| value.is_finite());
-        let course_deg = feature.attributes.cog.filter(|value| value.is_finite());
-        let heading_deg = sanitize_heading(feature.attributes.heading).or(course_deg);
+        let speed_knots = attrs
+            .sog
+            .or(attrs.ais_sog)
+            .filter(|value| value.is_finite());
+        let course_deg = attrs
+            .cog
+            .or(attrs.ais_cog)
+            .filter(|value| value.is_finite());
+        let heading_deg =
+            sanitize_heading(attrs.heading.or(attrs.ais_heading)).or(course_deg);
+        let vessel_type = attrs.vessel_type.or(attrs.ais_type);
+        let status = attrs.status.or(attrs.ais_status);
+        let length_m = resolve_dimension(attrs.length, attrs.ais_a, attrs.ais_b)
+            .filter(|value| value.is_finite());
+        let width_m = resolve_dimension(attrs.width, attrs.ais_c, attrs.ais_d)
+            .filter(|value| value.is_finite());
+        let draught_m = attrs
+            .draught
+            .or(attrs.ais_draught)
+            .filter(|value| value.is_finite());
+        let last_report_ms = attrs.base_datetime.or(attrs.ais_timestamp);
         records.push(ShipState {
             id,
-            mmsi: feature.attributes.mmsi,
-            name: feature.attributes.name,
-            callsign: feature.attributes.callsign,
+            mmsi,
+            name,
+            callsign,
             lat,
             lon,
             speed_knots,
             course_deg,
             heading_deg,
-            vessel_type: feature.attributes.vessel_type,
-            status: feature.attributes.status,
-            length_m: feature.attributes.length.filter(|value| value.is_finite()),
-            width_m: feature.attributes.width.filter(|value| value.is_finite()),
-            draught_m: feature.attributes.draught.filter(|value| value.is_finite()),
-            destination: feature.attributes.destination,
-            last_report_ms: feature.attributes.base_datetime,
+            vessel_type,
+            status,
+            length_m,
+            width_m,
+            draught_m,
+            destination,
+            last_report_ms,
         });
     }
     ShipSnapshot {

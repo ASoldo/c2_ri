@@ -4,6 +4,7 @@ import {
   MEDIA_OVERLAY_RENDER_ORDER,
   MARKER_ALTITUDE,
   TILE_CONFIG,
+  SEA_CONFIG,
   WEATHER_CONFIG,
 } from "/static/ui/config.js";
 
@@ -906,6 +907,13 @@ class Renderer3D {
     this.tileManager = null;
     this.tileProvider = null;
     this.tileZoom = null;
+    this.seaManager = null;
+    this.seaProvider = null;
+    this.seaField = SEA_CONFIG.defaultField;
+    this.seaTime = SEA_CONFIG.defaultTime;
+    this.seaFormat = SEA_CONFIG.defaultFormat;
+    this.seaOpacity = SEA_CONFIG.defaultOpacity;
+    this.seaVisible = false;
     this.weatherManager = null;
     this.weatherProvider = null;
     this.weatherField = WEATHER_CONFIG.defaultField;
@@ -1070,6 +1078,17 @@ class Renderer3D {
     );
     this.tileManager.setBaseDistance(this.defaultDistance);
 
+    this.seaManager = new TileManager(
+      this.scene,
+      this.globeRadius,
+      this.renderer,
+      this.globeRotation,
+    );
+    this.seaManager.maxTiles = Math.min(SEA_CONFIG.maxTiles, 120);
+    this.seaManager.maxCache = Math.max(256, this.seaManager.maxTiles * 3);
+    this.seaManager.maxInFlight = SEA_CONFIG.maxInFlight;
+    this.seaManager.setBaseDistance(this.defaultDistance);
+
     this.weatherManager = new TileManager(
       this.scene,
       this.globeRadius,
@@ -1131,6 +1150,8 @@ class Renderer3D {
     this.setAxesVisible(true);
     this.setGridVisible(true);
     this.setTileProvider(TILE_CONFIG.activeProvider);
+    this.refreshSeaProvider();
+    this.setSeaVisible(false);
     this.refreshWeatherProvider();
     this.setWeatherVisible(false);
     this.setMode("globe", true);
@@ -1313,6 +1334,10 @@ class Renderer3D {
     if (this.tileManager) {
       this.tileManager.group.visible = mode === "globe" && Boolean(this.tileProvider);
     }
+    if (this.seaManager) {
+      this.seaManager.group.visible =
+        mode === "globe" && this.seaVisible && Boolean(this.seaProvider);
+    }
     if (this.weatherManager) {
       this.weatherManager.group.visible =
         mode === "globe" && this.weatherVisible && Boolean(this.weatherProvider);
@@ -1492,6 +1517,9 @@ class Renderer3D {
       this.tileManager.update(this.camera, this.size);
       this.tileZoom = this.tileManager.zoom;
     }
+    if (this.seaManager && this.seaProvider && this.seaVisible && this.mode === "globe") {
+      this.seaManager.update(this.camera, this.size);
+    }
     if (this.weatherManager && this.weatherProvider && this.weatherVisible && this.mode === "globe") {
       this.weatherManager.update(this.camera, this.size);
     }
@@ -1531,6 +1559,9 @@ class Renderer3D {
     }
     if (this.tileManager) {
       this.tileManager.setBaseDistance(distance);
+    }
+    if (this.seaManager) {
+      this.seaManager.setBaseDistance(distance);
     }
     if (this.weatherManager) {
       this.weatherManager.setBaseDistance(distance);
@@ -1591,6 +1622,73 @@ class Renderer3D {
     if (this.tileManager) {
       this.tileManager.setProvider(provider);
       this.tileZoom = provider ? this.tileManager.zoom : null;
+    }
+  }
+
+  buildSeaProvider() {
+    if (!SEA_CONFIG.enabled) return null;
+    return {
+      id: "sea",
+      name: "Sea Overlay",
+      url: "/ui/tiles/sea/{z}/{x}/{y}?field={field}&time={time}&format={format}",
+      minZoom: SEA_CONFIG.minZoom,
+      maxZoom: SEA_CONFIG.maxZoom,
+      opacity: this.seaOpacity,
+      renderOrder: 40,
+      depthTest: false,
+      depthWrite: false,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3,
+      updateIntervalMs: SEA_CONFIG.updateIntervalMs,
+      params: {
+        field: this.seaField,
+        time: this.seaTime,
+        format: this.seaFormat,
+      },
+    };
+  }
+
+  refreshSeaProvider() {
+    const provider = this.buildSeaProvider();
+    this.seaProvider = provider;
+    if (this.seaManager) {
+      this.seaManager.setProvider(provider);
+      if (SEA_CONFIG.maxTiles) {
+        this.seaManager.maxTiles = Math.min(SEA_CONFIG.maxTiles, 120);
+        this.seaManager.maxCache = Math.max(256, this.seaManager.maxTiles * 3);
+      }
+      this.seaManager.maxInFlight = SEA_CONFIG.maxInFlight;
+      this.seaManager.group.visible =
+        this.mode === "globe" && this.seaVisible && Boolean(provider);
+    }
+  }
+
+  setSeaVisible(visible) {
+    this.seaVisible = Boolean(visible);
+    if (this.seaManager) {
+      this.seaManager.group.visible =
+        this.mode === "globe" && this.seaVisible && Boolean(this.seaProvider);
+      if (this.seaVisible) {
+        this.seaManager.markDirty();
+      }
+    }
+  }
+
+  setSeaField(field) {
+    if (!field || field === this.seaField) return;
+    this.seaField = field;
+    this.refreshSeaProvider();
+    if (this.seaManager) {
+      this.seaManager.markDirty();
+    }
+  }
+
+  setSeaTime(time) {
+    if (!time || time === this.seaTime) return;
+    this.seaTime = time;
+    this.refreshSeaProvider();
+    if (this.seaManager) {
+      this.seaManager.markDirty();
     }
   }
 

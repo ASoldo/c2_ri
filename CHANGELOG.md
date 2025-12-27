@@ -52,6 +52,7 @@ Added
 - UI-003 Particle markers now render flight/ship/satellite icon textures with heading-aware rotation
 - UI-003 Edge compass indicators and pin bubbles now include flight/ship/satellite icon graphics
 - SA-001 AISHub ship provider support for richer live AIS previews (configurable)
+- UI-003 Ocean-state overlay tiles (currents/sea metrics) layered between base maps and weather
 
 Changed
 - Moved observability manifests to k8s/ overlays and updated ArgoCD repo refs
@@ -61,6 +62,7 @@ Changed
 - SA-001 Default flight feed now uses ADSB.lol (template URL) when no provider is configured
 - UI-003 Flight icon rendering moved into particle shader; flight/ship/satellite meshes disabled to avoid duplicate markers
 - UI-003 Debug camera trails and flight stalks are disabled by default
+- SA-001 ArcGIS ship provider default updated to Current Ship Position feed with AIS field mapping
 
 Fixed
 - Disambiguated storage adapter trait calls across API and Timescale wrappers

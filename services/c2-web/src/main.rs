@@ -143,6 +143,88 @@ async fn main() -> io::Result<()> {
         "source": "NASA GIBS",
     })
     .to_string();
+    let sea_base_url = env::var("C2_WEB_SEA_BASE_URL")
+        .unwrap_or_else(|_| "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best".to_string());
+    let sea_base_url = sea_base_url.trim_end_matches('/').to_string();
+    let sea_tile_matrix_set = env::var("C2_WEB_SEA_TILE_MATRIX_SET")
+        .unwrap_or_else(|_| "GoogleMapsCompatible_Level6".to_string());
+    let sea_fields = env::var("C2_WEB_SEA_FIELDS")
+        .ok()
+        .map(|raw| {
+            raw.split(',')
+                .map(|field| field.trim().to_string())
+                .filter(|field| !field.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .filter(|fields| !fields.is_empty())
+        .unwrap_or_else(|| {
+            vec![
+                "OSCAR_Sea_Surface_Currents_Zonal".to_string(),
+                "OSCAR_Sea_Surface_Currents_Meridional".to_string(),
+                "AMSRU_Ocean_Wind_Speed_Day".to_string(),
+                "JPL_MEaSUREs_L4_Sea_Surface_Height_Anomalies".to_string(),
+            ]
+        });
+    let sea_default_field = env::var("C2_WEB_SEA_DEFAULT_FIELD")
+        .ok()
+        .filter(|field| sea_fields.contains(field))
+        .unwrap_or_else(|| sea_fields.first().cloned().unwrap_or_default());
+    let sea_default_time = env::var("C2_WEB_SEA_DEFAULT_TIME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "default".to_string());
+    let sea_default_format = env::var("C2_WEB_SEA_DEFAULT_FORMAT")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "png".to_string());
+    let sea_default_opacity = env::var("C2_WEB_SEA_DEFAULT_OPACITY")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(0.45);
+    let sea_max_tiles = env::var("C2_WEB_SEA_MAX_TILES")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(50);
+    let sea_update_ms = env::var("C2_WEB_SEA_UPDATE_MS")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(1100);
+    let sea_max_in_flight = env::var("C2_WEB_SEA_MAX_IN_FLIGHT")
+        .ok()
+        .and_then(|value| value.parse::<u8>().ok())
+        .unwrap_or(2);
+    let sea_min_zoom = env::var("C2_WEB_SEA_MIN_ZOOM")
+        .ok()
+        .and_then(|value| value.parse::<u8>().ok())
+        .unwrap_or(0);
+    let sea_max_zoom = env::var("C2_WEB_SEA_MAX_ZOOM")
+        .ok()
+        .and_then(|value| value.parse::<u8>().ok())
+        .unwrap_or(6);
+    let sea_enabled = env::var("C2_WEB_SEA_ENABLED")
+        .ok()
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            !(value == "0" || value == "false" || value == "no" || value == "off")
+        })
+        .unwrap_or(true)
+        && !sea_fields.is_empty();
+    let sea_config_json = serde_json::json!({
+        "enabled": sea_enabled,
+        "fields": sea_fields.clone(),
+        "defaultField": sea_default_field.clone(),
+        "defaultTime": sea_default_time.clone(),
+        "defaultFormat": sea_default_format.clone(),
+        "defaultOpacity": sea_default_opacity,
+        "maxTiles": sea_max_tiles,
+        "updateIntervalMs": sea_update_ms,
+        "maxInFlight": sea_max_in_flight,
+        "minZoom": sea_min_zoom,
+        "maxZoom": sea_max_zoom,
+        "source": "NASA GIBS",
+    })
+    .to_string();
     let flight_enabled = env::var("C2_WEB_FLIGHT_ENABLED")
         .ok()
         .map(|value| {
@@ -320,14 +402,14 @@ async fn main() -> io::Result<()> {
         if ship_provider_key.contains("aishub") {
             "https://data.aishub.net/ws.php".to_string()
         } else {
-            "https://services.arcgis.com/hRUr1F8lE8Jq2uJo/arcgis/rest/services/ShipPositions/FeatureServer/0/query".to_string()
+            "https://services8.arcgis.com/eQokUDmReWyB8og0/arcgis/rest/services/Current_Ship_Position/FeatureServer/0/query".to_string()
         }
     });
     let ship_source_label = env::var("C2_WEB_SHIP_SOURCE").unwrap_or_else(|_| {
         if ship_provider_key.contains("aishub") {
             "AISHub".to_string()
         } else {
-            "ArcGIS ShipPositions".to_string()
+            "ArcGIS Current Ship Position".to_string()
         }
     });
     let ship_update_ms = env::var("C2_WEB_SHIP_UPDATE_MS")
@@ -398,6 +480,16 @@ async fn main() -> io::Result<()> {
         weather_default_format,
         weather_min_zoom,
         weather_max_zoom,
+        sea_config_json: Some(sea_config_json),
+        sea_enabled,
+        sea_base_url,
+        sea_tile_matrix_set,
+        sea_fields,
+        sea_default_field,
+        sea_default_time,
+        sea_default_format,
+        sea_min_zoom,
+        sea_max_zoom,
         flight_config_json: Some(flight_config_json),
         flight_enabled,
         flight_provider,

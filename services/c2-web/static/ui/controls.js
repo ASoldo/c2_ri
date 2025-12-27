@@ -1,5 +1,6 @@
 import {
   FLIGHT_CONFIG,
+  SEA_CONFIG,
   SATELLITE_CONFIG,
   SHIP_CONFIG,
   TILE_CONFIG,
@@ -61,7 +62,7 @@ export const setupGlobeControls = (renderer3d) => {
   });
 };
 
-const formatWeatherLabel = (value) => {
+const formatOverlayLabel = (value) => {
   if (!value) return "";
   return value
     .replace(/_/g, " ")
@@ -82,7 +83,7 @@ export const setupWeatherControls = (renderer3d) => {
     WEATHER_CONFIG.fields.forEach((field) => {
       const option = document.createElement("option");
       option.value = field;
-      option.textContent = formatWeatherLabel(field);
+      option.textContent = formatOverlayLabel(field);
       select.appendChild(option);
     });
     select.value = WEATHER_CONFIG.defaultField;
@@ -98,6 +99,39 @@ export const setupWeatherControls = (renderer3d) => {
       const next = toggle.getAttribute("aria-pressed") !== "true";
       toggle.setAttribute("aria-pressed", next.toString());
       renderer3d.setWeatherVisible(next);
+    });
+  }
+};
+
+export const setupSeaControls = (renderer3d) => {
+  const panel = document.getElementById("sea-panel");
+  if (!SEA_CONFIG.enabled) {
+    if (panel) panel.style.display = "none";
+    return;
+  }
+  if (panel) panel.style.display = "block";
+  const select = document.getElementById("sea-field");
+  if (select) {
+    select.innerHTML = "";
+    SEA_CONFIG.fields.forEach((field) => {
+      const option = document.createElement("option");
+      option.value = field;
+      option.textContent = formatOverlayLabel(field);
+      select.appendChild(option);
+    });
+    select.value = SEA_CONFIG.defaultField;
+    renderer3d.setSeaField(SEA_CONFIG.defaultField);
+    select.addEventListener("change", () => {
+      renderer3d.setSeaField(select.value);
+    });
+  }
+  const toggle = document.querySelector("[data-sea-toggle]");
+  if (toggle) {
+    toggle.setAttribute("aria-pressed", "false");
+    toggle.addEventListener("click", () => {
+      const next = toggle.getAttribute("aria-pressed") !== "true";
+      toggle.setAttribute("aria-pressed", next.toString());
+      renderer3d.setSeaVisible(next);
     });
   }
 };

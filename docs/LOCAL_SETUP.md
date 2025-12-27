@@ -73,6 +73,9 @@ Optional overrides:
 - `C2_WEB_FLIGHT_BASE_URL=https://api.adsb.lol/v2/lat/{lat}/lon/{lon}/dist/{dist}`
 - `C2_WEB_FLIGHT_MAX=200`
 - `C2_WEB_FLIGHT_SAMPLE_ENABLED=false`
+- `C2_WEB_SEA_ENABLED=true`
+- `C2_WEB_SEA_FIELDS=OSCAR_Sea_Surface_Currents_Zonal,OSCAR_Sea_Surface_Currents_Meridional,AMSRU_Ocean_Wind_Speed_Day,JPL_MEaSUREs_L4_Sea_Surface_Height_Anomalies`
+- `C2_WEB_SEA_DEFAULT_FIELD=OSCAR_Sea_Surface_Currents_Zonal`
 - `C2_WEB_SHIP_PROVIDER=aishub`
 - `C2_WEB_SHIP_BASE_URL=https://data.aishub.net/ws.php`
 - `C2_WEB_SHIP_USER=your_aishub_username`
@@ -87,7 +90,7 @@ To switch back to OpenSky (optional credentials for higher limits):
 To switch ships back to ArcGIS ShipPositions:
 
 - `C2_WEB_SHIP_PROVIDER=arcgis`
-- `C2_WEB_SHIP_BASE_URL=https://services.arcgis.com/hRUr1F8lE8Jq2uJo/arcgis/rest/services/ShipPositions/FeatureServer/0/query`
+- `C2_WEB_SHIP_BASE_URL=https://services8.arcgis.com/eQokUDmReWyB8og0/arcgis/rest/services/Current_Ship_Position/FeatureServer/0/query`
 
 UI module layout:
 

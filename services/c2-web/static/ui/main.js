@@ -19,6 +19,7 @@ import { updateStatus, startSse, startWs, fetchEntities } from "/static/ui/net.j
 import {
   setupTileProviders,
   setupGlobeControls,
+  setupSeaControls,
   setupWeatherControls,
   setupFlightControls,
   setupSatelliteControls,
@@ -157,6 +158,7 @@ export const boot = async () => {
 
   setupTileProviders(renderer3d);
   setupGlobeControls(renderer3d);
+  setupSeaControls(renderer3d);
   setupWeatherControls(renderer3d);
   setupFlightControls(renderer3d, bus, flightOverlay, bubbleOverlay);
   setupSatelliteControls(renderer3d, bus, satelliteOverlay, bubbleOverlay);

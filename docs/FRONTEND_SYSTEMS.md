@@ -20,6 +20,8 @@ This document defines the frontend design patterns for a layered C2 console with
 
 Each layer receives a unified camera transform so 2D/3D and overlay sprites align.
 
+Weather and ocean-state overlays are tiled above base maps (below UI overlays) to keep map detail visible.
+
 Current globe rendering uses locally stored 8k Earth textures from Solar System Scope
 (day/night/clouds/normal/specular) for offline-capable visualization. Swap with an internal
 tile server or terrain service when available.

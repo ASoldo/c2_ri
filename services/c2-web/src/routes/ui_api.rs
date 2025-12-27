@@ -250,6 +250,7 @@ fn render_partials(
         snapshot: snapshot.clone(),
         tile_config_json: None,
         weather_config_json: None,
+        sea_config_json: None,
         flight_config_json: None,
         satellite_config_json: None,
         ship_config_json: None,

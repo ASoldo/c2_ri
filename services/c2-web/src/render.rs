@@ -11,6 +11,7 @@ pub struct UiTemplateData {
     pub snapshot: UiSnapshot,
     pub tile_config_json: Option<String>,
     pub weather_config_json: Option<String>,
+    pub sea_config_json: Option<String>,
     pub flight_config_json: Option<String>,
     pub satellite_config_json: Option<String>,
     pub ship_config_json: Option<String>,
@@ -25,6 +26,7 @@ impl UiTemplateData {
             snapshot,
             tile_config_json: state.tile_config_json.clone(),
             weather_config_json: state.weather_config_json.clone(),
+            sea_config_json: state.sea_config_json.clone(),
             flight_config_json: state.flight_config_json.clone(),
             satellite_config_json: state.satellite_config_json.clone(),
             ship_config_json: state.ship_config_json.clone(),
@@ -40,6 +42,7 @@ pub fn build_context(data: &UiTemplateData) -> Context {
     context.insert("snapshot", &data.snapshot);
     context.insert("tile_config_json", &data.tile_config_json);
     context.insert("weather_config_json", &data.weather_config_json);
+    context.insert("sea_config_json", &data.sea_config_json);
     context.insert("flight_config_json", &data.flight_config_json);
     context.insert("satellite_config_json", &data.satellite_config_json);
     context.insert("ship_config_json", &data.ship_config_json);
