@@ -6,9 +6,9 @@ const KIND_ASSET: u8 = 1;
 const KIND_UNIT: u8 = 2;
 const KIND_MISSION: u8 = 3;
 const KIND_INCIDENT: u8 = 4;
-const KIND_FLIGHT: u8 = 5;
-const KIND_SATELLITE: u8 = 6;
-const KIND_SHIP: u8 = 7;
+pub const KIND_FLIGHT: u8 = 5;
+pub const KIND_SATELLITE: u8 = 6;
+pub const KIND_SHIP: u8 = 7;
 
 const DEFAULT_GLOBE_RADIUS: f32 = 120.0;
 
@@ -78,7 +78,8 @@ pub struct RenderInstance {
     pub size: f32,
     pub color: [f32; 4],
     pub heading_rad: f32,
-    pub kind: u32,
+    pub icon_index: u32,
+    pub category: u8,
 }
 
 pub struct WorldState {
@@ -122,7 +123,8 @@ impl WorldState {
                 size: size.0,
                 color: color.rgba(),
                 heading_rad: heading.0.to_radians(),
-                kind: icon_index_for_kind(kind.0),
+                icon_index: icon_index_for_kind(kind.0),
+                category: kind.0,
             });
         }
     }
@@ -149,11 +151,10 @@ impl WorldState {
             let lat = ((seed >> 16) as f32 / 65535.0) * 170.0 - 85.0;
             seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
             let lon = ((seed >> 16) as f32 / 65535.0) * 360.0 - 180.0;
-            let kind = match i % 4 {
+            let kind = match i % 3 {
                 0 => KIND_FLIGHT,
                 1 => KIND_SATELLITE,
-                2 => KIND_SHIP,
-                _ => KIND_ASSET,
+                _ => KIND_SHIP,
             };
             let color = color_for_kind(kind);
             let heading = (i as f32 * 7.0) % 360.0;

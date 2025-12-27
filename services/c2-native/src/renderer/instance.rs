@@ -9,7 +9,7 @@ pub struct InstanceRaw {
     size: f32,
     color: [f32; 4],
     heading: f32,
-    kind: u32,
+    icon_index: u32,
     _pad: [f32; 2],
 }
 
@@ -20,7 +20,7 @@ impl InstanceRaw {
             size: instance.size,
             color: instance.color,
             heading: instance.heading_rad,
-            kind: instance.kind,
+            icon_index: instance.icon_index,
             _pad: [0.0, 0.0],
         }
     }

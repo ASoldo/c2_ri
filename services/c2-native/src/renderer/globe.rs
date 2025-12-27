@@ -5,7 +5,8 @@ use glam::Vec3;
 pub struct GlobeVertex {
     position: [f32; 3],
     normal: [f32; 3],
-    uv: [f32; 2],
+    uv_equirect: [f32; 2],
+    uv_merc: [f32; 2],
 }
 
 impl GlobeVertex {
@@ -27,6 +28,11 @@ impl GlobeVertex {
                 wgpu::VertexAttribute {
                     offset: 24,
                     shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 3,
                     format: wgpu::VertexFormat::Float32x2,
                 },
             ],
@@ -56,10 +62,16 @@ pub fn build_sphere(radius: f32, segments: u32, rings: u32) -> (Vec<GlobeVertex>
                 radius * sin_theta * sin_phi,
             );
             let normal = position.normalize_or_zero();
+            let sin_lat = cos_theta.clamp(-0.9999, 0.9999);
+            let merc = 0.5
+                - 0.5
+                    * ((1.0 + sin_lat) / (1.0 - sin_lat)).ln()
+                    / std::f32::consts::PI;
             vertices.push(GlobeVertex {
                 position: position.to_array(),
                 normal: normal.to_array(),
-                uv: [u, 1.0 - v],
+                uv_equirect: [1.0 - u, 1.0 - v],
+                uv_merc: [1.0 - u, merc.clamp(0.0, 1.0)],
             });
         }
     }
@@ -72,11 +84,11 @@ pub fn build_sphere(radius: f32, segments: u32, rings: u32) -> (Vec<GlobeVertex>
             let i2 = i0 + stride;
             let i3 = i2 + 1;
             indices.push(i0);
-            indices.push(i2);
-            indices.push(i1);
             indices.push(i1);
             indices.push(i2);
+            indices.push(i1);
             indices.push(i3);
+            indices.push(i2);
         }
     }
 

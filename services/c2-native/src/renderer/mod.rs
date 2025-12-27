@@ -22,9 +22,10 @@ struct CameraUniform {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct OverlayUniform {
-    weather_strength: f32,
-    marine_strength: f32,
-    _pad: [f32; 2],
+    base_opacity: f32,
+    map_opacity: f32,
+    weather_opacity: f32,
+    sea_opacity: f32,
 }
 
 pub struct Renderer {
@@ -38,6 +39,7 @@ pub struct Renderer {
     globe_vertex_buffer: wgpu::Buffer,
     globe_index_buffer: wgpu::Buffer,
     globe_index_count: u32,
+    globe_bind_group_layout: wgpu::BindGroupLayout,
     globe_bind_group: wgpu::BindGroup,
     marker_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
@@ -46,11 +48,17 @@ pub struct Renderer {
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
     instance_count: u32,
+    instance_raw: Vec<InstanceRaw>,
     camera: Camera,
     controller: CameraController,
     camera_buffer: wgpu::Buffer,
     marker_bind_group: wgpu::BindGroup,
     overlay_buffer: wgpu::Buffer,
+    base_texture: Texture,
+    map_texture: Texture,
+    weather_texture: Texture,
+    sea_texture: Texture,
+    layer_size: u32,
     viewport_texture: wgpu::Texture,
     viewport_view: wgpu::TextureView,
     viewport_depth: wgpu::Texture,
@@ -117,9 +125,10 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let overlay_uniform = OverlayUniform {
-            weather_strength: 0.8,
-            marine_strength: 0.35,
-            _pad: [0.0, 0.0],
+            base_opacity: 1.0,
+            map_opacity: 0.85,
+            weather_opacity: 0.55,
+            sea_opacity: 0.45,
         };
         let overlay_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("overlay buffer"),
@@ -130,20 +139,21 @@ impl Renderer {
         let (viewport_texture, viewport_view, viewport_depth, viewport_depth_view) =
             create_viewport_target(&device, surface_format, config.width, config.height);
 
-        let earth_texture = Texture::from_bytes(
+        let layer_size = 2048u32;
+        let base_rgba = rgba_from_png(include_bytes!("../../assets/earth_daymap.png"), layer_size)
+            .unwrap_or_else(|_| vec![32, 42, 68, 255].repeat((layer_size * layer_size) as usize));
+        let base_texture = Texture::from_rgba(
             &device,
             &queue,
-            include_bytes!("../../assets/earth_daymap.png"),
-            "earth day map",
+            layer_size,
+            layer_size,
+            &base_rgba,
+            "base map",
         )
         .unwrap_or_else(|_| Texture::solid_rgba(&device, &queue, [32, 42, 68, 255]));
-        let clouds_texture = Texture::from_bytes(
-            &device,
-            &queue,
-            include_bytes!("../../assets/earth_clouds.png"),
-            "earth clouds",
-        )
-        .unwrap_or_else(|_| Texture::solid_rgba(&device, &queue, [0, 0, 0, 0]));
+        let map_texture = Texture::solid_rgba(&device, &queue, [0, 0, 0, 0]);
+        let weather_texture = Texture::solid_rgba(&device, &queue, [0, 0, 0, 0]);
+        let sea_texture = Texture::solid_rgba(&device, &queue, [0, 0, 0, 0]);
 
         let globe_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -194,6 +204,38 @@ impl Renderer {
                     wgpu::BindGroupLayoutEntry {
                         binding: 5,
                         visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 9,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
@@ -214,22 +256,38 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&earth_texture.view),
+                    resource: wgpu::BindingResource::TextureView(&base_texture.view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&earth_texture.sampler),
+                    resource: wgpu::BindingResource::Sampler(&base_texture.sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&clouds_texture.view),
+                    resource: wgpu::BindingResource::TextureView(&map_texture.view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::Sampler(&clouds_texture.sampler),
+                    resource: wgpu::BindingResource::Sampler(&map_texture.sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&weather_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(&weather_texture.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&sea_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::Sampler(&sea_texture.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
                     resource: overlay_buffer.as_entire_binding(),
                 },
             ],
@@ -481,6 +539,7 @@ impl Renderer {
             globe_vertex_buffer,
             globe_index_buffer,
             globe_index_count,
+            globe_bind_group_layout,
             globe_bind_group,
             marker_pipeline,
             vertex_buffer,
@@ -489,11 +548,17 @@ impl Renderer {
             instance_buffer,
             instance_capacity,
             instance_count: 0,
+            instance_raw: Vec::new(),
             camera,
             controller,
             camera_buffer,
             marker_bind_group,
             overlay_buffer,
+            base_texture,
+            map_texture,
+            weather_texture,
+            sea_texture,
+            layer_size,
             viewport_texture,
             viewport_view,
             viewport_depth,
@@ -512,6 +577,14 @@ impl Renderer {
 
     pub fn viewport_size(&self) -> (u32, u32) {
         self.viewport_size
+    }
+
+    pub fn layer_size(&self) -> u32 {
+        self.layer_size
+    }
+
+    pub fn camera_distance(&self) -> f32 {
+        self.camera.distance
     }
 
     pub fn viewport_view(&self) -> &wgpu::TextureView {
@@ -565,11 +638,12 @@ impl Renderer {
                 mapped_at_creation: false,
             });
         }
-        let mut raw = Vec::with_capacity(instances.len());
-        raw.extend(instances.iter().map(InstanceRaw::from_instance));
+        self.instance_raw.clear();
+        self.instance_raw
+            .extend(instances.iter().map(InstanceRaw::from_instance));
         self.queue
-            .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&raw));
-        self.instance_count = raw.len() as u32;
+            .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.instance_raw));
+        self.instance_count = self.instance_raw.len() as u32;
     }
 
     pub fn begin_frame(&self) -> Result<wgpu::SurfaceTexture, wgpu::SurfaceError> {
@@ -643,6 +717,83 @@ impl Renderer {
     pub fn zoom_delta(&mut self, scroll: f32) {
         self.controller.zoom_delta(scroll, &mut self.camera);
     }
+
+    pub fn update_layer(&mut self, kind: GlobeLayer, width: u32, height: u32, data: &[u8]) {
+        let label = match kind {
+            GlobeLayer::Base => "base map layer",
+            GlobeLayer::Map => "map tiles layer",
+            GlobeLayer::Weather => "weather layer",
+            GlobeLayer::Sea => "sea layer",
+        };
+        if let Ok(texture) = Texture::from_rgba(&self.device, &self.queue, width, height, data, label)
+        {
+            match kind {
+                GlobeLayer::Base => self.base_texture = texture,
+                GlobeLayer::Map => self.map_texture = texture,
+                GlobeLayer::Weather => self.weather_texture = texture,
+                GlobeLayer::Sea => self.sea_texture = texture,
+            }
+            self.layer_size = width;
+            self.rebuild_globe_bind_group();
+        }
+    }
+
+    fn rebuild_globe_bind_group(&mut self) {
+        self.globe_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("globe bind group"),
+            layout: &self.globe_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&self.base_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.base_texture.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.map_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&self.map_texture.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&self.weather_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(&self.weather_texture.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&self.sea_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::Sampler(&self.sea_texture.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: self.overlay_buffer.as_entire_binding(),
+                },
+            ],
+        });
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlobeLayer {
+    Base,
+    Map,
+    Weather,
+    Sea,
 }
 
 fn create_viewport_target(

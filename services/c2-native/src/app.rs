@@ -5,9 +5,10 @@ use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::{Window, WindowAttributes};
 
-use crate::ecs::{RenderInstance, WorldState};
-use crate::renderer::Renderer;
-use crate::ui::UiState;
+use crate::ecs::{RenderInstance, WorldState, KIND_FLIGHT, KIND_SATELLITE, KIND_SHIP};
+use crate::renderer::{GlobeLayer, Renderer};
+use crate::tiles::{TileFetcher, TileKind, TileRequest, TileResult};
+use crate::ui::{OperationsState, UiState};
 
 pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoop::new()?;
@@ -47,12 +48,23 @@ struct App {
     world: WorldState,
     ui: UiState,
     instances: Vec<RenderInstance>,
+    filtered_instances: Vec<RenderInstance>,
     egui_ctx: egui::Context,
     egui_state: egui_winit::State,
     egui_renderer: egui_wgpu::Renderer,
     last_frame: Instant,
     globe_texture_id: Option<egui::TextureId>,
     globe_dragging: bool,
+    overlay_settings: OperationsState,
+    world_accum: f32,
+    world_update_interval: f32,
+    instances_dirty: bool,
+    tile_fetcher: TileFetcher,
+    tile_rx: std::sync::mpsc::Receiver<TileResult>,
+    tile_zoom: u8,
+    tile_request_id: u64,
+    tile_pending: Option<TilePending>,
+    tile_settings: TileSettings,
 }
 
 impl App {
@@ -75,6 +87,18 @@ impl App {
             renderer.surface_format(),
             egui_wgpu::RendererOptions::default(),
         );
+        let overlay_settings = ui.operations().clone();
+        let tile_settings = TileSettings::from(&overlay_settings);
+        let (tile_fetcher, tile_rx) = TileFetcher::new(renderer.layer_size());
+        let tile_zoom = 3;
+        let tile_request_id = 1;
+        tile_fetcher.request_all(TileRequest {
+            request_id: tile_request_id,
+            zoom: tile_zoom,
+            provider: tile_settings.provider.clone(),
+            weather_field: tile_settings.weather_field.clone(),
+            sea_field: tile_settings.sea_field.clone(),
+        });
 
         Ok(Self {
             window,
@@ -82,12 +106,27 @@ impl App {
             world,
             ui,
             instances: Vec::new(),
+            filtered_instances: Vec::new(),
             egui_ctx,
             egui_state,
             egui_renderer,
             last_frame: Instant::now(),
             globe_texture_id: None,
             globe_dragging: false,
+            overlay_settings,
+            world_accum: 1.0 / 30.0,
+            world_update_interval: 1.0 / 30.0,
+            instances_dirty: true,
+            tile_fetcher,
+            tile_rx,
+            tile_zoom,
+            tile_request_id,
+            tile_pending: Some(TilePending {
+                request_id: tile_request_id,
+                zoom: tile_zoom,
+                pending: TileKind::all(),
+            }),
+            tile_settings,
         })
     }
 
@@ -117,10 +156,31 @@ impl App {
         let delta = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
 
-        self.world.update(delta);
-        self.instances.clear();
-        self.world.collect_instances(&mut self.instances);
-        self.renderer.update_instances(&self.instances);
+        let mut world_updated = false;
+        self.world_accum += delta.max(0.0);
+        if self.world_accum >= self.world_update_interval {
+            let steps = (self.world_accum / self.world_update_interval)
+                .floor()
+                .min(4.0) as u32;
+            for _ in 0..steps {
+                self.world.update(self.world_update_interval);
+            }
+            self.world_accum -= steps as f32 * self.world_update_interval;
+            world_updated = true;
+            self.instances_dirty = true;
+        }
+        if world_updated || self.instances_dirty {
+            self.world.collect_instances(&mut self.instances);
+        }
+        if self.instances_dirty {
+            filter_instances(
+                &self.instances,
+                &self.overlay_settings,
+                &mut self.filtered_instances,
+            );
+            self.renderer.update_instances(&self.filtered_instances);
+            self.instances_dirty = false;
+        }
 
         let raw_input = self.egui_state.take_egui_input(window);
         let output = self.egui_ctx.run(raw_input, |ctx| {
@@ -128,7 +188,7 @@ impl App {
                 ctx,
                 &self.world,
                 &self.renderer,
-                &self.instances,
+                &self.filtered_instances,
                 self.globe_texture_id,
             );
         });
@@ -164,6 +224,18 @@ impl App {
             });
         }
 
+        let new_settings = self.ui.operations().clone();
+        if new_settings != self.overlay_settings {
+            self.overlay_settings = new_settings;
+            filter_instances(
+                &self.instances,
+                &self.overlay_settings,
+                &mut self.filtered_instances,
+            );
+            self.renderer.update_instances(&self.filtered_instances);
+            self.instances_dirty = false;
+        }
+
         for (id, image_delta) in &output.textures_delta.set {
             self.egui_renderer
                 .update_texture(&self.renderer.device, &self.renderer.queue, *id, image_delta);
@@ -192,6 +264,41 @@ impl App {
                         self.renderer.viewport_view(),
                         wgpu::FilterMode::Linear,
                     ));
+                }
+            }
+        }
+
+        let desired_zoom = zoom_for_distance(self.renderer.camera_distance());
+        let new_tile_settings = TileSettings::from(&self.overlay_settings);
+        let tile_settings_changed =
+            new_tile_settings != self.tile_settings || desired_zoom != self.tile_zoom;
+        if tile_settings_changed {
+            self.tile_request_id += 1;
+            self.tile_fetcher.request_all(TileRequest {
+                request_id: self.tile_request_id,
+                zoom: desired_zoom,
+                provider: new_tile_settings.provider.clone(),
+                weather_field: new_tile_settings.weather_field.clone(),
+                sea_field: new_tile_settings.sea_field.clone(),
+            });
+            self.tile_pending = Some(TilePending {
+                request_id: self.tile_request_id,
+                zoom: desired_zoom,
+                pending: TileKind::all(),
+            });
+            self.tile_zoom = desired_zoom;
+            self.tile_settings = new_tile_settings;
+        }
+        if let Some(pending) = &mut self.tile_pending {
+            for result in self.tile_rx.try_iter() {
+                if result.request_id != pending.request_id {
+                    continue;
+                }
+                apply_tile_result(&mut self.renderer, &result);
+                pending.pending.remove(&result.kind);
+                if pending.pending.is_empty() {
+                    self.tile_pending = None;
+                    break;
                 }
             }
         }
@@ -266,5 +373,67 @@ impl App {
         }
 
         Ok(())
+    }
+}
+
+fn apply_tile_result(renderer: &mut Renderer, result: &TileResult) {
+    if !result.valid {
+        return;
+    }
+    let layer = match result.kind {
+        TileKind::Base => GlobeLayer::Map,
+        TileKind::Weather => GlobeLayer::Weather,
+        TileKind::Sea => GlobeLayer::Sea,
+    };
+    renderer.update_layer(layer, result.width, result.height, &result.data);
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct TileSettings {
+    provider: String,
+    weather_field: String,
+    sea_field: String,
+}
+
+impl From<&OperationsState> for TileSettings {
+    fn from(settings: &OperationsState) -> Self {
+        Self {
+            provider: settings.tile_provider.clone(),
+            weather_field: settings.weather_field.clone(),
+            sea_field: settings.sea_field.clone(),
+        }
+    }
+}
+
+struct TilePending {
+    request_id: u64,
+    zoom: u8,
+    pending: std::collections::HashSet<TileKind>,
+}
+
+fn filter_instances(
+    instances: &[RenderInstance],
+    settings: &OperationsState,
+    out: &mut Vec<RenderInstance>,
+) {
+    out.clear();
+    for instance in instances {
+        match instance.category {
+            KIND_FLIGHT if !settings.show_flights => continue,
+            KIND_SHIP if !settings.show_ships => continue,
+            KIND_SATELLITE if !settings.show_satellites => continue,
+            _ => {}
+        }
+        out.push(*instance);
+    }
+}
+
+fn zoom_for_distance(distance: f32) -> u8 {
+    if distance < 120.0 {
+        3
+    } else if distance < 200.0 {
+        2
+    } else {
+        1
     }
 }

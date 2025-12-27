@@ -12,9 +12,57 @@ pub enum DockTab {
     Inspector,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct OperationsState {
+    pub show_flights: bool,
+    pub show_ships: bool,
+    pub show_satellites: bool,
+    pub tile_provider: String,
+    pub weather_field: String,
+    pub sea_field: String,
+}
+
+impl Default for OperationsState {
+    fn default() -> Self {
+        Self {
+            show_flights: true,
+            show_ships: true,
+            show_satellites: true,
+            tile_provider: "osm".to_string(),
+            weather_field: "IMERG_Precipitation_Rate".to_string(),
+            sea_field: "OSCAR_Sea_Surface_Currents_Zonal".to_string(),
+        }
+    }
+}
+
+const TILE_PROVIDERS: &[(&str, &str)] = &[
+    ("osm", "OSM Standard"),
+    ("hot", "OSM Humanitarian"),
+    ("opentopo", "OpenTopoMap"),
+    ("nasa", "NASA Blue Marble"),
+];
+
+const WEATHER_FIELDS: &[&str] = &[
+    "IMERG_Precipitation_Rate",
+    "AIRS_Precipitation_Day",
+    "MODIS_Terra_Cloud_Fraction_Day",
+    "MODIS_Terra_Cloud_Top_Temp_Day",
+    "MODIS_Terra_Cloud_Top_Pressure_Day",
+    "MODIS_Terra_Cloud_Top_Height_Day",
+    "MERRA2_2m_Air_Temperature_Monthly",
+];
+
+const SEA_FIELDS: &[&str] = &[
+    "OSCAR_Sea_Surface_Currents_Zonal",
+    "OSCAR_Sea_Surface_Currents_Meridional",
+    "AMSRU_Ocean_Wind_Speed_Day",
+    "JPL_MEaSUREs_L4_Sea_Surface_Height_Anomalies",
+];
+
 pub struct UiState {
     dock_state: DockState<DockTab>,
     globe_rect: Option<egui::Rect>,
+    operations: OperationsState,
 }
 
 impl UiState {
@@ -33,6 +81,7 @@ impl UiState {
         Self {
             dock_state,
             globe_rect: None,
+            operations: OperationsState::default(),
         }
     }
 
@@ -64,6 +113,7 @@ impl UiState {
                 renderer,
                 globe_rect: &mut self.globe_rect,
                 globe_texture_id,
+                operations: &mut self.operations,
             };
             let style = Style::from_egui(ui.style());
             DockArea::new(&mut self.dock_state)
@@ -76,6 +126,10 @@ impl UiState {
 
     pub fn globe_rect(&self) -> Option<egui::Rect> {
         self.globe_rect
+    }
+
+    pub fn operations(&self) -> &OperationsState {
+        &self.operations
     }
 
     fn draw_edge_compass(
@@ -134,7 +188,7 @@ impl UiState {
                 10.0,
                 egui::Stroke::new(1.0, egui::Color32::from_white_alpha(160)),
             );
-            let label = kind_label(instance.kind);
+            let label = kind_label(instance.category);
             let text_pos = egui::pos2(pos.x, pos.y - 16.0);
             painter.text(
                 text_pos,
@@ -157,13 +211,21 @@ fn egui_color_from_rgba(color: [f32; 4]) -> egui::Color32 {
     )
 }
 
-fn kind_label(kind: u32) -> &'static str {
+fn kind_label(kind: u8) -> &'static str {
     match kind {
-        0 => "FLT",
-        1 => "SHP",
-        2 => "SAT",
-        _ => "UNK",
+        crate::ecs::KIND_FLIGHT => "FLT",
+        crate::ecs::KIND_SHIP => "SHP",
+        crate::ecs::KIND_SATELLITE => "SAT",
+        _ => "AST",
     }
+}
+
+fn provider_name(id: &str) -> String {
+    TILE_PROVIDERS
+        .iter()
+        .find(|(provider_id, _)| *provider_id == id)
+        .map(|(_, name)| (*name).to_string())
+        .unwrap_or_else(|| id.to_string())
 }
 
 struct DockViewer<'a> {
@@ -171,6 +233,7 @@ struct DockViewer<'a> {
     renderer: &'a Renderer,
     globe_rect: &'a mut Option<egui::Rect>,
     globe_texture_id: Option<egui::TextureId>,
+    operations: &'a mut OperationsState,
 }
 
 impl TabViewer for DockViewer<'_> {
@@ -208,7 +271,49 @@ impl TabViewer for DockViewer<'_> {
             DockTab::Operations => {
                 ui.heading("Operations Menu");
                 ui.separator();
-                ui.label("Globe layers, missions, and overlays will live here.");
+                ui.label("Visibility");
+                ui.checkbox(&mut self.operations.show_flights, "Flights");
+                ui.checkbox(&mut self.operations.show_ships, "Ships");
+                ui.checkbox(&mut self.operations.show_satellites, "Satellites");
+                ui.add_space(8.0);
+                ui.separator();
+                ui.label("Map layers");
+                let provider_label = provider_name(&self.operations.tile_provider);
+                egui::ComboBox::from_id_salt("tile-provider")
+                    .selected_text(provider_label)
+                    .show_ui(ui, |ui| {
+                        for (id, name) in TILE_PROVIDERS {
+                            ui.selectable_value(
+                                &mut self.operations.tile_provider,
+                                (*id).to_string(),
+                                *name,
+                            );
+                        }
+                    });
+                ui.add_space(4.0);
+                egui::ComboBox::from_id_salt("weather-field")
+                    .selected_text(self.operations.weather_field.clone())
+                    .show_ui(ui, |ui| {
+                        for field in WEATHER_FIELDS {
+                            ui.selectable_value(
+                                &mut self.operations.weather_field,
+                                (*field).to_string(),
+                                *field,
+                            );
+                        }
+                    });
+                ui.add_space(4.0);
+                egui::ComboBox::from_id_salt("sea-field")
+                    .selected_text(self.operations.sea_field.clone())
+                    .show_ui(ui, |ui| {
+                        for field in SEA_FIELDS {
+                            ui.selectable_value(
+                                &mut self.operations.sea_field,
+                                (*field).to_string(),
+                                *field,
+                            );
+                        }
+                    });
                 ui.add_space(8.0);
                 ui.label("Status: connected to ECS runtime.");
             }
