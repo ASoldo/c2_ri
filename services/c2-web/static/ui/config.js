@@ -1,6 +1,14 @@
 export const MEDIA_OVERLAY_RENDER_ORDER = 55;
 export const MARKER_ALTITUDE = 3.0;
 export const SHIP_BASE_ALTITUDE = 0.6;
+const resolveBubbleLabelsEnabled = () => {
+  const value = window.C2_BUBBLES_ENABLED;
+  return value !== undefined ? Boolean(value) : false;
+};
+const resolveLabelLodMax = () => {
+  const value = window.C2_LABEL_LOD_MAX;
+  return Number.isFinite(value) ? value : 50000;
+};
 export const PARTICLE_SIZES = {
   default: 6.0,
   asset: 6.5,
@@ -9,9 +17,10 @@ export const PARTICLE_SIZES = {
   incident: 6.5,
   flight: 13.5,
   satellite: 11.0,
-  ship: 12.5,
+  ship: 37.5,
 };
-export const LABEL_LOD_MAX = 2200;
+export const BUBBLE_LABELS_ENABLED = resolveBubbleLabelsEnabled();
+export const LABEL_LOD_MAX = resolveLabelLodMax();
 
 export const DEFAULT_TILE_PROVIDERS = {
   osm: {
@@ -209,12 +218,13 @@ export const DEFAULT_FLIGHT_CONFIG = {
   provider: "adsb_lol",
   updateIntervalMs: 5000,
   minIntervalMs: 3500,
-  maxFlights: 80,
+  maxFlights: 5000,
   trailPoints: 24,
   trailMaxAgeMs: 240000,
   spanMinDeg: 8,
   spanMaxDeg: 60,
   altitudeScale: 0.08,
+  global: true,
   source: "ADSB.lol",
   sample: true,
 };
@@ -248,6 +258,7 @@ const buildFlightConfig = () => {
     altitudeScale: Number.isFinite(config.altitudeScale)
       ? config.altitudeScale
       : DEFAULT_FLIGHT_CONFIG.altitudeScale,
+    global: config.global !== undefined ? Boolean(config.global) : DEFAULT_FLIGHT_CONFIG.global,
     source: config.source || DEFAULT_FLIGHT_CONFIG.source,
     sample: config.sample !== undefined ? Boolean(config.sample) : DEFAULT_FLIGHT_CONFIG.sample,
   };
@@ -259,7 +270,7 @@ export const DEFAULT_SATELLITE_CONFIG = {
   enabled: true,
   provider: "celestrak",
   updateIntervalMs: 8000,
-  maxSatellites: 120,
+  maxSatellites: 20000,
   altitudeScale: 0.018,
   altitudeMin: 4,
   altitudeMax: 90,
@@ -299,10 +310,11 @@ export const DEFAULT_SHIP_CONFIG = {
   enabled: true,
   provider: "aishub",
   updateIntervalMs: 9000,
-  maxShips: 200,
+  maxShips: 5000,
   spanMinDeg: 6,
   spanMaxDeg: 70,
   altitude: 0.12,
+  global: true,
   source: "AISHub",
   sample: true,
 };
@@ -325,6 +337,7 @@ const buildShipConfig = () => {
       ? config.spanMaxDeg
       : DEFAULT_SHIP_CONFIG.spanMaxDeg,
     altitude: Number.isFinite(config.altitude) ? config.altitude : DEFAULT_SHIP_CONFIG.altitude,
+    global: config.global !== undefined ? Boolean(config.global) : DEFAULT_SHIP_CONFIG.global,
     source: config.source || DEFAULT_SHIP_CONFIG.source,
     sample: config.sample !== undefined ? Boolean(config.sample) : DEFAULT_SHIP_CONFIG.sample,
   };

@@ -41,6 +41,7 @@ import {
   FLIGHT_CONFIG,
   SATELLITE_CONFIG,
   SHIP_CONFIG,
+  BUBBLE_LABELS_ENABLED,
   LABEL_LOD_MAX,
 } from "/static/ui/config.js";
 import { els } from "/static/ui/dom.js";
@@ -78,6 +79,12 @@ export const boot = async () => {
   };
   bubbleOverlay.resize(window.innerWidth, window.innerHeight);
   bubbleOverlay.setLodEnabled(false);
+  if (!BUBBLE_LABELS_ENABLED) {
+    bubbleOverlay.setPinsVisible(false);
+    bubbleOverlay.setFlightsVisible(false);
+    bubbleOverlay.setSatellitesVisible(false);
+    bubbleOverlay.setShipsVisible(false);
+  }
   const flightOverlay = new FlightOverlay(renderer3d, store);
   const satelliteOverlay = new SatelliteOverlay(renderer3d, store);
   const shipOverlay = new ShipOverlay(renderer3d, store);
@@ -224,10 +231,15 @@ export const boot = async () => {
         if (flightOverlay.visible) markerLists.push(flightIds);
         if (satelliteOverlay.visible) markerLists.push(satelliteIds);
         if (shipOverlay.visible) markerLists.push(shipIds);
-        bubbleOverlay.syncPins(markerLists, store);
-        bubbleOverlay.syncFlights(flightOverlay.visible ? flightIds : [], store);
-        bubbleOverlay.syncSatellites(satelliteOverlay.visible ? satelliteIds : [], store);
-        bubbleOverlay.syncShips(shipOverlay.visible ? shipIds : [], store);
+        if (BUBBLE_LABELS_ENABLED) {
+          bubbleOverlay.syncPins(markerLists, store);
+          bubbleOverlay.syncFlights(flightOverlay.visible ? flightIds : [], store);
+          bubbleOverlay.syncSatellites(
+            satelliteOverlay.visible ? satelliteIds : [],
+            store,
+          );
+          bubbleOverlay.syncShips(shipOverlay.visible ? shipIds : [], store);
+        }
         bubbleOverlay.syncEdges(markerLists, store);
       });
 

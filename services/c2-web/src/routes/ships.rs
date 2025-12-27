@@ -160,21 +160,27 @@ fn center_radius_km(
         (0.0, 0.0)
     };
     let radius_km: f64 = if let Some((lamin, lomin, lamax, lomax)) = bbox {
-        let corners = [
+        let lat_mid = (lamin + lamax) / 2.0;
+        let lon_mid = (lomin + lomax) / 2.0;
+        let samples = [
             (lamin, lomin),
             (lamin, lomax),
             (lamax, lomin),
             (lamax, lomax),
+            (lamin, lon_mid),
+            (lamax, lon_mid),
+            (lat_mid, lomin),
+            (lat_mid, lomax),
         ];
         let mut max_km: f64 = 0.0;
-        for (clat, clon) in corners {
+        for (clat, clon) in samples {
             max_km = max_km.max(haversine_km(lat, lon, clat, clon));
         }
         max_km
     } else {
         180.0
     };
-    (lat, lon, radius_km.clamp(10.0, 800.0))
+    (lat, lon, radius_km.clamp(10.0, 20000.0))
 }
 
 fn build_aishub_url(

@@ -259,7 +259,7 @@ async fn main() -> io::Result<()> {
     let flight_max_flights = env::var("C2_WEB_FLIGHT_MAX")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(80);
+        .unwrap_or(5000);
     let flight_trail_points = env::var("C2_WEB_FLIGHT_TRAIL_POINTS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -346,7 +346,7 @@ async fn main() -> io::Result<()> {
     let satellite_max = env::var("C2_WEB_SAT_MAX")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(120);
+        .unwrap_or(20000);
     let satellite_altitude_scale = env::var("C2_WEB_SAT_ALTITUDE_SCALE")
         .ok()
         .and_then(|value| value.parse::<f32>().ok())
@@ -427,7 +427,7 @@ async fn main() -> io::Result<()> {
     let ship_max = env::var("C2_WEB_SHIP_MAX")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(200);
+        .unwrap_or(5000);
     let ship_span_min_deg = env::var("C2_WEB_SHIP_SPAN_MIN_DEG")
         .ok()
         .and_then(|value| value.parse::<f32>().ok())

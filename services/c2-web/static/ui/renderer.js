@@ -7,6 +7,7 @@ import {
   SEA_CONFIG,
   WEATHER_CONFIG,
 } from "/static/ui/config.js";
+import { ECS_KIND } from "/static/ui/ecs.js";
 
 const clampLat = (lat) => Math.max(-85.05112878, Math.min(85.05112878, lat));
 const TWO_PI = Math.PI * 2;
@@ -1213,6 +1214,9 @@ class Renderer3D {
     if (this.particlesEnabled) {
       this.particles = new ParticleField(this);
       this.particles.init();
+      this.particles.setKindVisible(ECS_KIND.flight, false);
+      this.particles.setKindVisible(ECS_KIND.satellite, false);
+      this.particles.setKindVisible(ECS_KIND.ship, false);
     }
 
     this.setLightingMode("day");

@@ -30,6 +30,31 @@ const positionForEntity = (entity, renderer, geo, altitude) => {
   return renderer.positionForGeo(geo, altitude);
 };
 
+const buildOrientation = (latDeg, lonDeg, headingDeg = 0) => {
+  const lat = THREE.MathUtils.degToRad(latDeg);
+  const lon = THREE.MathUtils.degToRad(lonDeg);
+  const normal = new THREE.Vector3(
+    Math.cos(lat) * Math.cos(lon),
+    Math.sin(lat),
+    Math.cos(lat) * Math.sin(lon),
+  ).normalize();
+  const east = new THREE.Vector3(-Math.sin(lon), 0, Math.cos(lon)).normalize();
+  const north = new THREE.Vector3(
+    -Math.sin(lat) * Math.cos(lon),
+    Math.cos(lat),
+    -Math.sin(lat) * Math.sin(lon),
+  ).normalize();
+  const heading = THREE.MathUtils.degToRad(headingDeg);
+  const forward = north
+    .clone()
+    .multiplyScalar(Math.cos(heading))
+    .add(east.clone().multiplyScalar(Math.sin(heading)))
+    .normalize();
+  const right = normal.clone().cross(forward).normalize();
+  const basis = new THREE.Matrix4().makeBasis(right, forward, normal);
+  return { basis, normal };
+};
+
 class FlightTrailLayer {
   constructor(renderer) {
     this.renderer = renderer;
@@ -224,7 +249,7 @@ class FlightMeshLayer {
       opacity: 0.95,
       depthTest: true,
       depthWrite: false,
-      side: THREE.FrontSide,
+      side: THREE.DoubleSide,
     });
     material.alphaTest = 0.12;
     mesh = new THREE.Mesh(this.geometry, material);
@@ -232,31 +257,6 @@ class FlightMeshLayer {
     this.group.add(mesh);
     this.meshes.set(entity, mesh);
     return mesh;
-  }
-
-  buildOrientation(latDeg, lonDeg, headingDeg) {
-    const lat = THREE.MathUtils.degToRad(latDeg);
-    const lon = THREE.MathUtils.degToRad(lonDeg);
-    const normal = new THREE.Vector3(
-      Math.cos(lat) * Math.cos(lon),
-      Math.sin(lat),
-      Math.cos(lat) * Math.sin(lon),
-    ).normalize();
-    const east = new THREE.Vector3(-Math.sin(lon), 0, Math.cos(lon)).normalize();
-    const north = new THREE.Vector3(
-      -Math.sin(lat) * Math.cos(lon),
-      Math.cos(lat),
-      -Math.sin(lat) * Math.sin(lon),
-    ).normalize();
-    const heading = THREE.MathUtils.degToRad(headingDeg);
-    const forward = north
-      .clone()
-      .multiplyScalar(Math.cos(heading))
-      .add(east.clone().multiplyScalar(Math.sin(heading)))
-      .normalize();
-    const right = normal.clone().cross(forward).normalize();
-    const basis = new THREE.Matrix4().makeBasis(right, forward, normal);
-    return { basis, normal };
   }
 
   sync(entities, store) {
@@ -280,7 +280,7 @@ class FlightMeshLayer {
       mesh.position.set(pos.x, pos.y, pos.z);
       mesh.scale.set(scale, scale, scale);
       const heading = Number.isFinite(flight.heading_deg) ? flight.heading_deg : 0;
-      const { basis } = this.buildOrientation(flight.lat, flight.lon, heading);
+      const { basis } = buildOrientation(flight.lat, flight.lon, heading);
       mesh.setRotationFromMatrix(basis);
       mesh.material.color.set(colorForFlight(flight));
       seen.add(entity);
@@ -301,10 +301,9 @@ class FlightOverlay {
     this.renderer = renderer;
     this.store = store;
     this.visible = false;
-    this.trails = new FlightTrailLayer(renderer);
-    this.planes = null;
+    this.trails = null;
+    this.planes = new FlightMeshLayer(renderer);
     this.lastSnapshot = null;
-    this.trails.setVisible(false);
     if (this.planes) {
       this.planes.setVisible(false);
     }
@@ -312,7 +311,9 @@ class FlightOverlay {
 
   setVisible(visible) {
     this.visible = visible;
-    this.trails.setVisible(this.visible && this.renderer?.mode === "globe");
+    if (this.trails) {
+      this.trails.setVisible(this.visible && this.renderer?.mode === "globe");
+    }
     if (this.planes) {
       this.planes.setVisible(this.visible && this.renderer?.mode === "globe");
     }
@@ -327,11 +328,15 @@ class FlightOverlay {
   sync() {
     if (!this.visible) return;
     const flights = ecsRuntime.kindCache.get(ECS_KIND.flight) || [];
-    this.trails.setVisible(this.visible && this.renderer?.mode === "globe");
+    if (this.trails) {
+      this.trails.setVisible(this.visible && this.renderer?.mode === "globe");
+    }
     if (this.planes) {
       this.planes.setVisible(this.visible && this.renderer?.mode === "globe");
     }
-    this.trails.ingest(this.lastSnapshot?.flights || []);
+    if (this.trails) {
+      this.trails.ingest(this.lastSnapshot?.flights || []);
+    }
     if (this.planes) {
       this.planes.sync(flights, this.store);
     }
@@ -345,6 +350,7 @@ class SatelliteMeshLayer {
     this.group.renderOrder = 48;
     this.group.visible = false;
     this.meshes = new Map();
+    this.geometry = new THREE.PlaneGeometry(1, 1);
     this.texture = null;
     this.initTexture();
     if (this.renderer?.scene) {
@@ -376,16 +382,17 @@ class SatelliteMeshLayer {
   ensureMesh(entity) {
     let mesh = this.meshes.get(entity);
     if (mesh) return mesh;
-    const material = new THREE.SpriteMaterial({
+    const material = new THREE.MeshBasicMaterial({
       map: this.texture,
       color: new THREE.Color(0xffffff),
       transparent: true,
       opacity: 0.95,
       depthTest: true,
       depthWrite: false,
+      side: THREE.DoubleSide,
     });
     material.alphaTest = 0.12;
-    mesh = new THREE.Sprite(material);
+    mesh = new THREE.Mesh(this.geometry, material);
     mesh.renderOrder = 65;
     this.group.add(mesh);
     this.meshes.set(entity, mesh);
@@ -412,6 +419,8 @@ class SatelliteMeshLayer {
       if (!pos) return;
       mesh.position.set(pos.x, pos.y, pos.z);
       mesh.scale.set(scale, scale, scale);
+      const { basis } = buildOrientation(geo.lat, geo.lon, 0);
+      mesh.setRotationFromMatrix(basis);
       mesh.material.color.set(colorForSatellite(satellite));
       seen.add(entity);
     });
@@ -431,7 +440,7 @@ class SatelliteOverlay {
     this.renderer = renderer;
     this.store = store;
     this.visible = false;
-    this.meshes = null;
+    this.meshes = new SatelliteMeshLayer(renderer);
     this.lastSnapshot = null;
     if (this.meshes) {
       this.meshes.setVisible(false);
@@ -468,6 +477,7 @@ class ShipMeshLayer {
     this.group.renderOrder = 50;
     this.group.visible = false;
     this.meshes = new Map();
+    this.geometry = new THREE.PlaneGeometry(1, 1);
     this.texture = null;
     this.initTexture();
     if (this.renderer?.scene) {
@@ -499,16 +509,17 @@ class ShipMeshLayer {
   ensureMesh(entity) {
     let mesh = this.meshes.get(entity);
     if (mesh) return mesh;
-    const material = new THREE.SpriteMaterial({
+    const material = new THREE.MeshBasicMaterial({
       map: this.texture,
       color: new THREE.Color(0xffffff),
       transparent: true,
       opacity: 0.96,
       depthTest: true,
       depthWrite: false,
+      side: THREE.DoubleSide,
     });
     material.alphaTest = 0.12;
-    mesh = new THREE.Sprite(material);
+    mesh = new THREE.Mesh(this.geometry, material);
     mesh.renderOrder = 68;
     this.group.add(mesh);
     this.meshes.set(entity, mesh);
@@ -538,10 +549,11 @@ class ShipMeshLayer {
       mesh.material.color.set(colorForShip(ship));
       const heading = Number.isFinite(ship.heading_deg)
         ? ship.heading_deg
-        : ship.course_deg;
-      if (Number.isFinite(heading)) {
-        mesh.material.rotation = -THREE.MathUtils.degToRad(heading);
-      }
+        : Number.isFinite(ship.course_deg)
+          ? ship.course_deg
+          : 0;
+      const { basis } = buildOrientation(geo.lat, geo.lon, heading);
+      mesh.setRotationFromMatrix(basis);
       seen.add(entity);
     });
 
@@ -560,7 +572,7 @@ class ShipOverlay {
     this.renderer = renderer;
     this.store = store;
     this.visible = false;
-    this.meshes = null;
+    this.meshes = new ShipMeshLayer(renderer);
     this.lastSnapshot = null;
     if (this.meshes) {
       this.meshes.setVisible(false);
@@ -781,7 +793,7 @@ const BUBBLE_EDGE_BASE = {
   fontWeight: 700,
   textColor: "#0f172a",
   borderWidth: 1,
-  shadowBlur: 16,
+  shadowBlur: 0,
   uppercase: true,
   letterSpacing: 0.06,
   paddingX: 0,

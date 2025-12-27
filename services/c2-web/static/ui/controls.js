@@ -1,4 +1,5 @@
 import {
+  BUBBLE_LABELS_ENABLED,
   FLIGHT_CONFIG,
   DEFAULT_SEA_FIELDS,
   SEA_CONFIG,
@@ -22,7 +23,9 @@ export const setupLayerToggles = (renderer3d, bubbleOverlay) => {
       renderer3d?.setKindVisibility?.(ECS_KIND.unit, initial);
       renderer3d?.setKindVisibility?.(ECS_KIND.mission, initial);
       renderer3d?.setKindVisibility?.(ECS_KIND.incident, initial);
-      bubbleOverlay?.setPinsVisible?.(initial);
+      if (BUBBLE_LABELS_ENABLED) {
+        bubbleOverlay?.setPinsVisible?.(initial);
+      }
     }
     button.addEventListener("click", () => {
       const next = button.dataset.active !== "true";
@@ -32,7 +35,9 @@ export const setupLayerToggles = (renderer3d, bubbleOverlay) => {
         renderer3d?.setKindVisibility?.(ECS_KIND.unit, next);
         renderer3d?.setKindVisibility?.(ECS_KIND.mission, next);
         renderer3d?.setKindVisibility?.(ECS_KIND.incident, next);
-        bubbleOverlay?.setPinsVisible?.(next);
+        if (BUBBLE_LABELS_ENABLED) {
+          bubbleOverlay?.setPinsVisible?.(next);
+        }
       }
     });
   });
@@ -151,6 +156,14 @@ const clampShipLon = (lon) => Math.max(-180, Math.min(180, lon));
 
 const computeFlightBounds = (renderer3d) => {
   if (!renderer3d || renderer3d.mode !== "globe") return null;
+  if (FLIGHT_CONFIG.global) {
+    return {
+      lamin: clampFlightLat(-85),
+      lamax: clampFlightLat(85),
+      lomin: clampFlightLon(-180),
+      lomax: clampFlightLon(180),
+    };
+  }
   const center = renderer3d.geoFromScreen(
     renderer3d.size.width / 2,
     renderer3d.size.height / 2,
@@ -176,6 +189,14 @@ const computeFlightBounds = (renderer3d) => {
 
 const computeShipBounds = (renderer3d) => {
   if (!renderer3d || renderer3d.mode !== "globe") return null;
+  if (SHIP_CONFIG.global) {
+    return {
+      lamin: clampShipLat(-85),
+      lamax: clampShipLat(85),
+      lomin: clampShipLon(-180),
+      lomax: clampShipLon(180),
+    };
+  }
   const center = renderer3d.geoFromScreen(
     renderer3d.size.width / 2,
     renderer3d.size.height / 2,
@@ -276,14 +297,16 @@ export const setupFlightControls = (renderer3d, bus, overlay, bubbleOverlay) => 
   const toggle = document.querySelector("[data-flight-toggle]");
   if (toggle) {
     toggle.setAttribute("aria-pressed", "false");
-    renderer3d?.setKindVisibility?.(ECS_KIND.flight, false);
-    bubbleOverlay?.setFlightsVisible?.(false);
+    if (BUBBLE_LABELS_ENABLED) {
+      bubbleOverlay?.setFlightsVisible?.(false);
+    }
     toggle.addEventListener("click", () => {
       const next = toggle.getAttribute("aria-pressed") !== "true";
       toggle.setAttribute("aria-pressed", next.toString());
       overlay?.setVisible(next);
-      renderer3d?.setKindVisibility?.(ECS_KIND.flight, next);
-      bubbleOverlay?.setFlightsVisible?.(next);
+      if (BUBBLE_LABELS_ENABLED) {
+        bubbleOverlay?.setFlightsVisible?.(next);
+      }
       if (next) {
         fetchFlights(renderer3d, bus, overlay);
       }
@@ -304,14 +327,16 @@ export const setupSatelliteControls = (renderer3d, bus, overlay, bubbleOverlay) 
   const toggle = document.querySelector("[data-satellite-toggle]");
   if (toggle) {
     toggle.setAttribute("aria-pressed", "false");
-    renderer3d?.setKindVisibility?.(ECS_KIND.satellite, false);
-    bubbleOverlay?.setSatellitesVisible?.(false);
+    if (BUBBLE_LABELS_ENABLED) {
+      bubbleOverlay?.setSatellitesVisible?.(false);
+    }
     toggle.addEventListener("click", () => {
       const next = toggle.getAttribute("aria-pressed") !== "true";
       toggle.setAttribute("aria-pressed", next.toString());
       overlay?.setVisible(next);
-      renderer3d?.setKindVisibility?.(ECS_KIND.satellite, next);
-      bubbleOverlay?.setSatellitesVisible?.(next);
+      if (BUBBLE_LABELS_ENABLED) {
+        bubbleOverlay?.setSatellitesVisible?.(next);
+      }
       if (next) {
         fetchSatellites(renderer3d, bus, overlay);
       }
@@ -332,14 +357,16 @@ export const setupShipControls = (renderer3d, bus, overlay, bubbleOverlay) => {
   const toggle = document.querySelector("[data-ship-toggle]");
   if (toggle) {
     toggle.setAttribute("aria-pressed", "false");
-    renderer3d?.setKindVisibility?.(ECS_KIND.ship, false);
-    bubbleOverlay?.setShipsVisible?.(false);
+    if (BUBBLE_LABELS_ENABLED) {
+      bubbleOverlay?.setShipsVisible?.(false);
+    }
     toggle.addEventListener("click", () => {
       const next = toggle.getAttribute("aria-pressed") !== "true";
       toggle.setAttribute("aria-pressed", next.toString());
       overlay?.setVisible(next);
-      renderer3d?.setKindVisibility?.(ECS_KIND.ship, next);
-      bubbleOverlay?.setShipsVisible?.(next);
+      if (BUBBLE_LABELS_ENABLED) {
+        bubbleOverlay?.setShipsVisible?.(next);
+      }
       if (next) {
         fetchShips(renderer3d, bus, overlay);
       }
