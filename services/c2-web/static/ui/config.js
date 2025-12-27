@@ -3,7 +3,7 @@ export const MARKER_ALTITUDE = 3.0;
 export const SHIP_BASE_ALTITUDE = 0.6;
 const resolveBubbleLabelsEnabled = () => {
   const value = window.C2_BUBBLES_ENABLED;
-  return value !== undefined ? Boolean(value) : false;
+  return value !== undefined ? Boolean(value) : true;
 };
 const resolveLabelLodMax = () => {
   const value = window.C2_LABEL_LOD_MAX;

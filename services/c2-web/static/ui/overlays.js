@@ -1,6 +1,10 @@
 import * as THREE from "/static/vendor/three.module.js";
+import {
+  extendBatchedMeshPrototype,
+  getBatchedMeshCount,
+} from "/static/vendor/batched-mesh-extensions.webgl.js";
 import { ecsRuntime, ECS_KIND } from "./ecs.js";
-import { FLIGHT_CONFIG } from "./config.js";
+import { FLIGHT_CONFIG, SATELLITE_CONFIG, SHIP_CONFIG } from "./config.js";
 import { forEachEntity } from "./utils.js";
 import {
   altitudeForFlight,
@@ -20,6 +24,11 @@ import {
   vesselGroupForShip,
 } from "./entity-utils.js";
 import { syncFlights, syncSatellites, syncShips } from "./store.js";
+
+if (!window.__c2BatchedMeshExtensions) {
+  extendBatchedMeshPrototype();
+  window.__c2BatchedMeshExtensions = true;
+}
 
 const positionForEntity = (entity, renderer, geo, altitude) => {
   if (!renderer || !geo) return null;
@@ -199,15 +208,32 @@ class FlightTrailLayer {
   }
 }
 
-class FlightMeshLayer {
-  constructor(renderer) {
+class BatchedIconLayer {
+  constructor(renderer, options) {
     this.renderer = renderer;
     this.group = new THREE.Group();
-    this.group.renderOrder = 45;
+    this.group.renderOrder = options.renderOrder ?? 45;
     this.group.visible = false;
-    this.meshes = new Map();
-    this.geometry = new THREE.PlaneGeometry(1, 1);
+    this.instances = new Map();
+    this.instanceToEntity = new Map();
+    this.geometry = options.geometry || new THREE.PlaneGeometry(1, 1);
+    this.textureUrl = options.textureUrl;
+    this.opacity = options.opacity ?? 0.95;
+    this.depthTest = options.depthTest ?? true;
+    this.depthWrite = options.depthWrite ?? false;
+    this.alphaTest = options.alphaTest ?? 0.12;
+    this.maxInstances = Math.max(1, options.maxInstances || 1);
     this.texture = null;
+    this.material = null;
+    this.mesh = null;
+    this.geometryId = null;
+    this.raycaster = new THREE.Raycaster();
+    this.pointer = new THREE.Vector2();
+    this.tmpMatrix = new THREE.Matrix4();
+    this.tmpQuat = new THREE.Quaternion();
+    this.tmpScale = new THREE.Vector3();
+    this.tmpPos = new THREE.Vector3();
+    this.tmpColor = new THREE.Color();
     this.initTexture();
     if (this.renderer?.scene) {
       this.renderer.scene.add(this.group);
@@ -216,14 +242,121 @@ class FlightMeshLayer {
 
   initTexture() {
     const loader = new THREE.TextureLoader();
-    this.texture = loader.load("/static/assets/plane.png");
+    this.texture = loader.load(this.textureUrl);
     this.texture.colorSpace = THREE.SRGBColorSpace;
     this.texture.anisotropy =
       this.renderer?.renderer?.capabilities?.getMaxAnisotropy?.() || 1;
+    if (!this.geometry.boundingSphere) {
+      this.geometry.computeBoundingSphere();
+    }
+    if (!this.geometry.boundingBox) {
+      this.geometry.computeBoundingBox();
+    }
+    this.material = new THREE.MeshBasicMaterial({
+      map: this.texture,
+      color: new THREE.Color(0xffffff),
+      transparent: true,
+      opacity: this.opacity,
+      depthTest: this.depthTest,
+      depthWrite: this.depthWrite,
+      side: THREE.DoubleSide,
+    });
+    this.material.alphaTest = this.alphaTest;
+    const { vertexCount, indexCount } = getBatchedMeshCount([this.geometry]);
+    this.mesh = new THREE.BatchedMesh(
+      this.maxInstances,
+      vertexCount,
+      indexCount,
+      this.material,
+    );
+    this.geometryId = this.mesh.addGeometry(this.geometry);
+    this.mesh.renderOrder = this.group.renderOrder + 5;
+    this.mesh.perObjectFrustumCulled = true;
+    this.mesh.sortObjects = false;
+    this.mesh.frustumCulled = false;
+    const radius = (this.renderer?.globeRadius ?? 120) * 5;
+    this.mesh.boundingSphere = new THREE.Sphere(new THREE.Vector3(), radius);
+    this.group.add(this.mesh);
   }
 
   setVisible(visible) {
     this.group.visible = visible;
+  }
+
+  ensureInstance(entity) {
+    let instanceId = this.instances.get(entity);
+    if (instanceId !== undefined) return instanceId;
+    if (!this.mesh) return null;
+    try {
+      instanceId = this.mesh.addInstance(this.geometryId);
+    } catch {
+      return null;
+    }
+    this.instances.set(entity, instanceId);
+    this.instanceToEntity.set(instanceId, entity);
+    this.mesh.setVisibleAt(instanceId, true);
+    return instanceId;
+  }
+
+  updateInstance(entity, pos, basis, scale, color) {
+    if (!this.mesh) return null;
+    const instanceId = this.ensureInstance(entity);
+    if (instanceId === null) return null;
+    this.tmpPos.set(pos.x, pos.y, pos.z);
+    this.tmpQuat.setFromRotationMatrix(basis);
+    this.tmpScale.set(scale, scale, scale);
+    this.tmpMatrix.compose(this.tmpPos, this.tmpQuat, this.tmpScale);
+    this.mesh.setMatrixAt(instanceId, this.tmpMatrix);
+    if (color !== undefined && color !== null) {
+      this.tmpColor.set(color);
+      this.mesh.setColorAt(instanceId, this.tmpColor);
+    }
+    this.mesh.setVisibleAt(instanceId, true);
+    return instanceId;
+  }
+
+  prune(seen) {
+    if (!this.mesh) return;
+    for (const [entity, instanceId] of this.instances.entries()) {
+      if (seen.has(entity)) continue;
+      this.mesh.setVisibleAt(instanceId, false);
+      this.mesh.deleteInstance(instanceId);
+      this.instances.delete(entity);
+      this.instanceToEntity.delete(instanceId);
+    }
+  }
+
+  pick(clientX, clientY) {
+    if (!this.renderer?.camera || !this.group.visible || !this.mesh) return null;
+    const canvas = this.renderer.canvas;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    const y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    this.pointer.set(x, y);
+    this.raycaster.setFromCamera(this.pointer, this.renderer.camera);
+    const hits = this.raycaster.intersectObject(this.mesh, true);
+    if (!hits.length) return null;
+    const instanceId = hits[0].instanceId;
+    if (instanceId === undefined || instanceId === null) return null;
+    return this.instanceToEntity.get(instanceId) ?? null;
+  }
+}
+
+class FlightMeshLayer {
+  constructor(renderer) {
+    this.renderer = renderer;
+    this.layer = new BatchedIconLayer(renderer, {
+      renderOrder: 45,
+      textureUrl: "/static/assets/plane.png",
+      opacity: 0.95,
+      maxInstances: FLIGHT_CONFIG.maxFlights || 5000,
+    });
+  }
+
+  setVisible(visible) {
+    this.layer.setVisible(visible);
   }
 
   altitudeForFlight(flight) {
@@ -240,23 +373,7 @@ class FlightMeshLayer {
   }
 
   ensureMesh(entity) {
-    let mesh = this.meshes.get(entity);
-    if (mesh) return mesh;
-    const material = new THREE.MeshBasicMaterial({
-      map: this.texture,
-      color: new THREE.Color(0xffffff),
-      transparent: true,
-      opacity: 0.95,
-      depthTest: true,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
-    material.alphaTest = 0.12;
-    mesh = new THREE.Mesh(this.geometry, material);
-    mesh.renderOrder = 60;
-    this.group.add(mesh);
-    this.meshes.set(entity, mesh);
-    return mesh;
+    return this.layer.ensureInstance(entity);
   }
 
   sync(entities, store) {
@@ -277,22 +394,23 @@ class FlightMeshLayer {
         this.renderer.markerAltitude + altitude,
       );
       if (!pos) return;
-      mesh.position.set(pos.x, pos.y, pos.z);
-      mesh.scale.set(scale, scale, scale);
       const heading = Number.isFinite(flight.heading_deg) ? flight.heading_deg : 0;
       const { basis } = buildOrientation(flight.lat, flight.lon, heading);
-      mesh.setRotationFromMatrix(basis);
-      mesh.material.color.set(colorForFlight(flight));
+      this.layer.updateInstance(
+        entity,
+        pos,
+        basis,
+        scale,
+        colorForFlight(flight),
+      );
       seen.add(entity);
     });
 
-    for (const [entity, mesh] of this.meshes.entries()) {
-      if (!seen.has(entity)) {
-        this.group.remove(mesh);
-        mesh.material.dispose();
-        this.meshes.delete(entity);
-      }
-    }
+    this.layer.prune(seen);
+  }
+
+  pick(clientX, clientY) {
+    return this.layer.pick(clientX, clientY);
   }
 }
 
@@ -341,33 +459,26 @@ class FlightOverlay {
       this.planes.sync(flights, this.store);
     }
   }
+
+  pickEntity(clientX, clientY) {
+    if (!this.visible || !this.planes) return null;
+    return this.planes.pick(clientX, clientY);
+  }
 }
 
 class SatelliteMeshLayer {
   constructor(renderer) {
     this.renderer = renderer;
-    this.group = new THREE.Group();
-    this.group.renderOrder = 48;
-    this.group.visible = false;
-    this.meshes = new Map();
-    this.geometry = new THREE.PlaneGeometry(1, 1);
-    this.texture = null;
-    this.initTexture();
-    if (this.renderer?.scene) {
-      this.renderer.scene.add(this.group);
-    }
-  }
-
-  initTexture() {
-    const loader = new THREE.TextureLoader();
-    this.texture = loader.load("/static/assets/satellite.svg");
-    this.texture.colorSpace = THREE.SRGBColorSpace;
-    this.texture.anisotropy =
-      this.renderer?.renderer?.capabilities?.getMaxAnisotropy?.() || 1;
+    this.layer = new BatchedIconLayer(renderer, {
+      renderOrder: 48,
+      textureUrl: "/static/assets/satellite.svg",
+      opacity: 0.95,
+      maxInstances: SATELLITE_CONFIG.maxSatellites || 20000,
+    });
   }
 
   setVisible(visible) {
-    this.group.visible = visible;
+    this.layer.setVisible(visible);
   }
 
   scaleForDistance() {
@@ -379,26 +490,6 @@ class SatelliteMeshLayer {
     return Math.min(14, Math.max(3, base * ratio));
   }
 
-  ensureMesh(entity) {
-    let mesh = this.meshes.get(entity);
-    if (mesh) return mesh;
-    const material = new THREE.MeshBasicMaterial({
-      map: this.texture,
-      color: new THREE.Color(0xffffff),
-      transparent: true,
-      opacity: 0.95,
-      depthTest: true,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
-    material.alphaTest = 0.12;
-    mesh = new THREE.Mesh(this.geometry, material);
-    mesh.renderOrder = 65;
-    this.group.add(mesh);
-    this.meshes.set(entity, mesh);
-    return mesh;
-  }
-
   sync(entities, store) {
     if (!this.renderer) return;
     const seen = new Set();
@@ -406,7 +497,6 @@ class SatelliteMeshLayer {
     forEachEntity(entities, (entity) => {
       const satellite = store.getComponent(entity, "Satellite");
       if (!satellite) return;
-      const mesh = this.ensureMesh(entity);
       const geo = store.getComponent(entity, "Geo");
       if (!geo) return;
       const altitude = altitudeForSatellite(satellite);
@@ -417,21 +507,21 @@ class SatelliteMeshLayer {
         this.renderer.markerAltitude + altitude,
       );
       if (!pos) return;
-      mesh.position.set(pos.x, pos.y, pos.z);
-      mesh.scale.set(scale, scale, scale);
       const { basis } = buildOrientation(geo.lat, geo.lon, 0);
-      mesh.setRotationFromMatrix(basis);
-      mesh.material.color.set(colorForSatellite(satellite));
+      this.layer.updateInstance(
+        entity,
+        pos,
+        basis,
+        scale,
+        colorForSatellite(satellite),
+      );
       seen.add(entity);
     });
+    this.layer.prune(seen);
+  }
 
-    for (const [entity, mesh] of this.meshes.entries()) {
-      if (!seen.has(entity)) {
-        this.group.remove(mesh);
-        mesh.material.dispose();
-        this.meshes.delete(entity);
-      }
-    }
+  pick(clientX, clientY) {
+    return this.layer.pick(clientX, clientY);
   }
 }
 
@@ -468,33 +558,26 @@ class SatelliteOverlay {
       this.meshes.sync(satellites, this.store);
     }
   }
+
+  pickEntity(clientX, clientY) {
+    if (!this.visible || !this.meshes) return null;
+    return this.meshes.pick(clientX, clientY);
+  }
 }
 
 class ShipMeshLayer {
   constructor(renderer) {
     this.renderer = renderer;
-    this.group = new THREE.Group();
-    this.group.renderOrder = 50;
-    this.group.visible = false;
-    this.meshes = new Map();
-    this.geometry = new THREE.PlaneGeometry(1, 1);
-    this.texture = null;
-    this.initTexture();
-    if (this.renderer?.scene) {
-      this.renderer.scene.add(this.group);
-    }
-  }
-
-  initTexture() {
-    const loader = new THREE.TextureLoader();
-    this.texture = loader.load("/static/assets/ship.svg");
-    this.texture.colorSpace = THREE.SRGBColorSpace;
-    this.texture.anisotropy =
-      this.renderer?.renderer?.capabilities?.getMaxAnisotropy?.() || 1;
+    this.layer = new BatchedIconLayer(renderer, {
+      renderOrder: 50,
+      textureUrl: "/static/assets/ship.svg",
+      opacity: 0.96,
+      maxInstances: SHIP_CONFIG.maxShips || 5000,
+    });
   }
 
   setVisible(visible) {
-    this.group.visible = visible;
+    this.layer.setVisible(visible);
   }
 
   scaleForDistance() {
@@ -506,26 +589,6 @@ class ShipMeshLayer {
     return Math.min(16, Math.max(3, base * ratio));
   }
 
-  ensureMesh(entity) {
-    let mesh = this.meshes.get(entity);
-    if (mesh) return mesh;
-    const material = new THREE.MeshBasicMaterial({
-      map: this.texture,
-      color: new THREE.Color(0xffffff),
-      transparent: true,
-      opacity: 0.96,
-      depthTest: true,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
-    material.alphaTest = 0.12;
-    mesh = new THREE.Mesh(this.geometry, material);
-    mesh.renderOrder = 68;
-    this.group.add(mesh);
-    this.meshes.set(entity, mesh);
-    return mesh;
-  }
-
   sync(entities, store) {
     if (!this.renderer) return;
     const seen = new Set();
@@ -534,7 +597,6 @@ class ShipMeshLayer {
     forEachEntity(entities, (entity) => {
       const ship = store.getComponent(entity, "Ship");
       if (!ship) return;
-      const mesh = this.ensureMesh(entity);
       const geo = store.getComponent(entity, "Geo");
       if (!geo) return;
       const pos = positionForEntity(
@@ -544,26 +606,26 @@ class ShipMeshLayer {
         baseAltitude + altitudeForShip(ship),
       );
       if (!pos) return;
-      mesh.position.set(pos.x, pos.y, pos.z);
-      mesh.scale.set(scale, scale, scale);
-      mesh.material.color.set(colorForShip(ship));
       const heading = Number.isFinite(ship.heading_deg)
         ? ship.heading_deg
         : Number.isFinite(ship.course_deg)
           ? ship.course_deg
           : 0;
       const { basis } = buildOrientation(geo.lat, geo.lon, heading);
-      mesh.setRotationFromMatrix(basis);
+      this.layer.updateInstance(
+        entity,
+        pos,
+        basis,
+        scale,
+        colorForShip(ship),
+      );
       seen.add(entity);
     });
+    this.layer.prune(seen);
+  }
 
-    for (const [entity, mesh] of this.meshes.entries()) {
-      if (!seen.has(entity)) {
-        this.group.remove(mesh);
-        mesh.material.dispose();
-        this.meshes.delete(entity);
-      }
-    }
+  pick(clientX, clientY) {
+    return this.layer.pick(clientX, clientY);
   }
 }
 
@@ -599,6 +661,11 @@ class ShipOverlay {
       this.meshes.setVisible(this.visible && this.renderer?.mode === "globe");
       this.meshes.sync(ships, this.store);
     }
+  }
+
+  pickEntity(clientX, clientY) {
+    if (!this.visible || !this.meshes) return null;
+    return this.meshes.pick(clientX, clientY);
   }
 }
 
@@ -645,6 +712,7 @@ const ICON_ASSETS = {
 const BUBBLE_FONT_STACK =
   '"IBM Plex Sans", "Space Grotesk", "Manrope", sans-serif';
 const BUBBLE_ICON_OFFSET = 26;
+const HOVER_ENTRY_KEY = "__hover__";
 
 const BUBBLE_PIN_BASE = {
   shape: "pill",
@@ -1064,6 +1132,67 @@ const pinBaseStyleKeyFor = (kind, variant) => {
   return `pin:${kind || "default"}:${variant || "default"}`;
 };
 
+const resolveBubbleData = (entity, store, renderer) => {
+  if (!entity || !store || !renderer) return null;
+  const meta = store.getComponent(entity, "Meta");
+  const geo = store.getComponent(entity, "Geo");
+  if (!meta || !geo) return null;
+  const pin = store.getComponent(entity, "Pin");
+  let label =
+    pin?.label ||
+    meta?.data?.name ||
+    meta?.data?.summary ||
+    meta?.kind ||
+    "Entity";
+  let details = "";
+  let baseStyle = PIN_STYLE_DEFAULT;
+  let baseStyleKey = pinBaseStyleKeyFor("default", "default");
+  let altitude = renderer.markerAltitude + 1.5;
+  let offsetY = -BUBBLE_ICON_OFFSET;
+
+  if (meta.kind === "flight") {
+    const flight = store.getComponent(entity, "Flight");
+    if (!flight) return null;
+    const variant = flight.on_ground ? "ground" : "air";
+    label = formatFlightLabel(flight);
+    details = formatFlightDetails(flight);
+    baseStyle = pinBaseStyleFor("flight", variant);
+    baseStyleKey = pinBaseStyleKeyFor("flight", variant);
+    altitude = renderer.markerAltitude + altitudeForFlight(flight);
+    offsetY = -BUBBLE_ICON_OFFSET;
+  } else if (meta.kind === "satellite") {
+    const satellite = store.getComponent(entity, "Satellite");
+    if (!satellite) return null;
+    const variant = orbitBandForSatellite(satellite);
+    label = formatSatelliteLabel(satellite);
+    details = formatSatelliteDetails(satellite);
+    baseStyle = pinBaseStyleFor("satellite", variant);
+    baseStyleKey = pinBaseStyleKeyFor("satellite", variant);
+    altitude = renderer.markerAltitude + altitudeForSatellite(satellite);
+    offsetY = -BUBBLE_ICON_OFFSET;
+  } else if (meta.kind === "ship") {
+    const ship = store.getComponent(entity, "Ship");
+    if (!ship) return null;
+    const variant = vesselGroupForShip(ship);
+    label = formatShipLabel(ship);
+    details = formatShipDetails(ship);
+    baseStyle = pinBaseStyleFor("ship", variant);
+    baseStyleKey = pinBaseStyleKeyFor("ship", variant);
+    altitude = shipBaseAltitude(renderer) + altitudeForShip();
+    offsetY = 0;
+  }
+
+  return {
+    geo,
+    label,
+    details,
+    baseStyle,
+    baseStyleKey,
+    altitude,
+    offsetY,
+  };
+};
+
 const edgeBaseStyleFor = (kind, occluded) => {
   if (occluded) return { ...EDGE_STYLE_OCCLUDED, ...edgeIconForKind(kind) };
   if (kind === "flight") return EDGE_STYLE_FLIGHT;
@@ -1192,12 +1321,16 @@ class BubbleOverlay {
       flights: new THREE.Group(),
       satellites: new THREE.Group(),
       ships: new THREE.Group(),
+      tracked: new THREE.Group(),
+      hover: new THREE.Group(),
       edges: new THREE.Group(),
     };
     this.scene.add(this.groups.pins);
     this.scene.add(this.groups.flights);
     this.scene.add(this.groups.satellites);
     this.scene.add(this.groups.ships);
+    this.scene.add(this.groups.tracked);
+    this.scene.add(this.groups.hover);
     this.scene.add(this.groups.edges);
     this.textureCache = new BubbleTextureCache(renderer);
     this.entries = {
@@ -1205,6 +1338,8 @@ class BubbleOverlay {
       flights: new Map(),
       satellites: new Map(),
       ships: new Map(),
+      tracked: new Map(),
+      hover: new Map(),
       edges: new Map(),
     };
     this.visible = {
@@ -1228,9 +1363,13 @@ class BubbleOverlay {
   setLodEnabled(enabled) {
     this.lodEnabled = Boolean(enabled);
     if (!this.lodEnabled) {
-      Object.values(this.groups).forEach((group) => {
-        if (group) group.visible = false;
-      });
+      this.groups.pins.visible = false;
+      this.groups.flights.visible = false;
+      this.groups.satellites.visible = false;
+      this.groups.ships.visible = false;
+      this.groups.edges.visible = false;
+      this.groups.tracked.visible = false;
+      this.groups.hover.visible = false;
       this.clearSelection();
       this.popup?.close(true);
       return;
@@ -1245,6 +1384,8 @@ class BubbleOverlay {
     this.groups.satellites.visible = this.visible.satellites;
     this.groups.ships.visible = this.visible.ships;
     this.groups.edges.visible = true;
+    this.groups.tracked.visible = true;
+    this.groups.hover.visible = true;
   }
 
   bindEvents() {
@@ -1362,6 +1503,8 @@ class BubbleOverlay {
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const targets = [
       this.groups.edges,
+      this.groups.tracked,
+      this.groups.hover,
       this.groups.pins,
       this.groups.flights,
       this.groups.satellites,
@@ -1434,7 +1577,8 @@ class BubbleOverlay {
         depthWrite: false,
       });
       const sprite = new THREE.Sprite(material);
-      sprite.renderOrder = groupName === "edges" ? 230 : 210;
+      sprite.renderOrder =
+        groupName === "edges" ? 230 : groupName === "hover" ? 220 : 210;
       entry = {
         entityId,
         group: groupName,
@@ -1489,6 +1633,99 @@ class BubbleOverlay {
       entry.sprite.material.dispose();
       map.delete(entity);
     }
+  }
+
+  syncTracked(entities, store) {
+    if (!this.renderer) return;
+    const seen = new Set();
+    const bounds = this.boundsEl?.getBoundingClientRect?.();
+    const clamp = bounds || {
+      left: 0,
+      top: 0,
+      right: this.size.width,
+      bottom: this.size.height,
+    };
+    const pad = 20;
+    forEachEntity(entities, (entity) => {
+      const data = resolveBubbleData(entity, store, this.renderer);
+      if (!data) return;
+      const pos = positionForEntity(
+        entity,
+        this.renderer,
+        data.geo,
+        data.altitude,
+      );
+      if (!pos) return;
+      const screen = this.renderer.projectToScreen(pos);
+      if (!screen) return;
+      const withinBounds =
+        screen.x >= clamp.left + pad &&
+        screen.x <= clamp.right - pad &&
+        screen.y >= clamp.top + pad &&
+        screen.y <= clamp.bottom - pad;
+      const visible = screen.visible && withinBounds;
+      const entry = this.ensureEntry(this.entries.tracked, "tracked", entity, {
+        text: data.label,
+        label: data.label,
+        details: data.details,
+        baseStyleKey: data.baseStyleKey,
+        baseStyle: data.baseStyle,
+        selected: this.selected?.entityId === entity,
+      });
+      entry.sprite.visible = visible;
+      if (visible) {
+        this.positionEntry(entry, screen.x, screen.y, data.offsetY);
+      } else {
+        this.hideEntry(entry);
+      }
+      seen.add(entity);
+    });
+    this.pruneEntries(this.entries.tracked, seen);
+  }
+
+  syncHover(entity, store) {
+    if (!this.renderer) return;
+    const entry = this.entries.hover.get(HOVER_ENTRY_KEY);
+    if (!entity) {
+      if (entry) this.hideEntry(entry);
+      return;
+    }
+    const data = resolveBubbleData(entity, store, this.renderer);
+    if (!data) {
+      if (entry) this.hideEntry(entry);
+      return;
+    }
+    const pos = positionForEntity(
+      entity,
+      this.renderer,
+      data.geo,
+      data.altitude,
+    );
+    if (!pos) {
+      if (entry) this.hideEntry(entry);
+      return;
+    }
+    const screen = this.renderer.projectToScreen(pos);
+    if (!screen || !screen.visible) {
+      if (entry) this.hideEntry(entry);
+      return;
+    }
+    const hoverEntry = this.ensureEntry(
+      this.entries.hover,
+      "hover",
+      HOVER_ENTRY_KEY,
+      {
+        text: data.label,
+        label: data.label,
+        details: data.details,
+        baseStyleKey: data.baseStyleKey,
+        baseStyle: data.baseStyle,
+        selected: this.selected?.entityId === entity,
+      },
+    );
+    hoverEntry.entityId = entity;
+    hoverEntry.sprite.visible = true;
+    this.positionEntry(hoverEntry, screen.x, screen.y, data.offsetY);
   }
 
   syncPins(entities, store) {
@@ -1746,7 +1983,6 @@ class BubbleOverlay {
   }
 
   syncEdges(entities, store) {
-    if (!this.lodEnabled) return;
     const seen = new Set();
     const clamp = {
       left: 0,
@@ -1765,7 +2001,7 @@ class BubbleOverlay {
       const geo = store.getComponent(entity, "Geo");
       const meta = store.getComponent(entity, "Meta");
       const pin = store.getComponent(entity, "Pin");
-      if (!geo || !meta || !pin || !this.renderer) return;
+      if (!geo || !meta || !this.renderer) return;
       const pos = positionForEntity(
         entity,
         this.renderer,
@@ -1799,9 +2035,13 @@ class BubbleOverlay {
       } else {
         y = centerY + Math.sign(safeDy) * halfH;
       }
-      const symbol = collapseLabel(pin.label) || edgeSymbolFor(meta);
       const label =
-        pin.label || meta.data?.name || meta.data?.summary || meta.kind || "Entity";
+        pin?.label ||
+        meta.data?.name ||
+        meta.data?.summary ||
+        meta.kind ||
+        "Entity";
+      const symbol = collapseLabel(label) || edgeSymbolFor(meta);
       const details =
         meta.kind === "flight"
           ? formatFlightDetails(meta.data)

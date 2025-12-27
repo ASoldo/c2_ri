@@ -62,14 +62,14 @@ export const boot = async () => {
   ecsRuntime.setGlobeRadius(renderer3d.globeRadius);
 
   const popup = new BubblePopup((action, entityId) => {
+    const entity = parseEntityId(entityId);
+    if (entity === null) return;
     if (action === "focus") {
-      const entity = parseEntityId(entityId);
-      if (entity === null) return;
       const geo = store.getComponent(entity, "Geo");
       if (geo) renderer3d.focusOnGeo(geo);
-    } else {
-      console.info("bubble action", { action, entityId });
+      return;
     }
+    console.info("bubble action", { action, entityId });
   }, () => {
     renderer3d.setSelectedEntity(null);
   });
@@ -123,20 +123,29 @@ export const boot = async () => {
     return { label, details: "" };
   };
 
-  const attachParticlePicker = () => {
+  const pickEntityAt = (clientX, clientY) =>
+    flightOverlay.pickEntity?.(clientX, clientY) ||
+    satelliteOverlay.pickEntity?.(clientX, clientY) ||
+    shipOverlay.pickEntity?.(clientX, clientY) ||
+    renderer3d.pickEntity(clientX, clientY);
+
+  const attachIconInteractions = () => {
     const canvas = renderer3d.canvas;
     if (!canvas) return;
     let pointerDown = null;
-    const onPointerDown = (event) => {
+    canvas.addEventListener("pointerdown", (event) => {
+      if (event.defaultPrevented) return;
       pointerDown = { x: event.clientX, y: event.clientY };
-    };
-    const onPointerUp = (event) => {
+    });
+    canvas.addEventListener("pointerup", (event) => {
+      if (event.defaultPrevented) return;
       if (!pointerDown) return;
       const dx = event.clientX - pointerDown.x;
       const dy = event.clientY - pointerDown.y;
       pointerDown = null;
       if (Math.hypot(dx, dy) > 6) return;
-      const entity = renderer3d.pickEntity(event.clientX, event.clientY);
+      const hit = pickEntityAt(event.clientX, event.clientY);
+      const entity = hit ? parseEntityId(hit) : null;
       if (!entity) {
         popup.close(true);
         renderer3d.setSelectedEntity(null);
@@ -145,9 +154,7 @@ export const boot = async () => {
       const { label, details } = buildPopupDetails(entity);
       popup.openFor(entity, label, details);
       renderer3d.setSelectedEntity(entity);
-    };
-    canvas.addEventListener("pointerdown", onPointerDown);
-    canvas.addEventListener("pointerup", onPointerUp);
+    });
   };
 
   bus.on("entities:update", (payload) => {
@@ -218,7 +225,7 @@ export const boot = async () => {
       shipOverlay.sync();
       mediaOverlay.update(now);
       renderer3d.render(delta, () => {
-        if (!labelsEnabled) return;
+        if (!labelsEnabled || !BUBBLE_LABELS_ENABLED) return;
         const kindCache = ecsRuntime.kindCache;
         const assetIds = kindCache.get(ECS_KIND.asset) || [];
         const unitIds = kindCache.get(ECS_KIND.unit) || [];
@@ -231,16 +238,14 @@ export const boot = async () => {
         if (flightOverlay.visible) markerLists.push(flightIds);
         if (satelliteOverlay.visible) markerLists.push(satelliteIds);
         if (shipOverlay.visible) markerLists.push(shipIds);
-        if (BUBBLE_LABELS_ENABLED) {
-          bubbleOverlay.syncPins(markerLists, store);
-          bubbleOverlay.syncFlights(flightOverlay.visible ? flightIds : [], store);
-          bubbleOverlay.syncSatellites(
-            satelliteOverlay.visible ? satelliteIds : [],
-            store,
-          );
-          bubbleOverlay.syncShips(shipOverlay.visible ? shipIds : [], store);
-        }
         bubbleOverlay.syncEdges(markerLists, store);
+        bubbleOverlay.syncPins(markerLists, store);
+        bubbleOverlay.syncFlights(flightOverlay.visible ? flightIds : [], store);
+        bubbleOverlay.syncSatellites(
+          satelliteOverlay.visible ? satelliteIds : [],
+          store,
+        );
+        bubbleOverlay.syncShips(shipOverlay.visible ? shipIds : [], store);
       });
 
       if (els.runtimeStats) {
@@ -281,7 +286,7 @@ export const boot = async () => {
 
   window.addEventListener("resize", resize);
   resize();
-  attachParticlePicker();
+  attachIconInteractions();
 
   updateStatus();
   fetchEntities(bus);

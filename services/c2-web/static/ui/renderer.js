@@ -69,6 +69,7 @@ class ParticleField {
     this.material = null;
     this.ids = null;
     this.count = 0;
+    this.kinds = null;
     this.iconTextures = {};
     this.iconReady = {
       flight: 0,
@@ -386,6 +387,9 @@ class ParticleField {
         THREE.Uint8BufferAttribute,
         false,
       );
+      this.kinds = renderCache.kinds;
+    } else {
+      this.kinds = null;
     }
     if (renderCache.headings) {
       this.updateAttribute(
@@ -424,6 +428,7 @@ class ParticleField {
     const index = hits[0].index;
     if (index === undefined || index === null) return null;
     if (index < 0 || index >= this.ids.length) return null;
+    if (this.kinds && this.kindMask[this.kinds[index]] < 0.5) return null;
     return this.ids[index];
   }
 }
