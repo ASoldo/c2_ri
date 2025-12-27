@@ -52,6 +52,7 @@ struct App {
     egui_renderer: egui_wgpu::Renderer,
     last_frame: Instant,
     globe_texture_id: Option<egui::TextureId>,
+    globe_dragging: bool,
 }
 
 impl App {
@@ -86,6 +87,7 @@ impl App {
             egui_renderer,
             last_frame: Instant::now(),
             globe_texture_id: None,
+            globe_dragging: false,
         })
     }
 
@@ -133,6 +135,34 @@ impl App {
         self.egui_state
             .handle_platform_output(window, output.platform_output);
         let paint_jobs = self.egui_ctx.tessellate(output.shapes, output.pixels_per_point);
+
+        if let Some(rect) = self.ui.globe_rect() {
+            self.egui_ctx.input(|input| {
+                if let Some(pos) = input.pointer.latest_pos() {
+                    let hovered = rect.contains(pos);
+                    if input.pointer.primary_pressed() && hovered {
+                        self.globe_dragging = true;
+                    }
+                    if input.pointer.primary_released() {
+                        self.globe_dragging = false;
+                    }
+                    if self.globe_dragging && input.pointer.primary_down() {
+                        let delta = input.pointer.delta();
+                        if delta.x.abs() > 0.0 || delta.y.abs() > 0.0 {
+                            self.renderer.orbit_delta(delta.x, delta.y);
+                        }
+                    }
+                    if hovered {
+                        let scroll = input.smooth_scroll_delta.y;
+                        if scroll.abs() > 0.0 {
+                            self.renderer.zoom_delta(scroll);
+                        }
+                    }
+                } else if input.pointer.primary_released() {
+                    self.globe_dragging = false;
+                }
+            });
+        }
 
         for (id, image_delta) in &output.textures_delta.set {
             self.egui_renderer

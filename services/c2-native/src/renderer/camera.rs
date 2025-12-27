@@ -56,7 +56,7 @@ impl CameraController {
     pub fn new() -> Self {
         Self {
             rotate_sensitivity: 0.006,
-            zoom_sensitivity: 0.1,
+            zoom_sensitivity: 0.002,
             dragging: false,
             last_cursor: (0.0, 0.0),
         }
@@ -75,7 +75,7 @@ impl CameraController {
                     let dx = x - self.last_cursor.0;
                     let dy = y - self.last_cursor.1;
                     camera.yaw += dx * self.rotate_sensitivity;
-                    camera.pitch = (camera.pitch - dy * self.rotate_sensitivity)
+                    camera.pitch = (camera.pitch + dy * self.rotate_sensitivity)
                         .clamp(-1.45, 1.45);
                 }
                 self.last_cursor = (x, y);
@@ -85,10 +85,26 @@ impl CameraController {
                     MouseScrollDelta::LineDelta(_, y) => *y,
                     MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
                 };
-                camera.distance = (camera.distance * (1.0 - scroll * self.zoom_sensitivity))
-                    .clamp(60.0, 600.0);
+                self.apply_zoom(scroll, camera);
             }
             _ => {}
         }
+    }
+
+    pub fn orbit_delta(&self, dx: f32, dy: f32, camera: &mut Camera) {
+        camera.yaw += dx * self.rotate_sensitivity;
+        camera.pitch = (camera.pitch + dy * self.rotate_sensitivity).clamp(-1.45, 1.45);
+    }
+
+    pub fn zoom_delta(&self, scroll: f32, camera: &mut Camera) {
+        self.apply_zoom(scroll, camera);
+    }
+
+    fn apply_zoom(&self, scroll: f32, camera: &mut Camera) {
+        if scroll.abs() < f32::EPSILON {
+            return;
+        }
+        let delta = (scroll * self.zoom_sensitivity).clamp(-0.25, 0.25);
+        camera.distance = (camera.distance * (1.0 - delta)).clamp(60.0, 600.0);
     }
 }

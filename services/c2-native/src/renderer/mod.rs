@@ -635,6 +635,14 @@ impl Renderer {
         pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         pass.draw_indexed(0..self.num_indices, 0, 0..self.instance_count);
     }
+
+    pub fn orbit_delta(&mut self, dx: f32, dy: f32) {
+        self.controller.orbit_delta(dx, dy, &mut self.camera);
+    }
+
+    pub fn zoom_delta(&mut self, scroll: f32) {
+        self.controller.zoom_delta(scroll, &mut self.camera);
+    }
 }
 
 fn create_viewport_target(
