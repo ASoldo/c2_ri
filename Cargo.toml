@@ -6,3 +6,6 @@ members = ["crates/*", "services/*"]
 edition = "2024"
 license = "UNLICENSED"
 version = "0.1.0"
+
+[patch.crates-io]
+egui-wgpu = { path = "crates/egui-wgpu" }
