@@ -458,11 +458,13 @@ fn filter_instances(
 }
 
 fn zoom_for_distance(distance: f32) -> u8 {
-        if distance < 150.0 {
-            3
-        } else if distance < 230.0 {
-            2
-        } else {
-            1
-        }
+    if distance < 140.0 {
+        4
+    } else if distance < 190.0 {
+        3
+    } else if distance < 260.0 {
+        2
+    } else {
+        1
+    }
 }

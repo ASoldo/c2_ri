@@ -111,7 +111,7 @@ fn build_layer(
     field: Option<&str>,
 ) -> TileResult {
     let tile_size = 256u32;
-    let actual_zoom = request.zoom.min(3);
+    let actual_zoom = request.zoom.min(4);
     let tiles = 1u32 << actual_zoom;
     let mosaic_size = tiles * tile_size;
     let mut mosaic = RgbaImage::new(mosaic_size, mosaic_size);
