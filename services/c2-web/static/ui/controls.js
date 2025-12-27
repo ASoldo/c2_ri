@@ -1,5 +1,6 @@
 import {
   FLIGHT_CONFIG,
+  DEFAULT_SEA_FIELDS,
   SEA_CONFIG,
   SATELLITE_CONFIG,
   SHIP_CONFIG,
@@ -113,14 +114,21 @@ export const setupSeaControls = (renderer3d) => {
   const select = document.getElementById("sea-field");
   if (select) {
     select.innerHTML = "";
-    SEA_CONFIG.fields.forEach((field) => {
+    const fields =
+      Array.isArray(SEA_CONFIG.fields) && SEA_CONFIG.fields.length
+        ? SEA_CONFIG.fields
+        : DEFAULT_SEA_FIELDS;
+    fields.forEach((field) => {
       const option = document.createElement("option");
       option.value = field;
       option.textContent = formatOverlayLabel(field);
       select.appendChild(option);
     });
-    select.value = SEA_CONFIG.defaultField;
-    renderer3d.setSeaField(SEA_CONFIG.defaultField);
+    const initial = SEA_CONFIG.defaultField || fields[0];
+    if (initial) {
+      select.value = initial;
+      renderer3d.setSeaField(initial);
+    }
     select.addEventListener("change", () => {
       renderer3d.setSeaField(select.value);
     });

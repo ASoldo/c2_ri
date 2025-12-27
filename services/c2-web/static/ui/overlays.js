@@ -872,9 +872,16 @@ const EDGE_POPUP_ACTION_CLASS =
 
 const setPopupVisible = (backdrop, visible) => {
   if (!backdrop) return;
+  if (!visible) {
+    const active = document.activeElement;
+    if (active && backdrop.contains(active)) {
+      active.blur();
+    }
+  }
   backdrop.classList.toggle("hidden", !visible);
   backdrop.classList.toggle("flex", visible);
   backdrop.setAttribute("aria-hidden", visible ? "false" : "true");
+  backdrop.toggleAttribute("inert", !visible);
 };
 
 const bubbleMeasureCanvas = document.createElement("canvas");
@@ -1113,6 +1120,7 @@ class BubblePopup {
     const backdrop = document.createElement("div");
     backdrop.className = EDGE_POPUP_BACKDROP_CLASS;
     backdrop.setAttribute("aria-hidden", "true");
+    backdrop.setAttribute("inert", "");
     const popup = document.createElement("div");
     popup.className = EDGE_POPUP_CLASS;
     backdrop.appendChild(popup);

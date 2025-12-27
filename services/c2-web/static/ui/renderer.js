@@ -83,22 +83,91 @@ class ParticleField {
     this.attenuation = 1.0;
   }
 
+  buildFallbackIcon(kind) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#ffffff";
+    if (kind === "flight") {
+      ctx.beginPath();
+      ctx.moveTo(32, 4);
+      ctx.lineTo(58, 46);
+      ctx.lineTo(42, 46);
+      ctx.lineTo(32, 60);
+      ctx.lineTo(22, 46);
+      ctx.lineTo(6, 46);
+      ctx.closePath();
+      ctx.fill();
+    } else if (kind === "satellite") {
+      ctx.fillRect(24, 24, 16, 16);
+      ctx.fillRect(6, 26, 14, 12);
+      ctx.fillRect(44, 26, 14, 12);
+      ctx.beginPath();
+      ctx.arc(32, 18, 4, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (kind === "ship") {
+      ctx.beginPath();
+      ctx.moveTo(12, 36);
+      ctx.lineTo(52, 36);
+      ctx.lineTo(60, 52);
+      ctx.lineTo(4, 52);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillRect(26, 18, 12, 10);
+      ctx.fillRect(18, 30, 28, 6);
+    } else {
+      ctx.beginPath();
+      ctx.arc(32, 32, 20, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.generateMipmaps = false;
+    return texture;
+  }
+
   init() {
     const loader = new THREE.TextureLoader();
     const loadIcon = (key, url) => {
-      const uniformKey = `iconReady${key.charAt(0).toUpperCase()}${key.slice(1)}`;
-      const texture = loader.load(url, () => {
-        this.iconReady[key] = 1;
-        if (this.material?.uniforms?.[uniformKey]) {
-          this.material.uniforms[uniformKey].value = 1.0;
-        }
-      });
+      const title = `${key.charAt(0).toUpperCase()}${key.slice(1)}`;
+      const readyKey = `iconReady${title}`;
+      const textureKey = `icon${title}`;
+      const texture = loader.load(
+        url,
+        () => {
+          this.iconReady[key] = 1;
+          if (this.material?.uniforms?.[readyKey]) {
+            this.material.uniforms[readyKey].value = 1.0;
+          }
+          if (this.material?.uniforms?.[textureKey]) {
+            this.material.uniforms[textureKey].value = texture;
+          }
+          this.iconTextures[key] = texture;
+        },
+        undefined,
+        () => {
+          if (this.material?.uniforms?.[readyKey]) {
+            this.material.uniforms[readyKey].value = 1.0;
+          }
+        },
+      );
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.minFilter = THREE.LinearFilter;
       texture.magFilter = THREE.LinearFilter;
       texture.generateMipmaps = false;
-      this.iconTextures[key] = texture;
     };
+    ["flight", "satellite", "ship"].forEach((key) => {
+      const fallback = this.buildFallbackIcon(key);
+      if (fallback) {
+        this.iconTextures[key] = fallback;
+        this.iconReady[key] = 1;
+      }
+    });
     loadIcon("flight", "/static/assets/plane.png");
     loadIcon("satellite", "/static/assets/satellite.svg");
     loadIcon("ship", "/static/assets/ship.svg");
@@ -211,6 +280,7 @@ class ParticleField {
       transparent: true,
       depthTest: true,
       depthWrite: false,
+      side: THREE.DoubleSide,
     });
     this.points = new THREE.Points(this.geometry, this.material);
     this.points.renderOrder = 62;

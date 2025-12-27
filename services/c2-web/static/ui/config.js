@@ -138,8 +138,10 @@ const buildWeatherConfig = () => {
   const maxInFlight = Number.isFinite(config.maxInFlight) ? config.maxInFlight : 3;
   const minZoom = Number.isFinite(config.minZoom) ? config.minZoom : 0;
   const maxZoom = Number.isFinite(config.maxZoom) ? config.maxZoom : 6;
+  const enabled =
+    config.enabled !== undefined ? Boolean(config.enabled) : true;
   return {
-    enabled: Boolean(config.enabled),
+    enabled,
     fields,
     defaultField,
     defaultTime,
@@ -183,8 +185,10 @@ const buildSeaConfig = () => {
   const maxInFlight = Number.isFinite(config.maxInFlight) ? config.maxInFlight : 2;
   const minZoom = Number.isFinite(config.minZoom) ? config.minZoom : 0;
   const maxZoom = Number.isFinite(config.maxZoom) ? config.maxZoom : 6;
+  const enabled =
+    config.enabled !== undefined ? Boolean(config.enabled) : true;
   return {
-    enabled: Boolean(config.enabled),
+    enabled,
     fields,
     defaultField,
     defaultTime,
