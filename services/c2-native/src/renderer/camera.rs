@@ -50,6 +50,8 @@ pub struct CameraController {
     zoom_sensitivity: f32,
     dragging: bool,
     last_cursor: (f32, f32),
+    min_distance: f32,
+    max_distance: f32,
 }
 
 impl CameraController {
@@ -59,6 +61,8 @@ impl CameraController {
             zoom_sensitivity: 0.002,
             dragging: false,
             last_cursor: (0.0, 0.0),
+            min_distance: 130.0,
+            max_distance: 600.0,
         }
     }
 
@@ -105,6 +109,7 @@ impl CameraController {
             return;
         }
         let delta = (scroll * self.zoom_sensitivity).clamp(-0.25, 0.25);
-        camera.distance = (camera.distance * (1.0 - delta)).clamp(60.0, 600.0);
+        camera.distance = (camera.distance * (1.0 - delta))
+            .clamp(self.min_distance, self.max_distance);
     }
 }

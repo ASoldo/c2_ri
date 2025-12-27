@@ -17,6 +17,10 @@ pub struct OperationsState {
     pub show_flights: bool,
     pub show_ships: bool,
     pub show_satellites: bool,
+    pub show_base: bool,
+    pub show_map: bool,
+    pub show_weather: bool,
+    pub show_sea: bool,
     pub tile_provider: String,
     pub weather_field: String,
     pub sea_field: String,
@@ -28,6 +32,10 @@ impl Default for OperationsState {
             show_flights: true,
             show_ships: true,
             show_satellites: true,
+            show_base: true,
+            show_map: true,
+            show_weather: true,
+            show_sea: true,
             tile_provider: "osm".to_string(),
             weather_field: "IMERG_Precipitation_Rate".to_string(),
             sea_field: "OSCAR_Sea_Surface_Currents_Zonal".to_string(),
@@ -275,6 +283,13 @@ impl TabViewer for DockViewer<'_> {
                 ui.checkbox(&mut self.operations.show_flights, "Flights");
                 ui.checkbox(&mut self.operations.show_ships, "Ships");
                 ui.checkbox(&mut self.operations.show_satellites, "Satellites");
+                ui.add_space(8.0);
+                ui.separator();
+                ui.label("Layers");
+                ui.checkbox(&mut self.operations.show_base, "Base texture");
+                ui.checkbox(&mut self.operations.show_map, "Map tiles");
+                ui.checkbox(&mut self.operations.show_sea, "Sea overlay");
+                ui.checkbox(&mut self.operations.show_weather, "Weather overlay");
                 ui.add_space(8.0);
                 ui.separator();
                 ui.label("Map layers");

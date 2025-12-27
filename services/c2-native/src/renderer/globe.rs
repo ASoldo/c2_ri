@@ -62,7 +62,10 @@ pub fn build_sphere(radius: f32, segments: u32, rings: u32) -> (Vec<GlobeVertex>
                 radius * sin_theta * sin_phi,
             );
             let normal = position.normalize_or_zero();
-            let sin_lat = cos_theta.clamp(-0.9999, 0.9999);
+            let sin_lat = (position.y / radius).clamp(-0.9999, 0.9999);
+            let u_base = segment as f32 / segments as f32;
+            let u = u_base + 0.5;
+            let v_equirect = v;
             let merc = 0.5
                 - 0.5
                     * ((1.0 + sin_lat) / (1.0 - sin_lat)).ln()
@@ -70,8 +73,8 @@ pub fn build_sphere(radius: f32, segments: u32, rings: u32) -> (Vec<GlobeVertex>
             vertices.push(GlobeVertex {
                 position: position.to_array(),
                 normal: normal.to_array(),
-                uv_equirect: [1.0 - u, 1.0 - v],
-                uv_merc: [1.0 - u, merc.clamp(0.0, 1.0)],
+                uv_equirect: [u, v_equirect.clamp(0.0, 1.0)],
+                uv_merc: [u, merc.clamp(0.0, 1.0)],
             });
         }
     }

@@ -56,15 +56,28 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
   let base = textureSample(base_tex, base_sampler, input.uv_equirect);
-  let map = textureSample(map_tex, map_sampler, input.uv_merc);
-  let sea = textureSample(sea_tex, sea_sampler, input.uv_merc);
-  let weather = textureSample(weather_tex, weather_sampler, input.uv_merc);
   let base_rgb = base.rgb * overlay.base_opacity;
-  let map_mix = map.a * overlay.map_opacity;
-  let with_map = mix(base_rgb, map.rgb, map_mix);
-  let sea_mix = sea.a * overlay.sea_opacity;
-  let with_sea = mix(with_map, sea.rgb, sea_mix);
-  let weather_mix = weather.a * overlay.weather_opacity;
-  let blended = mix(with_sea, weather.rgb, weather_mix);
-  return vec4<f32>(blended, 1.0);
+  let pole_mask = 1.0 - step(0.996, abs(input.normal.y));
+  var with_map = base_rgb;
+  let map_opacity = overlay.map_opacity * pole_mask;
+  if (map_opacity > 0.001) {
+    let map = textureSample(map_tex, map_sampler, input.uv_merc);
+    let map_mix = map.a * map_opacity;
+    with_map = mix(with_map, map.rgb, map_mix);
+  }
+  var with_sea = with_map;
+  let sea_opacity = overlay.sea_opacity * pole_mask;
+  if (sea_opacity > 0.001) {
+    let sea = textureSample(sea_tex, sea_sampler, input.uv_merc);
+    let sea_mix = sea.a * sea_opacity;
+    with_sea = mix(with_sea, sea.rgb, sea_mix);
+  }
+  var with_weather = with_sea;
+  let weather_opacity = overlay.weather_opacity * pole_mask;
+  if (weather_opacity > 0.001) {
+    let weather = textureSample(weather_tex, weather_sampler, input.uv_merc);
+    let weather_mix = weather.a * weather_opacity;
+    with_weather = mix(with_weather, weather.rgb, weather_mix);
+  }
+  return vec4<f32>(with_weather, 1.0);
 }

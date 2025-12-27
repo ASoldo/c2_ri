@@ -11,7 +11,7 @@ pub use camera::{Camera, CameraController};
 use globe::{build_sphere, GlobeVertex};
 pub use instance::{quad_vertices, InstanceRaw, Vertex};
 pub use texture::Texture;
-use texture::{rgba_from_png, rgba_from_svg, TextureArray};
+use texture::{rgba_from_png, rgba_from_png_with_size, rgba_from_svg, TextureArray};
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -140,20 +140,27 @@ impl Renderer {
             create_viewport_target(&device, surface_format, config.width, config.height);
 
         let layer_size = 2048u32;
-        let base_rgba = rgba_from_png(include_bytes!("../../assets/earth_daymap.png"), layer_size)
-            .unwrap_or_else(|_| vec![32, 42, 68, 255].repeat((layer_size * layer_size) as usize));
-        let base_texture = Texture::from_rgba(
+        let (base_rgba, base_width, base_height) =
+            rgba_from_png_with_size(include_bytes!("../../assets/earth_daymap.png"))
+                .unwrap_or_else(|_| {
+                    (
+                        vec![32, 42, 68, 255].repeat((layer_size * layer_size) as usize),
+                        layer_size,
+                        layer_size,
+                    )
+                });
+        let base_texture = Texture::from_rgba_globe(
             &device,
             &queue,
-            layer_size,
-            layer_size,
+            base_width,
+            base_height,
             &base_rgba,
             "base map",
         )
-        .unwrap_or_else(|_| Texture::solid_rgba(&device, &queue, [32, 42, 68, 255]));
-        let map_texture = Texture::solid_rgba(&device, &queue, [0, 0, 0, 0]);
-        let weather_texture = Texture::solid_rgba(&device, &queue, [0, 0, 0, 0]);
-        let sea_texture = Texture::solid_rgba(&device, &queue, [0, 0, 0, 0]);
+        .unwrap_or_else(|_| Texture::solid_rgba_globe(&device, &queue, [32, 42, 68, 255]));
+        let map_texture = Texture::solid_rgba_globe(&device, &queue, [0, 0, 0, 0]);
+        let weather_texture = Texture::solid_rgba_globe(&device, &queue, [0, 0, 0, 0]);
+        let sea_texture = Texture::solid_rgba_globe(&device, &queue, [0, 0, 0, 0]);
 
         let globe_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -725,7 +732,8 @@ impl Renderer {
             GlobeLayer::Weather => "weather layer",
             GlobeLayer::Sea => "sea layer",
         };
-        if let Ok(texture) = Texture::from_rgba(&self.device, &self.queue, width, height, data, label)
+        if let Ok(texture) =
+            Texture::from_rgba_globe(&self.device, &self.queue, width, height, data, label)
         {
             match kind {
                 GlobeLayer::Base => self.base_texture = texture,
@@ -736,6 +744,17 @@ impl Renderer {
             self.layer_size = width;
             self.rebuild_globe_bind_group();
         }
+    }
+
+    pub fn update_overlay(&self, base: f32, map: f32, sea: f32, weather: f32) {
+        let uniform = OverlayUniform {
+            base_opacity: base,
+            map_opacity: map,
+            weather_opacity: weather,
+            sea_opacity: sea,
+        };
+        self.queue
+            .write_buffer(&self.overlay_buffer, 0, bytemuck::bytes_of(&uniform));
     }
 
     fn rebuild_globe_bind_group(&mut self) {

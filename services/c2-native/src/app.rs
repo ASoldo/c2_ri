@@ -88,6 +88,12 @@ impl App {
             egui_wgpu::RendererOptions::default(),
         );
         let overlay_settings = ui.operations().clone();
+        renderer.update_overlay(
+            if overlay_settings.show_base { 1.0 } else { 0.0 },
+            if overlay_settings.show_map { 0.85 } else { 0.0 },
+            if overlay_settings.show_sea { 0.45 } else { 0.0 },
+            if overlay_settings.show_weather { 0.55 } else { 0.0 },
+        );
         let tile_settings = TileSettings::from(&overlay_settings);
         let (tile_fetcher, tile_rx) = TileFetcher::new(renderer.layer_size());
         let tile_zoom = 3;
@@ -234,6 +240,12 @@ impl App {
             );
             self.renderer.update_instances(&self.filtered_instances);
             self.instances_dirty = false;
+            self.renderer.update_overlay(
+                if self.overlay_settings.show_base { 1.0 } else { 0.0 },
+                if self.overlay_settings.show_map { 0.85 } else { 0.0 },
+                if self.overlay_settings.show_sea { 0.45 } else { 0.0 },
+                if self.overlay_settings.show_weather { 0.55 } else { 0.0 },
+            );
         }
 
         for (id, image_delta) in &output.textures_delta.set {
@@ -274,18 +286,35 @@ impl App {
             new_tile_settings != self.tile_settings || desired_zoom != self.tile_zoom;
         if tile_settings_changed {
             self.tile_request_id += 1;
-            self.tile_fetcher.request_all(TileRequest {
+            let request = TileRequest {
                 request_id: self.tile_request_id,
                 zoom: desired_zoom,
                 provider: new_tile_settings.provider.clone(),
                 weather_field: new_tile_settings.weather_field.clone(),
                 sea_field: new_tile_settings.sea_field.clone(),
-            });
-            self.tile_pending = Some(TilePending {
-                request_id: self.tile_request_id,
-                zoom: desired_zoom,
-                pending: TileKind::all(),
-            });
+            };
+            let mut pending = std::collections::HashSet::new();
+            if self.overlay_settings.show_map {
+                pending.insert(TileKind::Base);
+                self.tile_fetcher.request(TileKind::Base, request.clone());
+            }
+            if self.overlay_settings.show_weather {
+                pending.insert(TileKind::Weather);
+                self.tile_fetcher.request(TileKind::Weather, request.clone());
+            }
+            if self.overlay_settings.show_sea {
+                pending.insert(TileKind::Sea);
+                self.tile_fetcher.request(TileKind::Sea, request.clone());
+            }
+            if pending.is_empty() {
+                self.tile_pending = None;
+            } else {
+                self.tile_pending = Some(TilePending {
+                    request_id: self.tile_request_id,
+                    zoom: desired_zoom,
+                    pending,
+                });
+            }
             self.tile_zoom = desired_zoom;
             self.tile_settings = new_tile_settings;
         }
@@ -429,11 +458,11 @@ fn filter_instances(
 }
 
 fn zoom_for_distance(distance: f32) -> u8 {
-    if distance < 120.0 {
-        3
-    } else if distance < 200.0 {
-        2
-    } else {
-        1
-    }
+        if distance < 150.0 {
+            3
+        } else if distance < 230.0 {
+            2
+        } else {
+            1
+        }
 }

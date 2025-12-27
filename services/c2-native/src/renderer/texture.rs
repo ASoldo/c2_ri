@@ -9,6 +9,25 @@ pub struct Texture {
     pub height: u32,
 }
 
+fn build_sampler(
+    device: &wgpu::Device,
+    label: &str,
+    address_mode_u: wgpu::AddressMode,
+    address_mode_v: wgpu::AddressMode,
+    address_mode_w: wgpu::AddressMode,
+) -> wgpu::Sampler {
+    device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some(label),
+        address_mode_u,
+        address_mode_v,
+        address_mode_w,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
+        ..Default::default()
+    })
+}
+
 impl Texture {
     pub fn from_bytes(
         device: &wgpu::Device,
@@ -56,16 +75,13 @@ impl Texture {
         );
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("icon sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            ..Default::default()
-        });
+        let sampler = build_sampler(
+            device,
+            "icon sampler",
+            wgpu::AddressMode::ClampToEdge,
+            wgpu::AddressMode::ClampToEdge,
+            wgpu::AddressMode::ClampToEdge,
+        );
 
         Ok(Self {
             texture,
@@ -120,16 +136,73 @@ impl Texture {
             },
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        let sampler = build_sampler(
+            device,
+            label,
+            wgpu::AddressMode::ClampToEdge,
+            wgpu::AddressMode::ClampToEdge,
+            wgpu::AddressMode::ClampToEdge,
+        );
+        Ok(Self {
+            texture,
+            view,
+            sampler,
+            width,
+            height,
+        })
+    }
+
+    pub fn from_rgba_globe(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        label: &str,
+    ) -> anyhow::Result<Self> {
+        let expected_len = (width * height * 4) as usize;
+        anyhow::ensure!(rgba.len() == expected_len, "rgba size mismatch");
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            ..Default::default()
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
         });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * width),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = build_sampler(
+            device,
+            label,
+            wgpu::AddressMode::Repeat,
+            wgpu::AddressMode::ClampToEdge,
+            wgpu::AddressMode::ClampToEdge,
+        );
         Ok(Self {
             texture,
             view,
@@ -180,16 +253,71 @@ impl Texture {
         );
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("solid sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
+        let sampler = build_sampler(
+            device,
+            "solid sampler",
+            wgpu::AddressMode::ClampToEdge,
+            wgpu::AddressMode::ClampToEdge,
+            wgpu::AddressMode::ClampToEdge,
+        );
+
+        Self {
+            texture,
+            view,
+            sampler,
+            width: 1,
+            height: 1,
+        }
+    }
+
+    pub fn solid_rgba_globe(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        rgba: [u8; 4],
+    ) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("solid globe texture"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
         });
+
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = build_sampler(
+            device,
+            "solid globe sampler",
+            wgpu::AddressMode::Repeat,
+            wgpu::AddressMode::ClampToEdge,
+            wgpu::AddressMode::ClampToEdge,
+        );
 
         Self {
             texture,
@@ -304,6 +432,12 @@ pub fn rgba_from_png(bytes: &[u8], size: u32) -> anyhow::Result<Vec<u8>> {
         image
     };
     Ok(resized.to_rgba8().into_raw())
+}
+
+pub fn rgba_from_png_with_size(bytes: &[u8]) -> anyhow::Result<(Vec<u8>, u32, u32)> {
+    let image = image::load_from_memory(bytes)?;
+    let (width, height) = image.dimensions();
+    Ok((image.to_rgba8().into_raw(), width, height))
 }
 
 pub fn rgba_from_svg(bytes: &[u8], size: u32) -> anyhow::Result<Vec<u8>> {
