@@ -43,6 +43,7 @@ impl GlobeVertex {
 pub fn build_sphere(radius: f32, segments: u32, rings: u32) -> (Vec<GlobeVertex>, Vec<u32>) {
     let segments = segments.max(3);
     let rings = rings.max(2);
+    let mercator_sin_max = 85.051_128_78_f32.to_radians().sin();
     let mut vertices = Vec::with_capacity(((segments + 1) * (rings + 1)) as usize);
     let mut indices = Vec::with_capacity((segments * rings * 6) as usize);
 
@@ -66,10 +67,10 @@ pub fn build_sphere(radius: f32, segments: u32, rings: u32) -> (Vec<GlobeVertex>
             let u_base = segment as f32 / segments as f32;
             let u = u_base + 0.5;
             let v_equirect = v;
+            let merc_sin = sin_lat.clamp(-mercator_sin_max, mercator_sin_max);
             let merc = 0.5
-                - 0.5
-                    * ((1.0 + sin_lat) / (1.0 - sin_lat)).ln()
-                    / std::f32::consts::PI;
+                - ((1.0 + merc_sin) / (1.0 - merc_sin)).ln()
+                    / (4.0 * std::f32::consts::PI);
             vertices.push(GlobeVertex {
                 position: position.to_array(),
                 normal: normal.to_array(),

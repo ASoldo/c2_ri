@@ -57,7 +57,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
   let base = textureSample(base_tex, base_sampler, input.uv_equirect);
   let base_rgb = base.rgb * overlay.base_opacity;
-  let pole_mask = 1.0 - step(0.996, abs(input.normal.y));
+  let pole_mask = 1.0 - step(0.9962721, abs(input.normal.y));
   var with_map = base_rgb;
   let map_opacity = overlay.map_opacity * pole_mask;
   if (map_opacity > 0.001) {
