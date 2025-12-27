@@ -39,16 +39,16 @@ pub struct TileRequest {
     pub provider: String,
     pub weather_field: String,
     pub sea_field: String,
+    pub target_size: u32,
 }
 
 pub struct TileFetcher {
     base_url: String,
-    layer_size: u32,
     sender: Sender<TileResult>,
 }
 
 impl TileFetcher {
-    pub fn new(layer_size: u32) -> (Self, Receiver<TileResult>) {
+    pub fn new() -> (Self, Receiver<TileResult>) {
         let (sender, receiver) = std::sync::mpsc::channel();
         let base_url = std::env::var("C2_NATIVE_TILE_BASE")
             .unwrap_or_else(|_| "https://c2.local".to_string())
@@ -57,7 +57,6 @@ impl TileFetcher {
         (
             Self {
                 base_url,
-                layer_size,
                 sender,
             },
             receiver,
@@ -73,27 +72,26 @@ impl TileFetcher {
     pub fn request(&self, kind: TileKind, request: TileRequest) {
         let base_url = self.base_url.clone();
         let sender = self.sender.clone();
-        let layer_size = self.layer_size;
         thread::spawn(move || {
             let result = match kind {
                 TileKind::Base => build_layer(
                     kind,
                     &request,
-                    layer_size,
+                    request.target_size,
                     &format!("{base_url}/ui/tiles/{}/{{z}}/{{x}}/{{y}}", request.provider),
                     None,
                 ),
                 TileKind::Weather => build_layer(
                     kind,
                     &request,
-                    layer_size,
+                    request.target_size,
                     &format!("{base_url}/ui/tiles/weather/{{z}}/{{x}}/{{y}}"),
                     Some(&request.weather_field),
                 ),
                 TileKind::Sea => build_layer(
                     kind,
                     &request,
-                    layer_size,
+                    request.target_size,
                     &format!("{base_url}/ui/tiles/sea/{{z}}/{{x}}/{{y}}"),
                     Some(&request.sea_field),
                 ),
@@ -111,7 +109,7 @@ fn build_layer(
     field: Option<&str>,
 ) -> TileResult {
     let tile_size = 256u32;
-    let actual_zoom = request.zoom.min(4);
+    let actual_zoom = request.zoom;
     let tiles = 1u32 << actual_zoom;
     let mosaic_size = tiles * tile_size;
     let mut mosaic = RgbaImage::new(mosaic_size, mosaic_size);
@@ -157,7 +155,12 @@ fn build_layer(
                     if let Ok(image) = image::load_from_memory(&bytes) {
                         let tile = image.to_rgba8();
                         let tile = if tile.width() != tile_size || tile.height() != tile_size {
-                            imageops::resize(&tile, tile_size, tile_size, imageops::FilterType::Triangle)
+                            imageops::resize(
+                                &tile,
+                                tile_size,
+                                tile_size,
+                                imageops::FilterType::CatmullRom,
+                            )
                         } else {
                             tile
                         };
@@ -171,7 +174,12 @@ fn build_layer(
     }
 
     let final_image = if mosaic_size != layer_size {
-        imageops::resize(&mosaic, layer_size, layer_size, imageops::FilterType::Triangle)
+        imageops::resize(
+            &mosaic,
+            layer_size,
+            layer_size,
+            imageops::FilterType::CatmullRom,
+        )
     } else {
         mosaic
     };

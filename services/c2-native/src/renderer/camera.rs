@@ -78,8 +78,9 @@ impl CameraController {
                 if self.dragging {
                     let dx = x - self.last_cursor.0;
                     let dy = y - self.last_cursor.1;
-                    camera.yaw += dx * self.rotate_sensitivity;
-                    camera.pitch = (camera.pitch + dy * self.rotate_sensitivity)
+                    let scale = self.rotation_scale(camera);
+                    camera.yaw += dx * self.rotate_sensitivity * scale;
+                    camera.pitch = (camera.pitch + dy * self.rotate_sensitivity * scale)
                         .clamp(-1.45, 1.45);
                 }
                 self.last_cursor = (x, y);
@@ -96,8 +97,9 @@ impl CameraController {
     }
 
     pub fn orbit_delta(&self, dx: f32, dy: f32, camera: &mut Camera) {
-        camera.yaw += dx * self.rotate_sensitivity;
-        camera.pitch = (camera.pitch + dy * self.rotate_sensitivity).clamp(-1.45, 1.45);
+        let scale = self.rotation_scale(camera);
+        camera.yaw += dx * self.rotate_sensitivity * scale;
+        camera.pitch = (camera.pitch + dy * self.rotate_sensitivity * scale).clamp(-1.45, 1.45);
     }
 
     pub fn zoom_delta(&self, scroll: f32, camera: &mut Camera) {
@@ -111,5 +113,11 @@ impl CameraController {
         let delta = (scroll * self.zoom_sensitivity).clamp(-0.25, 0.25);
         camera.distance = (camera.distance * (1.0 - delta))
             .clamp(self.min_distance, self.max_distance);
+    }
+
+    fn rotation_scale(&self, camera: &Camera) -> f32 {
+        let range = (self.max_distance - self.min_distance).max(1.0);
+        let t = ((camera.distance - self.min_distance) / range).clamp(0.15, 1.0);
+        t
     }
 }

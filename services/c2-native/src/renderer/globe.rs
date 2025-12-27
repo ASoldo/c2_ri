@@ -65,7 +65,7 @@ pub fn build_sphere(radius: f32, segments: u32, rings: u32) -> (Vec<GlobeVertex>
             let normal = position.normalize_or_zero();
             let sin_lat = (position.y / radius).clamp(-0.9999, 0.9999);
             let u_base = segment as f32 / segments as f32;
-            let u = 1.5 - u_base;
+            let u = 1.0 - u_base;
             let v_equirect = v;
             let merc_sin = sin_lat.clamp(-mercator_sin_max, mercator_sin_max);
             let merc = 0.5

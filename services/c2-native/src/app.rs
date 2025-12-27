@@ -8,7 +8,16 @@ use winit::window::{Window, WindowAttributes};
 use crate::ecs::{RenderInstance, WorldState, KIND_FLIGHT, KIND_SATELLITE, KIND_SHIP};
 use crate::renderer::{GlobeLayer, Renderer};
 use crate::tiles::{TileFetcher, TileKind, TileRequest, TileResult};
-use crate::ui::{OperationsState, UiState};
+use crate::ui::{tile_provider_config, OperationsState, TileProviderConfig, UiState};
+
+const DEFAULT_GLOBE_RADIUS: f32 = 120.0;
+const TILE_ZOOM_CAP: u8 = 6;
+const MAP_MAX_LAYER_SIZE: u32 = 8192;
+const OVERLAY_MAX_LAYER_SIZE: u32 = 4096;
+const WEATHER_MIN_ZOOM: u8 = 0;
+const WEATHER_MAX_ZOOM: u8 = 6;
+const SEA_MIN_ZOOM: u8 = 0;
+const SEA_MAX_ZOOM: u8 = 6;
 
 pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoop::new()?;
@@ -61,7 +70,9 @@ struct App {
     instances_dirty: bool,
     tile_fetcher: TileFetcher,
     tile_rx: std::sync::mpsc::Receiver<TileResult>,
-    tile_zoom: u8,
+    tile_zoom_map: u8,
+    tile_zoom_weather: u8,
+    tile_zoom_sea: u8,
     tile_request_id: u64,
     tile_pending: Option<TilePending>,
     tile_settings: TileSettings,
@@ -95,17 +106,59 @@ impl App {
             if overlay_settings.show_weather { 0.55 } else { 0.0 },
         );
         let tile_settings = TileSettings::from(&overlay_settings);
-        let (tile_fetcher, tile_rx) = TileFetcher::new(renderer.layer_size());
-        let tile_zoom = 3;
+        let (tile_fetcher, tile_rx) = TileFetcher::new();
+        let provider = tile_provider_config(&overlay_settings.tile_provider);
+        let tile_zoom_map = pick_tile_zoom(&renderer, provider, DEFAULT_GLOBE_RADIUS);
+        let map_target_size = target_layer_size(tile_zoom_map, MAP_MAX_LAYER_SIZE);
+        let tile_zoom_weather =
+            pick_overlay_zoom(&renderer, WEATHER_MIN_ZOOM, WEATHER_MAX_ZOOM, DEFAULT_GLOBE_RADIUS);
+        let weather_target_size = target_layer_size(tile_zoom_weather, OVERLAY_MAX_LAYER_SIZE);
+        let tile_zoom_sea =
+            pick_overlay_zoom(&renderer, SEA_MIN_ZOOM, SEA_MAX_ZOOM, DEFAULT_GLOBE_RADIUS);
+        let sea_target_size = target_layer_size(tile_zoom_sea, OVERLAY_MAX_LAYER_SIZE);
         let tile_request_id = 1;
-        tile_fetcher.request_all(TileRequest {
+        let mut pending = std::collections::HashSet::new();
+        let base_request = TileRequest {
             request_id: tile_request_id,
-            zoom: tile_zoom,
+            zoom: tile_zoom_map,
             provider: tile_settings.provider.clone(),
             weather_field: tile_settings.weather_field.clone(),
             sea_field: tile_settings.sea_field.clone(),
-        });
+            target_size: map_target_size,
+        };
+        pending.insert(TileKind::Base);
+        tile_fetcher.request(TileKind::Base, base_request);
 
+        if overlay_settings.show_weather {
+            pending.insert(TileKind::Weather);
+            tile_fetcher.request(
+                TileKind::Weather,
+                TileRequest {
+                    request_id: tile_request_id,
+                    zoom: tile_zoom_weather,
+                    provider: tile_settings.provider.clone(),
+                    weather_field: tile_settings.weather_field.clone(),
+                    sea_field: tile_settings.sea_field.clone(),
+                    target_size: weather_target_size,
+                },
+            );
+        }
+        if overlay_settings.show_sea {
+            pending.insert(TileKind::Sea);
+            tile_fetcher.request(
+                TileKind::Sea,
+                TileRequest {
+                    request_id: tile_request_id,
+                    zoom: tile_zoom_sea,
+                    provider: tile_settings.provider.clone(),
+                    weather_field: tile_settings.weather_field.clone(),
+                    sea_field: tile_settings.sea_field.clone(),
+                    target_size: sea_target_size,
+                },
+            );
+        }
+
+        let pending_total = pending.len();
         Ok(Self {
             window,
             renderer,
@@ -125,12 +178,14 @@ impl App {
             instances_dirty: true,
             tile_fetcher,
             tile_rx,
-            tile_zoom,
+            tile_zoom_map,
+            tile_zoom_weather,
+            tile_zoom_sea,
             tile_request_id,
             tile_pending: Some(TilePending {
                 request_id: tile_request_id,
-                zoom: tile_zoom,
-                pending: TileKind::all(),
+                pending,
+                total: pending_total,
             }),
             tile_settings,
         })
@@ -189,6 +244,18 @@ impl App {
         }
 
         let raw_input = self.egui_state.take_egui_input(window);
+        let tiles_loading = self
+            .tile_pending
+            .as_ref()
+            .map(|pending| {
+                if pending.total == 0 {
+                    0.0
+                } else {
+                    (pending.total.saturating_sub(pending.pending.len())) as f32
+                        / pending.total as f32
+                }
+            });
+
         let output = self.egui_ctx.run(raw_input, |ctx| {
             self.ui.show(
                 ctx,
@@ -196,6 +263,7 @@ impl App {
                 &self.renderer,
                 &self.filtered_instances,
                 self.globe_texture_id,
+                tiles_loading,
             );
         });
         self.egui_state
@@ -280,42 +348,84 @@ impl App {
             }
         }
 
-        let desired_zoom = zoom_for_distance(self.renderer.camera_distance());
+        let provider = tile_provider_config(&self.overlay_settings.tile_provider);
+        let desired_map_zoom = pick_tile_zoom(&self.renderer, provider, DEFAULT_GLOBE_RADIUS);
+        let desired_weather_zoom =
+            pick_overlay_zoom(&self.renderer, WEATHER_MIN_ZOOM, WEATHER_MAX_ZOOM, DEFAULT_GLOBE_RADIUS);
+        let desired_sea_zoom =
+            pick_overlay_zoom(&self.renderer, SEA_MIN_ZOOM, SEA_MAX_ZOOM, DEFAULT_GLOBE_RADIUS);
+        let desired_map_size = target_layer_size(desired_map_zoom, MAP_MAX_LAYER_SIZE);
+        let desired_weather_size = target_layer_size(desired_weather_zoom, OVERLAY_MAX_LAYER_SIZE);
+        let desired_sea_size = target_layer_size(desired_sea_zoom, OVERLAY_MAX_LAYER_SIZE);
         let new_tile_settings = TileSettings::from(&self.overlay_settings);
-        let tile_settings_changed =
-            new_tile_settings != self.tile_settings || desired_zoom != self.tile_zoom;
-        if tile_settings_changed {
+        let tile_settings_changed = new_tile_settings != self.tile_settings;
+        let map_request =
+            self.overlay_settings.show_map
+                && (tile_settings_changed || desired_map_zoom != self.tile_zoom_map);
+        let weather_request = self.overlay_settings.show_weather
+            && (tile_settings_changed || desired_weather_zoom != self.tile_zoom_weather);
+        let sea_request =
+            self.overlay_settings.show_sea
+                && (tile_settings_changed || desired_sea_zoom != self.tile_zoom_sea);
+
+        if map_request || weather_request || sea_request {
             self.tile_request_id += 1;
-            let request = TileRequest {
-                request_id: self.tile_request_id,
-                zoom: desired_zoom,
-                provider: new_tile_settings.provider.clone(),
-                weather_field: new_tile_settings.weather_field.clone(),
-                sea_field: new_tile_settings.sea_field.clone(),
-            };
             let mut pending = std::collections::HashSet::new();
-            if self.overlay_settings.show_map {
+            if map_request {
                 pending.insert(TileKind::Base);
-                self.tile_fetcher.request(TileKind::Base, request.clone());
+                self.tile_fetcher.request(
+                    TileKind::Base,
+                    TileRequest {
+                        request_id: self.tile_request_id,
+                        zoom: desired_map_zoom,
+                        provider: new_tile_settings.provider.clone(),
+                        weather_field: new_tile_settings.weather_field.clone(),
+                        sea_field: new_tile_settings.sea_field.clone(),
+                        target_size: desired_map_size,
+                    },
+                );
+                self.tile_zoom_map = desired_map_zoom;
             }
-            if self.overlay_settings.show_weather {
+            if weather_request {
                 pending.insert(TileKind::Weather);
-                self.tile_fetcher.request(TileKind::Weather, request.clone());
+                self.tile_fetcher.request(
+                    TileKind::Weather,
+                    TileRequest {
+                        request_id: self.tile_request_id,
+                        zoom: desired_weather_zoom,
+                        provider: new_tile_settings.provider.clone(),
+                        weather_field: new_tile_settings.weather_field.clone(),
+                        sea_field: new_tile_settings.sea_field.clone(),
+                        target_size: desired_weather_size,
+                    },
+                );
+                self.tile_zoom_weather = desired_weather_zoom;
             }
-            if self.overlay_settings.show_sea {
+            if sea_request {
                 pending.insert(TileKind::Sea);
-                self.tile_fetcher.request(TileKind::Sea, request.clone());
+                self.tile_fetcher.request(
+                    TileKind::Sea,
+                    TileRequest {
+                        request_id: self.tile_request_id,
+                        zoom: desired_sea_zoom,
+                        provider: new_tile_settings.provider.clone(),
+                        weather_field: new_tile_settings.weather_field.clone(),
+                        sea_field: new_tile_settings.sea_field.clone(),
+                        target_size: desired_sea_size,
+                    },
+                );
+                self.tile_zoom_sea = desired_sea_zoom;
             }
             if pending.is_empty() {
                 self.tile_pending = None;
             } else {
+                let total = pending.len();
                 self.tile_pending = Some(TilePending {
                     request_id: self.tile_request_id,
-                    zoom: desired_zoom,
                     pending,
+                    total,
                 });
             }
-            self.tile_zoom = desired_zoom;
             self.tile_settings = new_tile_settings;
         }
         if let Some(pending) = &mut self.tile_pending {
@@ -422,6 +532,9 @@ struct TileSettings {
     provider: String,
     weather_field: String,
     sea_field: String,
+    show_map: bool,
+    show_weather: bool,
+    show_sea: bool,
 }
 
 impl From<&OperationsState> for TileSettings {
@@ -430,14 +543,17 @@ impl From<&OperationsState> for TileSettings {
             provider: settings.tile_provider.clone(),
             weather_field: settings.weather_field.clone(),
             sea_field: settings.sea_field.clone(),
+            show_map: settings.show_map,
+            show_weather: settings.show_weather,
+            show_sea: settings.show_sea,
         }
     }
 }
 
 struct TilePending {
     request_id: u64,
-    zoom: u8,
     pending: std::collections::HashSet<TileKind>,
+    total: usize,
 }
 
 fn filter_instances(
@@ -457,14 +573,51 @@ fn filter_instances(
     }
 }
 
-fn zoom_for_distance(distance: f32) -> u8 {
-    if distance < 140.0 {
-        4
-    } else if distance < 190.0 {
-        3
-    } else if distance < 260.0 {
-        2
-    } else {
-        1
+fn pick_tile_zoom(renderer: &Renderer, provider: TileProviderConfig, globe_radius: f32) -> u8 {
+    pick_zoom(renderer, globe_radius, provider.min_zoom, provider.max_zoom, provider.zoom_bias)
+}
+
+fn pick_overlay_zoom(
+    renderer: &Renderer,
+    min_zoom: u8,
+    max_zoom: u8,
+    globe_radius: f32,
+) -> u8 {
+    pick_zoom(renderer, globe_radius, min_zoom, max_zoom, 0)
+}
+
+fn pick_zoom(
+    renderer: &Renderer,
+    globe_radius: f32,
+    min_zoom: u8,
+    max_zoom: u8,
+    zoom_bias: i8,
+) -> u8 {
+    let (width, height) = renderer.viewport_size();
+    if width == 0 || height == 0 {
+        return min_zoom;
     }
+    let distance = renderer.camera_distance();
+    let depth = (distance - globe_radius).max(1.0);
+    let fov_v = renderer.camera_fov_y();
+    let aspect = renderer.camera_aspect();
+    let fov_h = 2.0 * ((fov_v * 0.5).tan() * aspect).atan();
+    let visible_width = 2.0 * depth * (fov_h * 0.5).tan();
+    let visible_height = 2.0 * depth * (fov_v * 0.5).tan();
+    let deg_width = (visible_width / globe_radius) * (180.0 / std::f32::consts::PI);
+    let deg_height = (visible_height / globe_radius) * (180.0 / std::f32::consts::PI);
+    let tile_deg_width = deg_width * (256.0 / width as f32);
+    let tile_deg_height = deg_height * (256.0 / height as f32);
+    let tile_deg = tile_deg_width.max(tile_deg_height).max(0.0001);
+    let mut zoom = (360.0 / tile_deg).log2().round() as i32 + zoom_bias as i32;
+    let max_zoom = max_zoom.min(TILE_ZOOM_CAP) as i32;
+    let min_zoom = min_zoom as i32;
+    zoom = zoom.clamp(min_zoom, max_zoom);
+    zoom as u8
+}
+
+fn target_layer_size(zoom: u8, max_size: u32) -> u32 {
+    let tiles = 1u32 << zoom;
+    let mosaic = tiles.saturating_mul(256);
+    mosaic.clamp(512, max_size)
 }

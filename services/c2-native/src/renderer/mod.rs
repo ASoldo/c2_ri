@@ -139,7 +139,7 @@ impl Renderer {
         let (viewport_texture, viewport_view, viewport_depth, viewport_depth_view) =
             create_viewport_target(&device, surface_format, config.width, config.height);
 
-        let layer_size = 2048u32;
+        let layer_size = 4096u32;
         let (base_rgba, base_width, base_height) =
             rgba_from_png_with_size(include_bytes!("../../assets/earth_daymap.png"))
                 .unwrap_or_else(|_| {
@@ -592,6 +592,14 @@ impl Renderer {
 
     pub fn camera_distance(&self) -> f32 {
         self.camera.distance
+    }
+
+    pub fn camera_fov_y(&self) -> f32 {
+        self.camera.fov_y
+    }
+
+    pub fn camera_aspect(&self) -> f32 {
+        self.camera.aspect
     }
 
     pub fn viewport_view(&self) -> &wgpu::TextureView {

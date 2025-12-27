@@ -43,11 +43,44 @@ impl Default for OperationsState {
     }
 }
 
-const TILE_PROVIDERS: &[(&str, &str)] = &[
-    ("osm", "OSM Standard"),
-    ("hot", "OSM Humanitarian"),
-    ("opentopo", "OpenTopoMap"),
-    ("nasa", "NASA Blue Marble"),
+#[derive(Clone, Copy)]
+pub struct TileProviderConfig {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub min_zoom: u8,
+    pub max_zoom: u8,
+    pub zoom_bias: i8,
+}
+
+const TILE_PROVIDERS: &[TileProviderConfig] = &[
+    TileProviderConfig {
+        id: "osm",
+        name: "OSM Standard",
+        min_zoom: 0,
+        max_zoom: 19,
+        zoom_bias: 0,
+    },
+    TileProviderConfig {
+        id: "hot",
+        name: "OSM Humanitarian",
+        min_zoom: 0,
+        max_zoom: 19,
+        zoom_bias: 0,
+    },
+    TileProviderConfig {
+        id: "opentopo",
+        name: "OpenTopoMap",
+        min_zoom: 0,
+        max_zoom: 17,
+        zoom_bias: 0,
+    },
+    TileProviderConfig {
+        id: "nasa",
+        name: "NASA Blue Marble",
+        min_zoom: 0,
+        max_zoom: 8,
+        zoom_bias: 0,
+    },
 ];
 
 const WEATHER_FIELDS: &[&str] = &[
@@ -100,6 +133,7 @@ impl UiState {
         renderer: &Renderer,
         instances: &[RenderInstance],
         globe_texture_id: Option<egui::TextureId>,
+        tiles_loading: Option<f32>,
     ) {
         self.globe_rect = None;
         egui::TopBottomPanel::top("c2-topbar").show(ctx, |ui| {
@@ -130,6 +164,7 @@ impl UiState {
         });
 
         self.draw_edge_compass(ctx, renderer, instances);
+        self.draw_globe_overlay(ctx, tiles_loading);
     }
 
     pub fn globe_rect(&self) -> Option<egui::Rect> {
@@ -207,6 +242,38 @@ impl UiState {
             );
         }
     }
+
+    fn draw_globe_overlay(&self, ctx: &egui::Context, tiles_loading: Option<f32>) {
+        let Some(rect) = self.globe_rect else {
+            return;
+        };
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("globe-overlay"),
+        ));
+        let center = rect.center();
+        let cross = 10.0;
+        let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(220, 48, 48));
+        painter.line_segment(
+            [egui::pos2(center.x - cross, center.y), egui::pos2(center.x + cross, center.y)],
+            stroke,
+        );
+        painter.line_segment(
+            [egui::pos2(center.x, center.y - cross), egui::pos2(center.x, center.y + cross)],
+            stroke,
+        );
+
+        if let Some(progress) = tiles_loading {
+            let progress = progress.clamp(0.0, 1.0);
+            let bar_height = 3.0;
+            let bar_width = rect.width() * progress;
+            let bar_rect = egui::Rect::from_min_size(
+                egui::pos2(rect.left(), rect.top()),
+                egui::vec2(bar_width, bar_height),
+            );
+            painter.rect_filled(bar_rect, 0.0, egui::Color32::from_rgb(220, 48, 48));
+        }
+    }
 }
 
 fn egui_color_from_rgba(color: [f32; 4]) -> egui::Color32 {
@@ -231,9 +298,23 @@ fn kind_label(kind: u8) -> &'static str {
 fn provider_name(id: &str) -> String {
     TILE_PROVIDERS
         .iter()
-        .find(|(provider_id, _)| *provider_id == id)
-        .map(|(_, name)| (*name).to_string())
+        .find(|provider| provider.id == id)
+        .map(|provider| provider.name.to_string())
         .unwrap_or_else(|| id.to_string())
+}
+
+pub fn tile_provider_config(id: &str) -> TileProviderConfig {
+    TILE_PROVIDERS
+        .iter()
+        .find(|provider| provider.id == id)
+        .copied()
+        .unwrap_or(TileProviderConfig {
+            id: "custom",
+            name: "Custom",
+            min_zoom: 0,
+            max_zoom: 19,
+            zoom_bias: 0,
+        })
 }
 
 struct DockViewer<'a> {
@@ -297,11 +378,11 @@ impl TabViewer for DockViewer<'_> {
                 egui::ComboBox::from_id_salt("tile-provider")
                     .selected_text(provider_label)
                     .show_ui(ui, |ui| {
-                        for (id, name) in TILE_PROVIDERS {
+                        for provider in TILE_PROVIDERS {
                             ui.selectable_value(
                                 &mut self.operations.tile_provider,
-                                (*id).to_string(),
-                                *name,
+                                provider.id.to_string(),
+                                provider.name,
                             );
                         }
                     });
