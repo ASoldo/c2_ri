@@ -150,15 +150,15 @@ impl UiState {
     pub fn new() -> Self {
         let mut dock_state = DockState::new(vec![DockTab::Globe]);
         let root = NodeIndex::root();
-        let [left, globe] = dock_state
+        let [center, _left] = dock_state
             .main_surface_mut()
             .split_left(root, 0.28, vec![DockTab::Operations]);
+        let [center, _right] = dock_state
+            .main_surface_mut()
+            .split_right(center, 0.28, vec![DockTab::Entities]);
         dock_state
             .main_surface_mut()
-            .split_below(left, 0.35, vec![DockTab::Entities]);
-        dock_state
-            .main_surface_mut()
-            .split_right(globe, 0.28, vec![DockTab::Inspector]);
+            .split_below(center, 0.28, vec![DockTab::Inspector]);
         Self {
             dock_state,
             globe_rect: None,
