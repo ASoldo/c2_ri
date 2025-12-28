@@ -106,6 +106,13 @@ pub struct UiState {
     operations: OperationsState,
 }
 
+#[derive(Clone)]
+pub struct TileBar {
+    pub enabled: bool,
+    pub progress: Option<f32>,
+    pub color: egui::Color32,
+}
+
 impl UiState {
     pub fn new() -> Self {
         let mut dock_state = DockState::new(vec![DockTab::Globe]);
@@ -133,7 +140,7 @@ impl UiState {
         renderer: &Renderer,
         instances: &[RenderInstance],
         globe_texture_id: Option<egui::TextureId>,
-        tiles_loading: Option<f32>,
+        tile_bars: &[TileBar],
     ) {
         self.globe_rect = None;
         egui::TopBottomPanel::top("c2-topbar").show(ctx, |ui| {
@@ -164,7 +171,7 @@ impl UiState {
         });
 
         self.draw_edge_compass(ctx, renderer, instances);
-        self.draw_globe_overlay(ctx, tiles_loading);
+        self.draw_globe_overlay(ctx, tile_bars);
     }
 
     pub fn globe_rect(&self) -> Option<egui::Rect> {
@@ -243,7 +250,7 @@ impl UiState {
         }
     }
 
-    fn draw_globe_overlay(&self, ctx: &egui::Context, tiles_loading: Option<f32>) {
+    fn draw_globe_overlay(&self, ctx: &egui::Context, tile_bars: &[TileBar]) {
         let Some(rect) = self.globe_rect else {
             return;
         };
@@ -263,15 +270,32 @@ impl UiState {
             stroke,
         );
 
-        if let Some(progress) = tiles_loading {
-            let progress = progress.clamp(0.0, 1.0);
-            let bar_height = 3.0;
-            let bar_width = rect.width() * progress;
-            let bar_rect = egui::Rect::from_min_size(
-                egui::pos2(rect.left(), rect.top()),
-                egui::vec2(bar_width, bar_height),
+        let bar_height = 3.0;
+        let gap = 2.0;
+        let mut bar_top = rect.top();
+        for bar in tile_bars {
+            if !bar.enabled {
+                continue;
+            }
+            let background = egui::Rect::from_min_size(
+                egui::pos2(rect.left(), bar_top),
+                egui::vec2(rect.width(), bar_height),
             );
-            painter.rect_filled(bar_rect, 0.0, egui::Color32::from_rgb(220, 48, 48));
+            painter.rect_filled(
+                background,
+                0.0,
+                egui::Color32::from_white_alpha(28),
+            );
+            if let Some(progress) = bar.progress {
+                let progress = progress.clamp(0.0, 1.0);
+                let bar_width = rect.width() * progress;
+                let bar_rect = egui::Rect::from_min_size(
+                    egui::pos2(rect.left(), bar_top),
+                    egui::vec2(bar_width, bar_height),
+                );
+                painter.rect_filled(bar_rect, 0.0, bar.color);
+            }
+            bar_top += bar_height + gap;
         }
     }
 }

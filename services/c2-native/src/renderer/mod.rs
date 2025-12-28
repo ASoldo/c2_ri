@@ -6,6 +6,7 @@ mod texture;
 use wgpu::util::DeviceExt;
 
 use crate::ecs::RenderInstance;
+use crate::tiles::{TileKind, MAP_TILE_CAPACITY, SEA_TILE_CAPACITY, TILE_SIZE, WEATHER_TILE_CAPACITY};
 
 pub use camera::{Camera, CameraController};
 use globe::{build_sphere, GlobeVertex};
@@ -28,6 +29,62 @@ struct OverlayUniform {
     sea_opacity: f32,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct TileUniform {
+    radius: f32,
+    opacity: f32,
+    _pad: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct TileVertex {
+    uv: [f32; 2],
+}
+
+impl TileVertex {
+    fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<TileVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x2,
+            }],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct TileInstanceRaw {
+    pub bounds: [f32; 4],
+    pub layer: f32,
+}
+
+impl TileInstanceRaw {
+    fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<TileInstanceRaw>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 16,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32,
+                },
+            ],
+        }
+    }
+}
+
 pub struct Renderer {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -42,6 +99,11 @@ pub struct Renderer {
     globe_bind_group_layout: wgpu::BindGroupLayout,
     globe_bind_group: wgpu::BindGroup,
     marker_pipeline: wgpu::RenderPipeline,
+    tile_pipeline: wgpu::RenderPipeline,
+    tile_vertex_buffer: wgpu::Buffer,
+    tile_index_buffer: wgpu::Buffer,
+    tile_index_count: u32,
+    tile_bind_group_layout: wgpu::BindGroupLayout,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
@@ -59,6 +121,9 @@ pub struct Renderer {
     weather_texture: Texture,
     sea_texture: Texture,
     layer_size: u32,
+    map_tiles: TileLayerGpu,
+    weather_tiles: TileLayerGpu,
+    sea_tiles: TileLayerGpu,
     viewport_texture: wgpu::Texture,
     viewport_view: wgpu::TextureView,
     viewport_depth: wgpu::Texture,
@@ -388,6 +453,49 @@ impl Renderer {
             ],
         });
 
+        let tile_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("tile bind group layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+
         let globe_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("globe shader"),
             source: wgpu::ShaderSource::Wgsl(
@@ -423,7 +531,7 @@ impl Renderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode: None,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
@@ -481,7 +589,63 @@ impl Renderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
+                cull_mode: Some(wgpu::Face::Back),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let tile_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("tile shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("shaders/tiles.wgsl").into(),
+            ),
+        });
+        let tile_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("tile pipeline layout"),
+                bind_group_layouts: &[&tile_bind_group_layout],
+                immediate_size: 0,
+            });
+        let tile_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("tile pipeline"),
+            layout: Some(&tile_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &tile_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[TileVertex::layout(), TileInstanceRaw::layout()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &tile_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
@@ -527,6 +691,19 @@ impl Renderer {
             usage: wgpu::BufferUsages::INDEX,
         });
 
+        let (tile_vertices, tile_indices) = build_tile_mesh(16);
+        let tile_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("tile vertex buffer"),
+            contents: bytemuck::cast_slice(&tile_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let tile_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("tile index buffer"),
+            contents: bytemuck::cast_slice(&tile_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let tile_index_count = tile_indices.len() as u32;
+
         let instance_capacity = 1024usize;
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("instance buffer"),
@@ -534,6 +711,40 @@ impl Renderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+
+        let map_tiles = TileLayerGpu::new(
+            &device,
+            &queue,
+            &tile_bind_group_layout,
+            &camera_buffer,
+            TILE_SIZE,
+            MAP_TILE_CAPACITY as u32,
+            120.12,
+            0.85,
+            "map tiles",
+        )?;
+        let weather_tiles = TileLayerGpu::new(
+            &device,
+            &queue,
+            &tile_bind_group_layout,
+            &camera_buffer,
+            TILE_SIZE,
+            WEATHER_TILE_CAPACITY as u32,
+            120.28,
+            0.55,
+            "weather tiles",
+        )?;
+        let sea_tiles = TileLayerGpu::new(
+            &device,
+            &queue,
+            &tile_bind_group_layout,
+            &camera_buffer,
+            TILE_SIZE,
+            SEA_TILE_CAPACITY as u32,
+            120.2,
+            0.45,
+            "sea tiles",
+        )?;
 
         Ok(Self {
             device,
@@ -549,6 +760,11 @@ impl Renderer {
             globe_bind_group_layout,
             globe_bind_group,
             marker_pipeline,
+            tile_pipeline,
+            tile_vertex_buffer,
+            tile_index_buffer,
+            tile_index_count,
+            tile_bind_group_layout,
             vertex_buffer,
             index_buffer,
             num_indices: indices.len() as u32,
@@ -566,6 +782,9 @@ impl Renderer {
             weather_texture,
             sea_texture,
             layer_size,
+            map_tiles,
+            weather_tiles,
+            sea_tiles,
             viewport_texture,
             viewport_view,
             viewport_depth,
@@ -592,6 +811,10 @@ impl Renderer {
 
     pub fn camera_distance(&self) -> f32 {
         self.camera.distance
+    }
+
+    pub fn camera_position(&self) -> glam::Vec3 {
+        self.camera.position()
     }
 
     pub fn camera_fov_y(&self) -> f32 {
@@ -717,12 +940,32 @@ impl Renderer {
         pass.set_index_buffer(self.globe_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..self.globe_index_count, 0, 0..1);
 
+        self.render_tile_layer(&mut pass, &self.map_tiles);
+        self.render_tile_layer(&mut pass, &self.sea_tiles);
+        self.render_tile_layer(&mut pass, &self.weather_tiles);
+
         pass.set_pipeline(&self.marker_pipeline);
         pass.set_bind_group(0, &self.marker_bind_group, &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         pass.draw_indexed(0..self.num_indices, 0, 0..self.instance_count);
+    }
+
+    fn render_tile_layer<'a>(
+        &self,
+        pass: &mut wgpu::RenderPass<'a>,
+        layer: &'a TileLayerGpu,
+    ) {
+        if layer.instance_count == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.tile_pipeline);
+        pass.set_bind_group(0, &layer.bind_group, &[]);
+        pass.set_vertex_buffer(0, self.tile_vertex_buffer.slice(..));
+        pass.set_vertex_buffer(1, layer.instance_buffer.slice(..));
+        pass.set_index_buffer(self.tile_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        pass.draw_indexed(0..self.tile_index_count, 0, 0..layer.instance_count);
     }
 
     pub fn orbit_delta(&mut self, dx: f32, dy: f32) {
@@ -752,6 +995,90 @@ impl Renderer {
             self.layer_size = width;
             self.rebuild_globe_bind_group();
         }
+    }
+
+    pub fn update_tile_instances(&mut self, kind: TileKind, instances: &[TileInstanceRaw]) {
+        let device = self.device.clone();
+        let queue = self.queue.clone();
+        let layer = self.tile_layer_mut(kind);
+        let needed = instances.len().max(1).next_power_of_two();
+        if needed > layer.instance_capacity {
+            layer.instance_capacity = needed;
+            layer.instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("tile instance buffer"),
+                size: (layer.instance_capacity * std::mem::size_of::<TileInstanceRaw>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        layer.instances.clear();
+        layer.instances.extend_from_slice(instances);
+        if !layer.instances.is_empty() {
+            queue.write_buffer(
+                &layer.instance_buffer,
+                0,
+                bytemuck::cast_slice(&layer.instances),
+            );
+        }
+        layer.instance_count = layer.instances.len() as u32;
+    }
+
+    pub fn update_tile_texture(
+        &mut self,
+        kind: TileKind,
+        layer_index: u32,
+        width: u32,
+        height: u32,
+        data: &[u8],
+    ) {
+        let queue = self.queue.clone();
+        let layer = self.tile_layer_mut(kind);
+        let width = width.min(layer.atlas.width);
+        let height = height.min(layer.atlas.height);
+        if width == 0 || height == 0 {
+            return;
+        }
+        if layer_index >= layer.atlas.layers {
+            return;
+        }
+        let expected = (width * height * 4) as usize;
+        if data.len() < expected {
+            return;
+        }
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &layer.atlas.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: layer_index,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            &data[..expected],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * width),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    pub fn update_tile_opacity(&mut self, kind: TileKind, opacity: f32) {
+        let queue = self.queue.clone();
+        let layer = self.tile_layer_mut(kind);
+        let uniform = TileUniform {
+            radius: layer.radius,
+            opacity: opacity.clamp(0.0, 1.0),
+            _pad: [0.0; 2],
+        };
+        queue.write_buffer(&layer.uniform_buffer, 0, bytemuck::bytes_of(&uniform));
     }
 
     pub fn update_overlay(&self, base: f32, map: f32, sea: f32, weather: f32) {
@@ -813,6 +1140,22 @@ impl Renderer {
             ],
         });
     }
+
+    fn tile_layer_mut(&mut self, kind: TileKind) -> &mut TileLayerGpu {
+        match kind {
+            TileKind::Base => &mut self.map_tiles,
+            TileKind::Weather => &mut self.weather_tiles,
+            TileKind::Sea => &mut self.sea_tiles,
+        }
+    }
+
+    fn tile_layer(&self, kind: TileKind) -> &TileLayerGpu {
+        match kind {
+            TileKind::Base => &self.map_tiles,
+            TileKind::Weather => &self.weather_tiles,
+            TileKind::Sea => &self.sea_tiles,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -821,6 +1164,83 @@ pub enum GlobeLayer {
     Map,
     Weather,
     Sea,
+}
+
+struct TileLayerGpu {
+    atlas: TextureArray,
+    uniform_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    instance_buffer: wgpu::Buffer,
+    instance_capacity: usize,
+    instance_count: u32,
+    instances: Vec<TileInstanceRaw>,
+    radius: f32,
+}
+
+impl TileLayerGpu {
+    fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layout: &wgpu::BindGroupLayout,
+        camera_buffer: &wgpu::Buffer,
+        tile_size: u32,
+        capacity: u32,
+        radius: f32,
+        opacity: f32,
+        label: &str,
+    ) -> anyhow::Result<Self> {
+        let atlas = TextureArray::empty(device, queue, tile_size, tile_size, capacity, label)?;
+        let uniform = TileUniform {
+            radius,
+            opacity: opacity.clamp(0.0, 1.0),
+            _pad: [0.0; 2],
+        };
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{label} uniform")),
+            contents: bytemuck::bytes_of(&uniform),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&format!("{label} bind group")),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&atlas.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&atlas.sampler),
+                },
+            ],
+        });
+        let instance_capacity = 256usize;
+        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(&format!("{label} instance buffer")),
+            size: (instance_capacity * std::mem::size_of::<TileInstanceRaw>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        Ok(Self {
+            atlas,
+            uniform_buffer,
+            bind_group,
+            instance_buffer,
+            instance_capacity,
+            instance_count: 0,
+            instances: Vec::new(),
+            radius,
+        })
+    }
 }
 
 fn create_viewport_target(
@@ -867,4 +1287,33 @@ fn create_viewport_target(
     let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
 
     (color, color_view, depth, depth_view)
+}
+
+fn build_tile_mesh(segments: u32) -> (Vec<TileVertex>, Vec<u16>) {
+    let segments = segments.max(2);
+    let stride = segments + 1;
+    let mut vertices = Vec::with_capacity((stride * stride) as usize);
+    for y in 0..=segments {
+        let v = y as f32 / segments as f32;
+        for x in 0..=segments {
+            let u = x as f32 / segments as f32;
+            vertices.push(TileVertex { uv: [u, v] });
+        }
+    }
+    let mut indices = Vec::with_capacity((segments * segments * 6) as usize);
+    for y in 0..segments {
+        for x in 0..segments {
+            let i0 = (y * stride + x) as u16;
+            let i1 = i0 + 1;
+            let i2 = i0 + stride as u16;
+            let i3 = i2 + 1;
+            indices.push(i0);
+            indices.push(i1);
+            indices.push(i2);
+            indices.push(i1);
+            indices.push(i3);
+            indices.push(i2);
+        }
+    }
+    (vertices, indices)
 }

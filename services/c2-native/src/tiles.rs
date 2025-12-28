@@ -2,7 +2,12 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 
-use image::{imageops, GenericImage, RgbaImage};
+use image::imageops;
+
+pub const TILE_SIZE: u32 = 256;
+pub const MAP_TILE_CAPACITY: usize = 256;
+pub const WEATHER_TILE_CAPACITY: usize = 128;
+pub const SEA_TILE_CAPACITY: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TileKind {
@@ -11,108 +16,92 @@ pub enum TileKind {
     Sea,
 }
 
-impl TileKind {
-    pub fn all() -> std::collections::HashSet<TileKind> {
-        let mut set = std::collections::HashSet::new();
-        set.insert(TileKind::Base);
-        set.insert(TileKind::Weather);
-        set.insert(TileKind::Sea);
-        set
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TileKey {
+    pub zoom: u8,
+    pub x: u32,
+    pub y: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct TileRequest {
+    pub request_id: u64,
+    pub kind: TileKind,
+    pub key: TileKey,
+    pub provider: String,
+    pub weather_field: String,
+    pub sea_field: String,
+    pub layer_index: u32,
 }
 
 #[derive(Debug, Clone)]
 pub struct TileResult {
     pub request_id: u64,
     pub kind: TileKind,
-    pub zoom: u8,
+    pub key: TileKey,
+    pub layer_index: u32,
     pub width: u32,
     pub height: u32,
     pub data: Vec<u8>,
     pub valid: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct TileRequest {
-    pub request_id: u64,
-    pub zoom: u8,
-    pub provider: String,
-    pub weather_field: String,
-    pub sea_field: String,
-    pub target_size: u32,
-}
-
 pub struct TileFetcher {
-    base_url: String,
-    sender: Sender<TileResult>,
+    senders: Vec<Sender<TileRequest>>,
+    next: usize,
 }
 
 impl TileFetcher {
-    pub fn new() -> (Self, Receiver<TileResult>) {
-        let (sender, receiver) = std::sync::mpsc::channel();
+    pub fn new(worker_count: usize) -> (Self, Receiver<TileResult>) {
+        let worker_count = worker_count.max(1);
         let base_url = std::env::var("C2_NATIVE_TILE_BASE")
             .unwrap_or_else(|_| "https://c2.local".to_string())
             .trim_end_matches('/')
             .to_string();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let mut senders = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            let (job_tx, job_rx) = std::sync::mpsc::channel();
+            senders.push(job_tx);
+            spawn_worker(job_rx, result_tx.clone(), base_url.clone());
+        }
         (
             Self {
-                base_url,
-                sender,
+                senders,
+                next: 0,
             },
-            receiver,
+            result_rx,
         )
     }
 
-    pub fn request_all(&self, request: TileRequest) {
-        self.request(TileKind::Base, request.clone());
-        self.request(TileKind::Weather, request.clone());
-        self.request(TileKind::Sea, request);
-    }
-
-    pub fn request(&self, kind: TileKind, request: TileRequest) {
-        let base_url = self.base_url.clone();
-        let sender = self.sender.clone();
-        thread::spawn(move || {
-            let result = match kind {
-                TileKind::Base => build_layer(
-                    kind,
-                    &request,
-                    request.target_size,
-                    &format!("{base_url}/ui/tiles/{}/{{z}}/{{x}}/{{y}}", request.provider),
-                    None,
-                ),
-                TileKind::Weather => build_layer(
-                    kind,
-                    &request,
-                    request.target_size,
-                    &format!("{base_url}/ui/tiles/weather/{{z}}/{{x}}/{{y}}"),
-                    Some(&request.weather_field),
-                ),
-                TileKind::Sea => build_layer(
-                    kind,
-                    &request,
-                    request.target_size,
-                    &format!("{base_url}/ui/tiles/sea/{{z}}/{{x}}/{{y}}"),
-                    Some(&request.sea_field),
-                ),
-            };
-            let _ = sender.send(result);
-        });
+    pub fn request(&mut self, request: TileRequest) {
+        if self.senders.is_empty() {
+            return;
+        }
+        let idx = self.next % self.senders.len();
+        self.next = self.next.wrapping_add(1);
+        let _ = self.senders[idx].send(request);
     }
 }
 
-fn build_layer(
-    kind: TileKind,
-    request: &TileRequest,
-    layer_size: u32,
-    template: &str,
-    field: Option<&str>,
-) -> TileResult {
-    let tile_size = 256u32;
-    let actual_zoom = request.zoom;
-    let tiles = 1u32 << actual_zoom;
-    let mosaic_size = tiles * tile_size;
-    let mut mosaic = RgbaImage::new(mosaic_size, mosaic_size);
+fn spawn_worker(receiver: Receiver<TileRequest>, sender: Sender<TileResult>, base_url: String) {
+    thread::spawn(move || {
+        while let Ok(request) = receiver.recv() {
+            let result = fetch_tile(&request, &base_url);
+            let _ = sender.send(result);
+        }
+    });
+}
+
+fn fetch_tile(request: &TileRequest, base_url: &str) -> TileResult {
+    let template = match request.kind {
+        TileKind::Base => format!(
+            "{}/ui/tiles/{}/{{z}}/{{x}}/{{y}}",
+            base_url, request.provider
+        ),
+        TileKind::Weather => format!("{}/ui/tiles/weather/{{z}}/{{x}}/{{y}}", base_url),
+        TileKind::Sea => format!("{}/ui/tiles/sea/{{z}}/{{x}}/{{y}}", base_url),
+    };
     let allow_insecure = std::env::var("C2_NATIVE_TILE_INSECURE")
         .ok()
         .as_deref()
@@ -127,70 +116,63 @@ fn build_layer(
         Err(_) => {
             return TileResult {
                 request_id: request.request_id,
-                kind,
-                zoom: request.zoom,
-                width: layer_size,
-                height: layer_size,
-                data: vec![0; (layer_size * layer_size * 4) as usize],
+                kind: request.kind,
+                key: request.key,
+                layer_index: request.layer_index,
+                width: TILE_SIZE,
+                height: TILE_SIZE,
+                data: vec![0; (TILE_SIZE * TILE_SIZE * 4) as usize],
                 valid: false,
             };
         }
     };
 
-    let mut tiles_loaded = 0u32;
-    for y in 0..tiles {
-        for x in 0..tiles {
-            let mut url = template
-                .replace("{z}", &actual_zoom.to_string())
-                .replace("{x}", &x.to_string())
-                .replace("{y}", &y.to_string());
-            if let Some(field) = field {
-                let separator = if url.contains('?') { '&' } else { '?' };
-                url.push(separator);
-                url.push_str("field=");
-                url.push_str(field);
-            }
-            if let Ok(response) = client.get(&url).send() {
-                if let Ok(bytes) = response.bytes() {
-                    if let Ok(image) = image::load_from_memory(&bytes) {
-                        let tile = image.to_rgba8();
-                        let tile = if tile.width() != tile_size || tile.height() != tile_size {
-                            imageops::resize(
-                                &tile,
-                                tile_size,
-                                tile_size,
-                                imageops::FilterType::CatmullRom,
-                            )
-                        } else {
-                            tile
-                        };
-                        if mosaic.copy_from(&tile, x * tile_size, y * tile_size).is_ok() {
-                            tiles_loaded += 1;
-                        }
-                    }
-                }
+    let mut url = template
+        .replace("{z}", &request.key.zoom.to_string())
+        .replace("{x}", &request.key.x.to_string())
+        .replace("{y}", &request.key.y.to_string());
+    match request.kind {
+        TileKind::Weather => {
+            url.push_str("?field=");
+            url.push_str(&request.weather_field);
+        }
+        TileKind::Sea => {
+            url.push_str("?field=");
+            url.push_str(&request.sea_field);
+        }
+        TileKind::Base => {}
+    }
+
+    let mut valid = false;
+    let mut data = vec![0; (TILE_SIZE * TILE_SIZE * 4) as usize];
+    if let Ok(response) = client.get(&url).send() {
+        if let Ok(bytes) = response.bytes() {
+            if let Ok(image) = image::load_from_memory(&bytes) {
+                let tile = image.to_rgba8();
+                let tile = if tile.width() != TILE_SIZE || tile.height() != TILE_SIZE {
+                    imageops::resize(
+                        &tile,
+                        TILE_SIZE,
+                        TILE_SIZE,
+                        imageops::FilterType::CatmullRom,
+                    )
+                } else {
+                    tile
+                };
+                data.copy_from_slice(tile.as_raw());
+                valid = true;
             }
         }
     }
 
-    let final_image = if mosaic_size != layer_size {
-        imageops::resize(
-            &mosaic,
-            layer_size,
-            layer_size,
-            imageops::FilterType::CatmullRom,
-        )
-    } else {
-        mosaic
-    };
-
     TileResult {
         request_id: request.request_id,
-        kind,
-        zoom: actual_zoom,
-        width: layer_size,
-        height: layer_size,
-        data: final_image.into_raw(),
-        valid: tiles_loaded > 0,
+        kind: request.kind,
+        key: request.key,
+        layer_index: request.layer_index,
+        width: TILE_SIZE,
+        height: TILE_SIZE,
+        data,
+        valid,
     }
 }
