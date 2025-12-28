@@ -6,7 +6,7 @@ use std::time::Instant;
 use glam::Vec3;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{Event, WindowEvent};
-use winit::event_loop::{ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::ecs::{RenderInstance, WorldState, KIND_FLIGHT, KIND_SATELLITE, KIND_SHIP};
@@ -40,21 +40,6 @@ pub fn run() -> anyhow::Result<()> {
     )?);
     let mut app = App::new(window.clone())?;
 
-    let detached_specs = [
-        (DockTab::Operations, "Operations", (340, 720)),
-        (DockTab::Entities, "Entities", (340, 720)),
-        (DockTab::Inspector, "Inspector", (520, 360)),
-    ];
-    for (tab, title, size) in detached_specs {
-        let window = Arc::new(event_loop.create_window(
-            WindowAttributes::default()
-                .with_title(title)
-                .with_inner_size(PhysicalSize::new(size.0, size.1))
-                .with_visible(false),
-        )?);
-        app.register_detached_window(tab, window)?;
-    }
-
     event_loop.run(move |event, target| {
         target.set_control_flow(ControlFlow::Poll);
         match event {
@@ -64,6 +49,7 @@ pub fn run() -> anyhow::Result<()> {
                         if let Err(error) = app.update_and_render() {
                             eprintln!("render error: {error:?}");
                         }
+                        app.process_ui_requests(target);
                         return;
                     }
                     if !app.handle_window_event(&event) {
@@ -75,7 +61,7 @@ pub fn run() -> anyhow::Result<()> {
                             eprintln!("detach render error: {error:?}");
                         }
                         app.sync_operations_settings();
-                        app.process_ui_requests();
+                        app.process_ui_requests(target);
                         return;
                     }
                     app.handle_detached_window_event(window_id, &event);
@@ -130,7 +116,6 @@ struct DetachedWindow {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     size: (u32, u32),
-    visible: bool,
     last_pos: Option<PhysicalPosition<i32>>,
     user_moved: bool,
 }
@@ -203,7 +188,11 @@ impl App {
         })
     }
 
-    fn register_detached_window(&mut self, tab: DockTab, window: Arc<Window>) -> anyhow::Result<()> {
+    fn register_detached_window(
+        &mut self,
+        tab: DockTab,
+        window: Arc<Window>,
+    ) -> anyhow::Result<WindowId> {
         let viewport_id = egui::ViewportId::from_hash_of((tab, "detached"));
         let egui_ctx = egui::Context::default();
         egui_ctx.set_style(self.egui_ctx.style().clone());
@@ -235,12 +224,11 @@ impl App {
                 surface,
                 config,
                 size,
-                visible: false,
                 last_pos: None,
                 user_moved: false,
             },
         );
-        Ok(())
+        Ok(window_id)
     }
 
     fn is_detached_window(&self, window_id: WindowId) -> bool {
@@ -250,9 +238,7 @@ impl App {
     fn request_redraws(&self) {
         self.window.request_redraw();
         for window in self.detached_windows.values() {
-            if window.visible {
-                window.window.request_redraw();
-            }
+            window.window.request_redraw();
         }
     }
 
@@ -261,9 +247,6 @@ impl App {
             let Some(detached) = self.detached_windows.get_mut(&window_id) else {
                 return;
             };
-            if !detached.visible {
-                return;
-            }
             let window = Arc::clone(&detached.window);
             let _ = detached.egui_state.on_window_event(window.as_ref(), event);
             let mut close_requested = false;
@@ -316,9 +299,6 @@ impl App {
         let Some(detached) = self.detached_windows.get_mut(&window_id) else {
             return Ok(());
         };
-        if !detached.visible {
-            return Ok(());
-        }
         let window = detached.window.as_ref();
         let raw_input = detached.egui_state.take_egui_input(window);
         let output = detached.egui_ctx.run(raw_input, |ctx| {
@@ -418,57 +398,49 @@ impl App {
         Ok(())
     }
 
-    fn detach_tab(&mut self, tab: DockTab) {
-        let Some(window_id) = self.detached_tabs.get(&tab).copied() else {
-            return;
-        };
-        let (window, should_position) = {
-            let Some(detached) = self.detached_windows.get_mut(&window_id) else {
-                return;
-            };
-            if detached.visible {
-                return;
-            }
-            let should_position = detached.last_pos.is_none();
-            detached.visible = true;
-            detached.user_moved = false;
-            detached.last_pos = None;
-            (Arc::clone(&detached.window), should_position)
-        };
-        if should_position {
-            self.position_detached_window(tab, window.as_ref());
+    fn detach_tab(&mut self, target: &ActiveEventLoop, tab: DockTab) -> anyhow::Result<()> {
+        if tab == DockTab::Globe {
+            return Ok(());
         }
-        window.set_minimized(false);
-        window.set_visible(true);
-        window.request_redraw();
-        self.ui.set_tab_docked(tab, false);
-    }
-
-    fn attach_tab(&mut self, tab: DockTab) {
-        let Some(window_id) = self.detached_tabs.get(&tab).copied() else {
-            return;
-        };
-        let window = {
-            let Some(detached) = self.detached_windows.get_mut(&window_id) else {
-                return;
-            };
-            if !detached.visible {
-                return;
-            }
-            detached.visible = false;
+        if self.detached_tabs.contains_key(&tab) {
+            return Ok(());
+        }
+        let (title, size) = Self::detached_window_spec(tab);
+        let window = Arc::new(target.create_window(
+            WindowAttributes::default()
+                .with_title(title)
+                .with_inner_size(size),
+        )?);
+        let window_id = self.register_detached_window(tab, window)?;
+        let window = if let Some(detached) = self.detached_windows.get_mut(&window_id) {
             detached.user_moved = false;
             detached.last_pos = None;
             Arc::clone(&detached.window)
+        } else {
+            return Ok(());
         };
-        window.set_visible(false);
-        window.set_minimized(true);
-        self.position_hidden_window(window.as_ref());
+        self.position_detached_window(tab, window.as_ref());
+        window.request_redraw();
+        self.ui.set_tab_docked(tab, false);
+        Ok(())
+    }
+
+    fn attach_tab(&mut self, tab: DockTab) {
+        let Some(window_id) = self.detached_tabs.remove(&tab) else {
+            return;
+        };
+        if let Some(detached) = self.detached_windows.remove(&window_id) {
+            detached.window.set_visible(false);
+            self.position_hidden_window(detached.window.as_ref());
+        }
         self.ui.set_tab_docked(tab, true);
     }
 
-    fn process_ui_requests(&mut self) {
+    fn process_ui_requests(&mut self, target: &ActiveEventLoop) {
         for tab in self.ui.take_detach_requests() {
-            self.detach_tab(tab);
+            if let Err(error) = self.detach_tab(target, tab) {
+                eprintln!("detach failed: {error:?}");
+            }
         }
         for tab in self.ui.take_attach_requests() {
             self.attach_tab(tab);
@@ -517,6 +489,15 @@ impl App {
         let within_y = det_center_y >= main_pos.y
             && det_center_y <= main_pos.y + main_size.height as i32;
         within_x && within_y
+    }
+
+    fn detached_window_spec(tab: DockTab) -> (&'static str, PhysicalSize<u32>) {
+        match tab {
+            DockTab::Operations => ("Operations", PhysicalSize::new(340, 720)),
+            DockTab::Entities => ("Entities", PhysicalSize::new(340, 720)),
+            DockTab::Inspector => ("Inspector", PhysicalSize::new(520, 360)),
+            DockTab::Globe => ("Globe", PhysicalSize::new(520, 360)),
+        }
     }
 
     fn position_detached_window(&self, tab: DockTab, window: &Window) {
@@ -691,7 +672,6 @@ impl App {
         }
 
         self.sync_operations_settings();
-        self.process_ui_requests();
 
         for (id, image_delta) in &output.textures_delta.set {
             self.egui_renderer
