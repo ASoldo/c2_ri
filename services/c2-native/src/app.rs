@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -12,7 +13,9 @@ use crate::tiles::{
     TileFetcher, TileKey, TileKind, TileRequest, TileResult, MAP_TILE_CAPACITY,
     SEA_TILE_CAPACITY, TILE_SIZE, WEATHER_TILE_CAPACITY,
 };
-use crate::ui::{tile_provider_config, OperationsState, TileProviderConfig, UiState};
+use crate::ui::{
+    tile_provider_config, Diagnostics, OperationsState, PerfSnapshot, TileProviderConfig, UiState,
+};
 
 const DEFAULT_GLOBE_RADIUS: f32 = 120.0;
 const TILE_ZOOM_CAP: u8 = 6;
@@ -24,6 +27,8 @@ const MAP_UPDATE_INTERVAL_MS: u64 = 220;
 const WEATHER_UPDATE_INTERVAL_MS: u64 = 900;
 const SEA_UPDATE_INTERVAL_MS: u64 = 1100;
 const MAX_TILE_UPLOADS_PER_FRAME: usize = 24;
+const TILE_STALL_THRESHOLD_MS: f32 = 8000.0;
+const PERF_SAMPLE_COUNT: usize = 120;
 
 pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoop::new()?;
@@ -80,6 +85,8 @@ struct App {
     tile_rx: std::sync::mpsc::Receiver<TileResult>,
     tile_request_id: u64,
     tile_layers: TileLayers,
+    diagnostics: Diagnostics,
+    perf_stats: PerfStats,
 }
 
 impl App {
@@ -141,6 +148,8 @@ impl App {
             tile_rx,
             tile_request_id,
             tile_layers,
+            diagnostics: Diagnostics::default(),
+            perf_stats: PerfStats::new(),
         })
     }
 
@@ -167,10 +176,13 @@ impl App {
     fn update_and_render(&mut self) -> anyhow::Result<()> {
         let window = self.window.as_ref();
         let now = Instant::now();
+        let frame_start = now;
         let delta = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
+        let fps = if delta > 0.0 { 1.0 / delta } else { 0.0 };
 
         let mut world_updated = false;
+        let world_start = Instant::now();
         self.world_accum += delta.max(0.0);
         if self.world_accum >= self.world_update_interval {
             let steps = (self.world_accum / self.world_update_interval)
@@ -203,7 +215,9 @@ impl App {
             self.renderer.update_instances(&self.render_instances);
             self.cull_dirty = false;
         }
+        let world_ms = world_start.elapsed().as_secs_f32() * 1000.0;
 
+        let tile_start = Instant::now();
         for result in self
             .tile_rx
             .try_iter()
@@ -220,7 +234,10 @@ impl App {
             &mut self.tile_request_id,
         );
         let tile_bars = self.tile_layers.progress_bars();
+        self.tile_layers.update_diagnostics(&mut self.diagnostics, now);
+        let tile_ms = tile_start.elapsed().as_secs_f32() * 1000.0;
 
+        let ui_start = Instant::now();
         let raw_input = self.egui_state.take_egui_input(window);
 
         let output = self.egui_ctx.run(raw_input, |ctx| {
@@ -231,11 +248,13 @@ impl App {
                 &self.filtered_instances,
                 self.globe_texture_id,
                 &tile_bars,
+                &self.diagnostics,
             );
         });
         self.egui_state
             .handle_platform_output(window, output.platform_output);
         let paint_jobs = self.egui_ctx.tessellate(output.shapes, output.pixels_per_point);
+        let ui_ms = ui_start.elapsed().as_secs_f32() * 1000.0;
 
         if let Some(rect) = self.ui.globe_rect() {
             self.egui_ctx.input(|input| {
@@ -323,6 +342,7 @@ impl App {
             }
         }
 
+        let render_start = Instant::now();
         let mut encoder = self
             .renderer
             .device
@@ -387,13 +407,92 @@ impl App {
         egui_cmds.push(encoder.finish());
         self.renderer.queue.submit(egui_cmds);
         surface_texture.present();
+        let render_ms = render_start.elapsed().as_secs_f32() * 1000.0;
 
         for id in &output.textures_delta.free {
             self.egui_renderer.free_texture(id);
         }
 
+        let frame_ms = frame_start.elapsed().as_secs_f32() * 1000.0;
+        self.diagnostics.perf = self.perf_stats.update(
+            frame_ms,
+            world_ms,
+            tile_ms,
+            ui_ms,
+            render_ms,
+            fps,
+        );
+
         Ok(())
     }
+}
+
+struct PerfStats {
+    samples: Vec<f32>,
+    scratch: Vec<f32>,
+    index: usize,
+    count: usize,
+    snapshot: PerfSnapshot,
+}
+
+impl PerfStats {
+    fn new() -> Self {
+        Self {
+            samples: vec![0.0; PERF_SAMPLE_COUNT],
+            scratch: Vec::with_capacity(PERF_SAMPLE_COUNT),
+            index: 0,
+            count: 0,
+            snapshot: PerfSnapshot::default(),
+        }
+    }
+
+    fn update(
+        &mut self,
+        frame_ms: f32,
+        world_ms: f32,
+        tile_ms: f32,
+        ui_ms: f32,
+        render_ms: f32,
+        fps: f32,
+    ) -> PerfSnapshot {
+        if !frame_ms.is_finite() {
+            return self.snapshot;
+        }
+        if !self.samples.is_empty() {
+            self.samples[self.index] = frame_ms;
+            self.index = (self.index + 1) % self.samples.len();
+            self.count = (self.count + 1).min(self.samples.len());
+        }
+
+        self.scratch.clear();
+        if self.count > 0 {
+            self.scratch.extend_from_slice(&self.samples[..self.count]);
+            self.scratch
+                .sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+        }
+        let p95 = percentile(&self.scratch, 0.95);
+        let p99 = percentile(&self.scratch, 0.99);
+
+        self.snapshot = PerfSnapshot {
+            fps,
+            frame_ms,
+            frame_p95_ms: p95,
+            frame_p99_ms: p99,
+            world_ms,
+            tile_ms,
+            ui_ms,
+            render_ms,
+        };
+        self.snapshot
+    }
+}
+
+fn percentile(sorted: &[f32], pct: f32) -> f32 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    let idx = ((sorted.len() - 1) as f32 * pct.clamp(0.0, 1.0)).round() as usize;
+    sorted[idx.min(sorted.len() - 1)]
 }
 
 #[derive(Clone)]
@@ -528,6 +627,12 @@ impl TileLayers {
                 .progress_bar(egui::Color32::from_rgb(255, 164, 72)),
         ]
     }
+
+    fn update_diagnostics(&self, diagnostics: &mut Diagnostics, now: Instant) {
+        diagnostics.map = self.map.stats(now);
+        diagnostics.weather = self.weather.stats(now);
+        diagnostics.sea = self.sea.stats(now);
+    }
 }
 
 #[derive(Clone)]
@@ -542,6 +647,7 @@ struct TileLayerState {
     max_cache: usize,
     update_interval: std::time::Duration,
     last_update: Instant,
+    last_activity: Instant,
     last_direction: Vec3,
     last_distance: f32,
     tiles: std::collections::HashMap<TileKey, TileEntry>,
@@ -574,6 +680,7 @@ impl TileLayerState {
             max_cache,
             update_interval: std::time::Duration::from_millis(update_interval_ms),
             last_update: Instant::now(),
+            last_activity: Instant::now(),
             last_direction: Vec3::ZERO,
             last_distance: 0.0,
             tiles: std::collections::HashMap::new(),
@@ -592,6 +699,7 @@ impl TileLayerState {
             return false;
         }
         self.enabled = enabled;
+        self.last_activity = Instant::now();
         if !enabled {
             self.pending.clear();
             self.desired.clear();
@@ -615,6 +723,7 @@ impl TileLayerState {
         self.progress_loaded = 0;
         self.force_update = true;
         self.zoom = 0;
+        self.last_activity = Instant::now();
     }
 
     fn update(
@@ -701,6 +810,7 @@ impl TileLayerState {
         self.progress_total = desired.len();
         self.progress_loaded = 0;
         let mut instances = Vec::new();
+        let mut sent_any = false;
 
         for key in desired.iter() {
             if let Some(entry) = self.tiles.get_mut(key) {
@@ -733,9 +843,14 @@ impl TileLayerState {
             };
             if fetcher.request(request) {
                 self.pending.insert(*key, layer_index);
+                sent_any = true;
             } else {
                 self.atlas.free(layer_index);
             }
+        }
+
+        if sent_any {
+            self.last_activity = now;
         }
 
         renderer.update_tile_instances(self.kind, &instances);
@@ -745,6 +860,7 @@ impl TileLayerState {
         if result.request_id != self.request_id {
             return;
         }
+        self.last_activity = now;
         let layer_index = match self.pending.remove(&result.key) {
             Some(index) => index,
             None => result.layer_index,
@@ -784,6 +900,28 @@ impl TileLayerState {
             enabled: has_work,
             progress,
             color,
+        }
+    }
+
+    fn stats(&self, now: Instant) -> crate::ui::TileLayerStats {
+        let last_activity_ms = if self.enabled {
+            now.duration_since(self.last_activity).as_secs_f32() * 1000.0
+        } else {
+            0.0
+        };
+        let stalled = self.enabled
+            && self.pending.len() > 0
+            && last_activity_ms > TILE_STALL_THRESHOLD_MS;
+        crate::ui::TileLayerStats {
+            enabled: self.enabled,
+            zoom: self.zoom,
+            desired: self.desired.len(),
+            loaded: self.progress_loaded,
+            pending: self.pending.len(),
+            cache_used: self.tiles.len() + self.pending.len(),
+            cache_cap: self.max_cache,
+            last_activity_ms,
+            stalled,
         }
     }
 

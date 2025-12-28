@@ -113,6 +113,39 @@ pub struct TileBar {
     pub color: egui::Color32,
 }
 
+#[derive(Clone, Copy, Default)]
+pub struct PerfSnapshot {
+    pub fps: f32,
+    pub frame_ms: f32,
+    pub frame_p95_ms: f32,
+    pub frame_p99_ms: f32,
+    pub world_ms: f32,
+    pub tile_ms: f32,
+    pub ui_ms: f32,
+    pub render_ms: f32,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct TileLayerStats {
+    pub enabled: bool,
+    pub zoom: u8,
+    pub desired: usize,
+    pub loaded: usize,
+    pub pending: usize,
+    pub cache_used: usize,
+    pub cache_cap: usize,
+    pub last_activity_ms: f32,
+    pub stalled: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct Diagnostics {
+    pub perf: PerfSnapshot,
+    pub map: TileLayerStats,
+    pub weather: TileLayerStats,
+    pub sea: TileLayerStats,
+}
+
 impl UiState {
     pub fn new() -> Self {
         let mut dock_state = DockState::new(vec![DockTab::Globe]);
@@ -141,6 +174,7 @@ impl UiState {
         instances: &[RenderInstance],
         globe_texture_id: Option<egui::TextureId>,
         tile_bars: &[TileBar],
+        diagnostics: &Diagnostics,
     ) {
         self.globe_rect = None;
         egui::TopBottomPanel::top("c2-topbar").show(ctx, |ui| {
@@ -163,6 +197,7 @@ impl UiState {
                 globe_rect: &mut self.globe_rect,
                 globe_texture_id,
                 operations: &mut self.operations,
+                diagnostics,
             };
             let style = Style::from_egui(ui.style());
             DockArea::new(&mut self.dock_state)
@@ -324,6 +359,26 @@ fn kind_label(kind: u8) -> &'static str {
     }
 }
 
+fn draw_tile_stats(ui: &mut egui::Ui, label: &str, stats: TileLayerStats) {
+    let status = if !stats.enabled {
+        "off"
+    } else if stats.stalled {
+        "stall"
+    } else {
+        "ok"
+    };
+    ui.label(format!(
+        "{label}: zoom {}  loaded {}/{}  pending {}  cache {}/{}  {status} {:.0} ms",
+        stats.zoom,
+        stats.loaded,
+        stats.desired,
+        stats.pending,
+        stats.cache_used,
+        stats.cache_cap,
+        stats.last_activity_ms
+    ));
+}
+
 fn provider_name(id: &str) -> String {
     TILE_PROVIDERS
         .iter()
@@ -352,6 +407,7 @@ struct DockViewer<'a> {
     globe_rect: &'a mut Option<egui::Rect>,
     globe_texture_id: Option<egui::TextureId>,
     operations: &'a mut OperationsState,
+    diagnostics: &'a Diagnostics,
 }
 
 impl TabViewer for DockViewer<'_> {
@@ -456,6 +512,22 @@ impl TabViewer for DockViewer<'_> {
                     self.renderer.size().0,
                     self.renderer.size().1
                 ));
+                let perf = self.diagnostics.perf;
+                ui.add_space(4.0);
+                ui.label(format!(
+                    "Frame: {:.1} ms (p95 {:.1} / p99 {:.1})  FPS {:.1}",
+                    perf.frame_ms, perf.frame_p95_ms, perf.frame_p99_ms, perf.fps
+                ));
+                ui.label(format!(
+                    "World: {:.1} ms  Tiles: {:.1} ms  UI: {:.1} ms  Render: {:.1} ms",
+                    perf.world_ms, perf.tile_ms, perf.ui_ms, perf.render_ms
+                ));
+                ui.add_space(8.0);
+                ui.separator();
+                ui.label("Tile cache");
+                draw_tile_stats(ui, "Map", self.diagnostics.map);
+                draw_tile_stats(ui, "Weather", self.diagnostics.weather);
+                draw_tile_stats(ui, "Sea", self.diagnostics.sea);
                 ui.label("Selection details will be shown here.");
             }
         }
