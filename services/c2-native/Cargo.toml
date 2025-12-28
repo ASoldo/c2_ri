@@ -12,6 +12,7 @@ egui = "0.33.3"
 egui-wgpu = "0.33.3"
 egui-winit = "0.33.3"
 egui_dock = "0.18.0"
+egui_tiles = "0.14.1"
 glam = "0.30.9"
 image = { version = "0.25.9", features = ["png"], default-features = false }
 pollster = "0.4.0"

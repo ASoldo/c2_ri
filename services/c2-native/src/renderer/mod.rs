@@ -86,6 +86,8 @@ impl TileInstanceRaw {
 }
 
 pub struct Renderer {
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     surface: wgpu::Surface<'static>,
@@ -747,6 +749,8 @@ impl Renderer {
         )?;
 
         Ok(Self {
+            instance,
+            adapter,
             device,
             queue,
             surface,
@@ -831,6 +835,39 @@ impl Renderer {
 
     pub fn viewport_depth_view(&self) -> &wgpu::TextureView {
         &self.viewport_depth_view
+    }
+
+    pub fn create_window_surface(
+        &self,
+        window: &winit::window::Window,
+    ) -> anyhow::Result<(wgpu::Surface<'static>, wgpu::SurfaceConfiguration)> {
+        let surface = unsafe {
+            let surface = self.instance.create_surface(window)?;
+            std::mem::transmute::<wgpu::Surface<'_>, wgpu::Surface<'static>>(surface)
+        };
+        let caps = surface.get_capabilities(&self.adapter);
+        let surface_format = if caps.formats.contains(&self.surface_format) {
+            self.surface_format
+        } else {
+            caps.formats
+                .iter()
+                .copied()
+                .find(|format| format.is_srgb())
+                .unwrap_or(caps.formats[0])
+        };
+        let size = window.inner_size();
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            width: size.width.max(1),
+            height: size.height.max(1),
+            present_mode: wgpu::PresentMode::AutoVsync,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+        };
+        surface.configure(&self.device, &config);
+        Ok((surface, config))
     }
 
     pub fn ensure_viewport_size(&mut self, width: u32, height: u32) -> bool {

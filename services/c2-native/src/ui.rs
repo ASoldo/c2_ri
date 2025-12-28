@@ -1,10 +1,12 @@
+use std::collections::HashSet;
+
 use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use glam::{Vec2, Vec3, Vec4};
 
 use crate::ecs::{RenderInstance, WorldState};
 use crate::renderer::Renderer;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DockTab {
     Globe,
     Operations,
@@ -104,6 +106,9 @@ pub struct UiState {
     dock_state: DockState<DockTab>,
     globe_rect: Option<egui::Rect>,
     operations: OperationsState,
+    docked_tabs: HashSet<DockTab>,
+    pending_detach: Vec<DockTab>,
+    pending_attach: Vec<DockTab>,
 }
 
 #[derive(Clone)]
@@ -148,21 +153,19 @@ pub struct Diagnostics {
 
 impl UiState {
     pub fn new() -> Self {
-        let mut dock_state = DockState::new(vec![DockTab::Globe]);
-        let root = NodeIndex::root();
-        let [center, _left] = dock_state
-            .main_surface_mut()
-            .split_left(root, 0.28, vec![DockTab::Operations]);
-        let [center, _right] = dock_state
-            .main_surface_mut()
-            .split_right(center, 0.28, vec![DockTab::Entities]);
-        dock_state
-            .main_surface_mut()
-            .split_below(center, 0.28, vec![DockTab::Inspector]);
+        let mut docked_tabs = HashSet::new();
+        docked_tabs.insert(DockTab::Globe);
+        docked_tabs.insert(DockTab::Operations);
+        docked_tabs.insert(DockTab::Entities);
+        docked_tabs.insert(DockTab::Inspector);
+        let dock_state = build_dock_state(&docked_tabs);
         Self {
             dock_state,
             globe_rect: None,
             operations: OperationsState::default(),
+            docked_tabs,
+            pending_detach: Vec::new(),
+            pending_attach: Vec::new(),
         }
     }
 
@@ -198,6 +201,7 @@ impl UiState {
                 globe_texture_id,
                 operations: &mut self.operations,
                 diagnostics,
+                detach_requests: &mut self.pending_detach,
             };
             let style = Style::from_egui(ui.style());
             DockArea::new(&mut self.dock_state)
@@ -215,6 +219,62 @@ impl UiState {
 
     pub fn operations(&self) -> &OperationsState {
         &self.operations
+    }
+
+    pub fn take_detach_requests(&mut self) -> Vec<DockTab> {
+        std::mem::take(&mut self.pending_detach)
+    }
+
+    pub fn take_attach_requests(&mut self) -> Vec<DockTab> {
+        std::mem::take(&mut self.pending_attach)
+    }
+
+    pub fn set_tab_docked(&mut self, tab: DockTab, docked: bool) {
+        if tab == DockTab::Globe {
+            return;
+        }
+        let changed = if docked {
+            self.docked_tabs.insert(tab)
+        } else {
+            self.docked_tabs.remove(&tab)
+        };
+        if changed {
+            self.dock_state = build_dock_state(&self.docked_tabs);
+        }
+    }
+
+    pub fn show_detached_panel(
+        &mut self,
+        ctx: &egui::Context,
+        tab: DockTab,
+        world: &WorldState,
+        renderer: &Renderer,
+        diagnostics: &Diagnostics,
+    ) {
+        let label = tab_label(tab);
+        egui::TopBottomPanel::top(format!("detached-topbar-{}", tab_key(tab))).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                ui.add_space(6.0);
+                if ui.button("Dock Back").clicked() {
+                    self.pending_attach.push(tab);
+                }
+            });
+        });
+        egui::CentralPanel::default().show(ctx, |ui| match tab {
+            DockTab::Operations => {
+                operations_panel(ui, &mut self.operations);
+            }
+            DockTab::Entities => {
+                entities_panel(ui, world);
+            }
+            DockTab::Inspector => {
+                inspector_panel(ui, renderer, diagnostics);
+            }
+            DockTab::Globe => {
+                ui.label("Globe cannot be detached.");
+            }
+        });
     }
 
     fn draw_edge_compass(
@@ -340,6 +400,162 @@ impl UiState {
     }
 }
 
+fn build_dock_state(docked_tabs: &HashSet<DockTab>) -> DockState<DockTab> {
+    let mut dock_state = DockState::new(vec![DockTab::Globe]);
+    let root = NodeIndex::root();
+    let mut center = root;
+    if docked_tabs.contains(&DockTab::Operations) {
+        let [new_center, _left] = dock_state
+            .main_surface_mut()
+            .split_left(center, 0.28, vec![DockTab::Operations]);
+        center = new_center;
+    }
+    if docked_tabs.contains(&DockTab::Entities) {
+        let [new_center, _right] = dock_state
+            .main_surface_mut()
+            .split_right(center, 0.28, vec![DockTab::Entities]);
+        center = new_center;
+    }
+    if docked_tabs.contains(&DockTab::Inspector) {
+        dock_state
+            .main_surface_mut()
+            .split_below(center, 0.28, vec![DockTab::Inspector]);
+    }
+    dock_state
+}
+
+fn tab_label(tab: DockTab) -> &'static str {
+    match tab {
+        DockTab::Globe => "Globe",
+        DockTab::Operations => "Operations",
+        DockTab::Entities => "Entities",
+        DockTab::Inspector => "Inspector",
+    }
+}
+
+fn tab_key(tab: DockTab) -> &'static str {
+    match tab {
+        DockTab::Globe => "globe",
+        DockTab::Operations => "operations",
+        DockTab::Entities => "entities",
+        DockTab::Inspector => "inspector",
+    }
+}
+
+fn globe_panel(
+    ui: &mut egui::Ui,
+    globe_rect: &mut Option<egui::Rect>,
+    globe_texture_id: Option<egui::TextureId>,
+) {
+    let available = ui.available_size();
+    let (rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
+    *globe_rect = Some(rect);
+    ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(6, 8, 12));
+    if let Some(texture_id) = globe_texture_id {
+        let image = egui::Image::new((texture_id, rect.size()));
+        ui.put(rect, image);
+    } else {
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "Globe loading...",
+            egui::FontId::proportional(14.0),
+            egui::Color32::from_gray(180),
+        );
+    }
+}
+
+fn operations_panel(ui: &mut egui::Ui, operations: &mut OperationsState) {
+    ui.heading("Operations Menu");
+    ui.separator();
+    ui.label("Visibility");
+    ui.checkbox(&mut operations.show_flights, "Flights");
+    ui.checkbox(&mut operations.show_ships, "Ships");
+    ui.checkbox(&mut operations.show_satellites, "Satellites");
+    ui.add_space(8.0);
+    ui.separator();
+    ui.label("Layers");
+    ui.checkbox(&mut operations.show_base, "Base texture");
+    ui.checkbox(&mut operations.show_map, "Map tiles");
+    ui.checkbox(&mut operations.show_sea, "Sea overlay");
+    ui.checkbox(&mut operations.show_weather, "Weather overlay");
+    ui.add_space(8.0);
+    ui.separator();
+    ui.label("Map layers");
+    let provider_label = provider_name(&operations.tile_provider);
+    egui::ComboBox::from_id_salt("tile-provider")
+        .selected_text(provider_label)
+        .show_ui(ui, |ui| {
+            for provider in TILE_PROVIDERS {
+                ui.selectable_value(
+                    &mut operations.tile_provider,
+                    provider.id.to_string(),
+                    provider.name,
+                );
+            }
+        });
+    ui.add_space(4.0);
+    egui::ComboBox::from_id_salt("weather-field")
+        .selected_text(operations.weather_field.clone())
+        .show_ui(ui, |ui| {
+            for field in WEATHER_FIELDS {
+                ui.selectable_value(
+                    &mut operations.weather_field,
+                    (*field).to_string(),
+                    *field,
+                );
+            }
+        });
+    ui.add_space(4.0);
+    egui::ComboBox::from_id_salt("sea-field")
+        .selected_text(operations.sea_field.clone())
+        .show_ui(ui, |ui| {
+            for field in SEA_FIELDS {
+                ui.selectable_value(
+                    &mut operations.sea_field,
+                    (*field).to_string(),
+                    *field,
+                );
+            }
+        });
+    ui.add_space(8.0);
+    ui.label("Status: connected to ECS runtime.");
+}
+
+fn entities_panel(ui: &mut egui::Ui, world: &WorldState) {
+    ui.heading("Entities");
+    ui.separator();
+    ui.label(format!("Total entities: {}", world.entity_count()));
+    ui.label("Filters and tasking controls will appear here.");
+}
+
+fn inspector_panel(ui: &mut egui::Ui, renderer: &Renderer, diagnostics: &Diagnostics) {
+    ui.heading("Inspector");
+    ui.separator();
+    ui.label(format!(
+        "Render targets: {}x{}",
+        renderer.size().0,
+        renderer.size().1
+    ));
+    let perf = diagnostics.perf;
+    ui.add_space(4.0);
+    ui.label(format!(
+        "Frame: {:.1} ms (p95 {:.1} / p99 {:.1})  FPS {:.1}",
+        perf.frame_ms, perf.frame_p95_ms, perf.frame_p99_ms, perf.fps
+    ));
+    ui.label(format!(
+        "World: {:.1} ms  Tiles: {:.1} ms  UI: {:.1} ms  Render: {:.1} ms",
+        perf.world_ms, perf.tile_ms, perf.ui_ms, perf.render_ms
+    ));
+    ui.add_space(8.0);
+    ui.separator();
+    ui.label("Tile cache");
+    draw_tile_stats(ui, "Map", diagnostics.map);
+    draw_tile_stats(ui, "Weather", diagnostics.weather);
+    draw_tile_stats(ui, "Sea", diagnostics.sea);
+    ui.label("Selection details will be shown here.");
+}
+
 fn egui_color_from_rgba(color: [f32; 4]) -> egui::Color32 {
     let rgba = Vec4::from_array(color).clamp(Vec4::ZERO, Vec4::ONE);
     egui::Color32::from_rgba_unmultiplied(
@@ -408,6 +624,7 @@ struct DockViewer<'a> {
     globe_texture_id: Option<egui::TextureId>,
     operations: &'a mut OperationsState,
     diagnostics: &'a Diagnostics,
+    detach_requests: &'a mut Vec<DockTab>,
 }
 
 impl TabViewer for DockViewer<'_> {
@@ -425,112 +642,41 @@ impl TabViewer for DockViewer<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         match tab {
             DockTab::Globe => {
-                let available = ui.available_size();
-                let (rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
-                *self.globe_rect = Some(rect);
-                ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(6, 8, 12));
-                if let Some(texture_id) = self.globe_texture_id {
-                    let image = egui::Image::new((texture_id, rect.size()));
-                    ui.put(rect, image);
-                } else {
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "Globe loading...",
-                        egui::FontId::proportional(14.0),
-                        egui::Color32::from_gray(180),
-                    );
-                }
+                globe_panel(ui, self.globe_rect, self.globe_texture_id);
             }
             DockTab::Operations => {
-                ui.heading("Operations Menu");
-                ui.separator();
-                ui.label("Visibility");
-                ui.checkbox(&mut self.operations.show_flights, "Flights");
-                ui.checkbox(&mut self.operations.show_ships, "Ships");
-                ui.checkbox(&mut self.operations.show_satellites, "Satellites");
-                ui.add_space(8.0);
-                ui.separator();
-                ui.label("Layers");
-                ui.checkbox(&mut self.operations.show_base, "Base texture");
-                ui.checkbox(&mut self.operations.show_map, "Map tiles");
-                ui.checkbox(&mut self.operations.show_sea, "Sea overlay");
-                ui.checkbox(&mut self.operations.show_weather, "Weather overlay");
-                ui.add_space(8.0);
-                ui.separator();
-                ui.label("Map layers");
-                let provider_label = provider_name(&self.operations.tile_provider);
-                egui::ComboBox::from_id_salt("tile-provider")
-                    .selected_text(provider_label)
-                    .show_ui(ui, |ui| {
-                        for provider in TILE_PROVIDERS {
-                            ui.selectable_value(
-                                &mut self.operations.tile_provider,
-                                provider.id.to_string(),
-                                provider.name,
-                            );
-                        }
-                    });
-                ui.add_space(4.0);
-                egui::ComboBox::from_id_salt("weather-field")
-                    .selected_text(self.operations.weather_field.clone())
-                    .show_ui(ui, |ui| {
-                        for field in WEATHER_FIELDS {
-                            ui.selectable_value(
-                                &mut self.operations.weather_field,
-                                (*field).to_string(),
-                                *field,
-                            );
-                        }
-                    });
-                ui.add_space(4.0);
-                egui::ComboBox::from_id_salt("sea-field")
-                    .selected_text(self.operations.sea_field.clone())
-                    .show_ui(ui, |ui| {
-                        for field in SEA_FIELDS {
-                            ui.selectable_value(
-                                &mut self.operations.sea_field,
-                                (*field).to_string(),
-                                *field,
-                            );
-                        }
-                    });
-                ui.add_space(8.0);
-                ui.label("Status: connected to ECS runtime.");
+                operations_panel(ui, self.operations);
             }
             DockTab::Entities => {
-                ui.heading("Entities");
-                ui.separator();
-                ui.label(format!("Total entities: {}", self.world.entity_count()));
-                ui.label("Filters and tasking controls will appear here.");
+                entities_panel(ui, self.world);
             }
             DockTab::Inspector => {
-                ui.heading("Inspector");
-                ui.separator();
-                ui.label(format!(
-                    "Render targets: {}x{}",
-                    self.renderer.size().0,
-                    self.renderer.size().1
-                ));
-                let perf = self.diagnostics.perf;
-                ui.add_space(4.0);
-                ui.label(format!(
-                    "Frame: {:.1} ms (p95 {:.1} / p99 {:.1})  FPS {:.1}",
-                    perf.frame_ms, perf.frame_p95_ms, perf.frame_p99_ms, perf.fps
-                ));
-                ui.label(format!(
-                    "World: {:.1} ms  Tiles: {:.1} ms  UI: {:.1} ms  Render: {:.1} ms",
-                    perf.world_ms, perf.tile_ms, perf.ui_ms, perf.render_ms
-                ));
-                ui.add_space(8.0);
-                ui.separator();
-                ui.label("Tile cache");
-                draw_tile_stats(ui, "Map", self.diagnostics.map);
-                draw_tile_stats(ui, "Weather", self.diagnostics.weather);
-                draw_tile_stats(ui, "Sea", self.diagnostics.sea);
-                ui.label("Selection details will be shown here.");
+                inspector_panel(ui, self.renderer, self.diagnostics);
             }
         }
+    }
+
+    fn context_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        tab: &mut Self::Tab,
+        _surface: egui_dock::SurfaceIndex,
+        _node: NodeIndex,
+    ) {
+        if matches!(tab, DockTab::Operations | DockTab::Entities | DockTab::Inspector) {
+            if ui.button("Detach to window").clicked() {
+                self.detach_requests.push(*tab);
+                ui.close();
+            }
+        }
+    }
+
+    fn allowed_in_windows(&self, _tab: &mut Self::Tab) -> bool {
+        false
+    }
+
+    fn is_closeable(&self, _tab: &Self::Tab) -> bool {
+        false
     }
 }
 

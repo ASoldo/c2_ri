@@ -1,11 +1,13 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
 use glam::Vec3;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::{Window, WindowAttributes};
+use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::ecs::{RenderInstance, WorldState, KIND_FLIGHT, KIND_SATELLITE, KIND_SHIP};
 use crate::renderer::{Renderer, TileInstanceRaw};
@@ -14,7 +16,8 @@ use crate::tiles::{
     SEA_TILE_CAPACITY, TILE_SIZE, WEATHER_TILE_CAPACITY,
 };
 use crate::ui::{
-    tile_provider_config, Diagnostics, OperationsState, PerfSnapshot, TileProviderConfig, UiState,
+    tile_provider_config, Diagnostics, DockTab, OperationsState, PerfSnapshot, TileProviderConfig,
+    UiState,
 };
 
 const DEFAULT_GLOBE_RADIUS: f32 = 120.0;
@@ -35,25 +38,51 @@ pub fn run() -> anyhow::Result<()> {
     let window = Arc::new(event_loop.create_window(
         WindowAttributes::default().with_title("C2 Walaris"),
     )?);
-    let target_window_id = window.id();
     let mut app = App::new(window.clone())?;
+
+    let detached_specs = [
+        (DockTab::Operations, "Operations", (340, 720)),
+        (DockTab::Entities, "Entities", (340, 720)),
+        (DockTab::Inspector, "Inspector", (520, 360)),
+    ];
+    for (tab, title, size) in detached_specs {
+        let window = Arc::new(event_loop.create_window(
+            WindowAttributes::default()
+                .with_title(title)
+                .with_inner_size(PhysicalSize::new(size.0, size.1))
+                .with_visible(false),
+        )?);
+        app.register_detached_window(tab, window)?;
+    }
 
     event_loop.run(move |event, target| {
         target.set_control_flow(ControlFlow::Poll);
         match event {
-            Event::WindowEvent { event, window_id } if window_id == target_window_id => {
-                if let WindowEvent::RedrawRequested = event {
-                    if let Err(error) = app.update_and_render() {
-                        eprintln!("render error: {error:?}");
+            Event::WindowEvent { event, window_id } => {
+                if window_id == app.main_window_id {
+                    if let WindowEvent::RedrawRequested = event {
+                        if let Err(error) = app.update_and_render() {
+                            eprintln!("render error: {error:?}");
+                        }
+                        return;
                     }
-                    return;
-                }
-                if !app.handle_window_event(&event) {
-                    target.exit();
+                    if !app.handle_window_event(&event) {
+                        target.exit();
+                    }
+                } else if app.is_detached_window(window_id) {
+                    if let WindowEvent::RedrawRequested = event {
+                        if let Err(error) = app.render_detached_window(window_id) {
+                            eprintln!("detach render error: {error:?}");
+                        }
+                        app.sync_operations_settings();
+                        app.process_ui_requests();
+                        return;
+                    }
+                    app.handle_detached_window_event(window_id, &event);
                 }
             }
             Event::AboutToWait => {
-                window.request_redraw();
+                app.request_redraws();
             }
             _ => {}
         }
@@ -64,6 +93,7 @@ pub fn run() -> anyhow::Result<()> {
 
 struct App {
     window: Arc<Window>,
+    main_window_id: WindowId,
     renderer: Renderer,
     world: WorldState,
     ui: UiState,
@@ -87,6 +117,22 @@ struct App {
     tile_layers: TileLayers,
     diagnostics: Diagnostics,
     perf_stats: PerfStats,
+    detached_windows: HashMap<WindowId, DetachedWindow>,
+    detached_tabs: HashMap<DockTab, WindowId>,
+}
+
+struct DetachedWindow {
+    tab: DockTab,
+    window: Arc<Window>,
+    egui_ctx: egui::Context,
+    egui_state: egui_winit::State,
+    egui_renderer: egui_wgpu::Renderer,
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    size: (u32, u32),
+    visible: bool,
+    last_pos: Option<PhysicalPosition<i32>>,
+    user_moved: bool,
 }
 
 impl App {
@@ -94,6 +140,7 @@ impl App {
         let mut renderer = pollster::block_on(Renderer::new(window.as_ref()))?;
         let world = WorldState::seeded();
         let ui = UiState::new();
+        let main_window_id = window.id();
 
         let egui_ctx = egui::Context::default();
         let egui_state = egui_winit::State::new(
@@ -127,6 +174,7 @@ impl App {
         );
         Ok(Self {
             window,
+            main_window_id,
             renderer,
             world,
             ui,
@@ -150,7 +198,342 @@ impl App {
             tile_layers,
             diagnostics: Diagnostics::default(),
             perf_stats: PerfStats::new(),
+            detached_windows: HashMap::new(),
+            detached_tabs: HashMap::new(),
         })
+    }
+
+    fn register_detached_window(&mut self, tab: DockTab, window: Arc<Window>) -> anyhow::Result<()> {
+        let viewport_id = egui::ViewportId::from_hash_of((tab, "detached"));
+        let egui_ctx = egui::Context::default();
+        egui_ctx.set_style(self.egui_ctx.style().clone());
+        let egui_state = egui_winit::State::new(
+            egui_ctx.clone(),
+            viewport_id,
+            window.as_ref(),
+            Some(window.scale_factor() as f32),
+            window.theme(),
+            None,
+        );
+        let egui_renderer = egui_wgpu::Renderer::new(
+            &self.renderer.device,
+            self.renderer.surface_format(),
+            egui_wgpu::RendererOptions::default(),
+        );
+        let (surface, config) = self.renderer.create_window_surface(window.as_ref())?;
+        let size = (config.width, config.height);
+        let window_id = window.id();
+        self.detached_tabs.insert(tab, window_id);
+        self.detached_windows.insert(
+            window_id,
+            DetachedWindow {
+                tab,
+                window,
+                egui_ctx,
+                egui_state,
+                egui_renderer,
+                surface,
+                config,
+                size,
+                visible: false,
+                last_pos: None,
+                user_moved: false,
+            },
+        );
+        Ok(())
+    }
+
+    fn is_detached_window(&self, window_id: WindowId) -> bool {
+        self.detached_windows.contains_key(&window_id)
+    }
+
+    fn request_redraws(&self) {
+        self.window.request_redraw();
+        for window in self.detached_windows.values() {
+            if window.visible {
+                window.window.request_redraw();
+            }
+        }
+    }
+
+    fn handle_detached_window_event(&mut self, window_id: WindowId, event: &WindowEvent) {
+        let (tab, window, close_requested, moved, resize, user_moved) = {
+            let Some(detached) = self.detached_windows.get_mut(&window_id) else {
+                return;
+            };
+            let window = Arc::clone(&detached.window);
+            let _ = detached.egui_state.on_window_event(window.as_ref(), event);
+            let mut close_requested = false;
+            let mut moved = false;
+            let mut resize = None;
+            match event {
+                WindowEvent::CloseRequested => {
+                    close_requested = true;
+                }
+                WindowEvent::Resized(size) => {
+                    resize = Some((size.width, size.height));
+                }
+                WindowEvent::ScaleFactorChanged { .. } => {
+                    let size = window.inner_size();
+                    resize = Some((size.width, size.height));
+                }
+                WindowEvent::Moved(pos) => {
+                    moved = true;
+                    let pos = *pos;
+                    if let Some(prev) = detached.last_pos {
+                        let dx = (pos.x - prev.x).abs();
+                        let dy = (pos.y - prev.y).abs();
+                        if dx + dy >= 8 {
+                            detached.user_moved = true;
+                        }
+                    }
+                    detached.last_pos = Some(pos);
+                }
+                _ => {}
+            }
+            (
+                detached.tab,
+                window,
+                close_requested,
+                moved,
+                resize,
+                detached.user_moved,
+            )
+        };
+
+        if let Some((width, height)) = resize {
+            self.resize_detached_window(window_id, width, height);
+        }
+        if close_requested || (moved && user_moved && self.should_attach_to_main(window.as_ref())) {
+            self.attach_tab(tab);
+        }
+    }
+
+    fn render_detached_window(&mut self, window_id: WindowId) -> anyhow::Result<()> {
+        let Some(detached) = self.detached_windows.get_mut(&window_id) else {
+            return Ok(());
+        };
+        if !detached.visible {
+            return Ok(());
+        }
+        let window = detached.window.as_ref();
+        let raw_input = detached.egui_state.take_egui_input(window);
+        let output = detached.egui_ctx.run(raw_input, |ctx| {
+            self.ui.show_detached_panel(
+                ctx,
+                detached.tab,
+                &self.world,
+                &self.renderer,
+                &self.diagnostics,
+            );
+        });
+        detached
+            .egui_state
+            .handle_platform_output(window, output.platform_output);
+        let paint_jobs = self.egui_ctx.tessellate(output.shapes, output.pixels_per_point);
+
+        for (id, image_delta) in &output.textures_delta.set {
+            detached.egui_renderer.update_texture(
+                &self.renderer.device,
+                &self.renderer.queue,
+                *id,
+                image_delta,
+            );
+        }
+
+        let screen_descriptor = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [detached.size.0, detached.size.1],
+            pixels_per_point: output.pixels_per_point,
+        };
+
+        let surface_texture = match detached.surface.get_current_texture() {
+            Ok(frame) => frame,
+            Err(wgpu::SurfaceError::Outdated) | Err(wgpu::SurfaceError::Lost) => {
+                let width = detached.size.0.max(1);
+                let height = detached.size.1.max(1);
+                detached.config.width = width;
+                detached.config.height = height;
+                detached.surface.configure(&self.renderer.device, &detached.config);
+                return Ok(());
+            }
+            Err(wgpu::SurfaceError::OutOfMemory) => {
+                return Err(anyhow::anyhow!("detached surface out of memory"));
+            }
+            Err(err) => {
+                return Err(anyhow::anyhow!("detached surface error: {err:?}"));
+            }
+        };
+
+        let view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .renderer
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("c2-native detached encoder"),
+            });
+
+        let mut egui_cmds = detached.egui_renderer.update_buffers(
+            &self.renderer.device,
+            &self.renderer.queue,
+            &mut encoder,
+            &paint_jobs,
+            &screen_descriptor,
+        );
+
+        {
+            let egui_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("egui detached pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            let mut egui_pass = egui_pass.forget_lifetime();
+            detached.egui_renderer
+                .render(&mut egui_pass, &paint_jobs, &screen_descriptor);
+        }
+
+        egui_cmds.push(encoder.finish());
+        self.renderer.queue.submit(egui_cmds);
+        surface_texture.present();
+
+        for id in &output.textures_delta.free {
+            detached.egui_renderer.free_texture(id);
+        }
+
+        Ok(())
+    }
+
+    fn detach_tab(&mut self, tab: DockTab) {
+        let Some(window_id) = self.detached_tabs.get(&tab).copied() else {
+            return;
+        };
+        let (window, should_position) = {
+            let Some(detached) = self.detached_windows.get_mut(&window_id) else {
+                return;
+            };
+            if detached.visible {
+                return;
+            }
+            let should_position = detached.last_pos.is_none();
+            detached.visible = true;
+            detached.user_moved = false;
+            detached.last_pos = None;
+            (Arc::clone(&detached.window), should_position)
+        };
+        if should_position {
+            self.position_detached_window(tab, window.as_ref());
+        }
+        window.set_visible(true);
+        window.request_redraw();
+        self.ui.set_tab_docked(tab, false);
+    }
+
+    fn attach_tab(&mut self, tab: DockTab) {
+        let Some(window_id) = self.detached_tabs.get(&tab).copied() else {
+            return;
+        };
+        let Some(detached) = self.detached_windows.get_mut(&window_id) else {
+            return;
+        };
+        if !detached.visible {
+            return;
+        }
+        detached.visible = false;
+        detached.window.set_visible(false);
+        self.ui.set_tab_docked(tab, true);
+    }
+
+    fn process_ui_requests(&mut self) {
+        for tab in self.ui.take_detach_requests() {
+            self.detach_tab(tab);
+        }
+        for tab in self.ui.take_attach_requests() {
+            self.attach_tab(tab);
+        }
+    }
+
+    fn sync_operations_settings(&mut self) {
+        let new_settings = self.ui.operations().clone();
+        if new_settings != self.overlay_settings {
+            self.overlay_settings = new_settings;
+            filter_instances(
+                &self.instances,
+                &self.overlay_settings,
+                &mut self.filtered_instances,
+            );
+            self.instances_dirty = false;
+            self.cull_dirty = true;
+            self.renderer.update_overlay(
+                if self.overlay_settings.show_base { 1.0 } else { 0.0 },
+                0.0,
+                0.0,
+                0.0,
+            );
+            self.tile_layers.apply_settings(
+                &self.overlay_settings,
+                &mut self.renderer,
+                &self.tile_fetcher,
+                &mut self.tile_request_id,
+            );
+        }
+    }
+
+    fn should_attach_to_main(&self, detached_window: &Window) -> bool {
+        let Ok(main_pos) = self.window.outer_position() else {
+            return false;
+        };
+        let main_size = self.window.outer_size();
+        let Ok(det_pos) = detached_window.outer_position() else {
+            return false;
+        };
+        let det_size = detached_window.outer_size();
+        let det_center_x = det_pos.x + det_size.width as i32 / 2;
+        let det_center_y = det_pos.y + det_size.height as i32 / 2;
+        let within_x = det_center_x >= main_pos.x
+            && det_center_x <= main_pos.x + main_size.width as i32;
+        let within_y = det_center_y >= main_pos.y
+            && det_center_y <= main_pos.y + main_size.height as i32;
+        within_x && within_y
+    }
+
+    fn position_detached_window(&self, tab: DockTab, window: &Window) {
+        let Ok(main_pos) = self.window.outer_position() else {
+            return;
+        };
+        let main_size = self.window.outer_size();
+        let offset_y = match tab {
+            DockTab::Operations => 40,
+            DockTab::Entities => 120,
+            DockTab::Inspector => 200,
+            DockTab::Globe => 40,
+        };
+        let x = main_pos.x + main_size.width as i32 + 24;
+        let y = main_pos.y + offset_y;
+        window.set_outer_position(PhysicalPosition::new(x, y));
+    }
+
+    fn resize_detached_window(&mut self, window_id: WindowId, width: u32, height: u32) {
+        let Some(detached) = self.detached_windows.get_mut(&window_id) else {
+            return;
+        };
+        let width = width.max(1);
+        let height = height.max(1);
+        detached.size = (width, height);
+        detached.config.width = width;
+        detached.config.height = height;
+        detached.surface.configure(&self.renderer.device, &detached.config);
     }
 
     fn handle_window_event(&mut self, event: &WindowEvent) -> bool {
@@ -286,29 +669,8 @@ impl App {
             });
         }
 
-        let new_settings = self.ui.operations().clone();
-        if new_settings != self.overlay_settings {
-            self.overlay_settings = new_settings;
-            filter_instances(
-                &self.instances,
-                &self.overlay_settings,
-                &mut self.filtered_instances,
-            );
-            self.instances_dirty = false;
-            self.cull_dirty = true;
-            self.renderer.update_overlay(
-                if self.overlay_settings.show_base { 1.0 } else { 0.0 },
-                0.0,
-                0.0,
-                0.0,
-            );
-            self.tile_layers.apply_settings(
-                &self.overlay_settings,
-                &mut self.renderer,
-                &self.tile_fetcher,
-                &mut self.tile_request_id,
-            );
-        }
+        self.sync_operations_settings();
+        self.process_ui_requests();
 
         for (id, image_delta) in &output.textures_delta.set {
             self.egui_renderer
