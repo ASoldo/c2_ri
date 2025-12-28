@@ -23,6 +23,7 @@ const SEA_MAX_ZOOM: u8 = 6;
 const MAP_UPDATE_INTERVAL_MS: u64 = 220;
 const WEATHER_UPDATE_INTERVAL_MS: u64 = 900;
 const SEA_UPDATE_INTERVAL_MS: u64 = 1100;
+const MAX_TILE_UPLOADS_PER_FRAME: usize = 24;
 
 pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoop::new()?;
@@ -110,8 +111,13 @@ impl App {
         );
         let (tile_fetcher, tile_rx) = TileFetcher::new(6);
         let mut tile_layers = TileLayers::new();
-        tile_layers.apply_settings(&overlay_settings, &mut renderer);
-        let tile_request_id = 1;
+        let mut tile_request_id = 0;
+        tile_layers.apply_settings(
+            &overlay_settings,
+            &mut renderer,
+            &tile_fetcher,
+            &mut tile_request_id,
+        );
         Ok(Self {
             window,
             renderer,
@@ -198,7 +204,11 @@ impl App {
             self.cull_dirty = false;
         }
 
-        for result in self.tile_rx.try_iter() {
+        for result in self
+            .tile_rx
+            .try_iter()
+            .take(MAX_TILE_UPLOADS_PER_FRAME)
+        {
             self.tile_layers
                 .handle_result(&mut self.renderer, result, now);
         }
@@ -273,8 +283,12 @@ impl App {
                 0.0,
                 0.0,
             );
-            self.tile_layers
-                .apply_settings(&self.overlay_settings, &mut self.renderer);
+            self.tile_layers.apply_settings(
+                &self.overlay_settings,
+                &mut self.renderer,
+                &self.tile_fetcher,
+                &mut self.tile_request_id,
+            );
         }
 
         for (id, image_delta) in &output.textures_delta.set {
@@ -419,10 +433,16 @@ impl TileLayers {
         }
     }
 
-    fn apply_settings(&mut self, settings: &OperationsState, renderer: &mut Renderer) {
-        self.map.set_enabled(settings.show_map, renderer);
-        self.weather.set_enabled(settings.show_weather, renderer);
-        self.sea.set_enabled(settings.show_sea, renderer);
+    fn apply_settings(
+        &mut self,
+        settings: &OperationsState,
+        renderer: &mut Renderer,
+        fetcher: &TileFetcher,
+        request_id: &mut u64,
+    ) {
+        let mut map_dirty = self.map.set_enabled(settings.show_map, renderer);
+        let mut weather_dirty = self.weather.set_enabled(settings.show_weather, renderer);
+        let mut sea_dirty = self.sea.set_enabled(settings.show_sea, renderer);
 
         renderer.update_tile_opacity(
             TileKind::Base,
@@ -445,16 +465,29 @@ impl TileLayers {
         if self.map.provider != map_provider {
             self.map.provider = map_provider;
             self.map.reset();
+            map_dirty = true;
         }
         let weather_field = settings.weather_field.clone();
         if self.weather.field != weather_field {
             self.weather.field = weather_field;
             self.weather.reset();
+            weather_dirty = true;
         }
         let sea_field = settings.sea_field.clone();
         if self.sea.field != sea_field {
             self.sea.field = sea_field;
             self.sea.reset();
+            sea_dirty = true;
+        }
+
+        if map_dirty {
+            self.map.bump_request_id(fetcher, request_id);
+        }
+        if weather_dirty {
+            self.weather.bump_request_id(fetcher, request_id);
+        }
+        if sea_dirty {
+            self.sea.bump_request_id(fetcher, request_id);
         }
     }
 
@@ -554,9 +587,9 @@ impl TileLayerState {
         }
     }
 
-    fn set_enabled(&mut self, enabled: bool, renderer: &mut Renderer) {
+    fn set_enabled(&mut self, enabled: bool, renderer: &mut Renderer) -> bool {
         if self.enabled == enabled {
-            return;
+            return false;
         }
         self.enabled = enabled;
         if !enabled {
@@ -570,6 +603,7 @@ impl TileLayerState {
             renderer.update_tile_opacity(self.kind, self.opacity);
             self.force_update = true;
         }
+        true
     }
 
     fn reset(&mut self) {
@@ -605,10 +639,7 @@ impl TileLayerState {
                 pick_overlay_zoom(renderer, SEA_MIN_ZOOM, SEA_MAX_ZOOM, DEFAULT_GLOBE_RADIUS)
             }
         };
-        if self.request_id == 0 {
-            *request_id = request_id.wrapping_add(1);
-            self.request_id = *request_id;
-        }
+        let mut needs_new_request = self.request_id == 0;
         if desired_zoom != self.zoom {
             self.zoom = desired_zoom;
             self.tiles.clear();
@@ -618,8 +649,10 @@ impl TileLayerState {
             self.progress_total = 0;
             self.progress_loaded = 0;
             self.force_update = true;
-            *request_id = request_id.wrapping_add(1);
-            self.request_id = *request_id;
+            needs_new_request = true;
+        }
+        if needs_new_request {
+            self.bump_request_id(fetcher, request_id);
         }
 
         let should_update = self.should_update(renderer, now);
@@ -689,7 +722,6 @@ impl TileLayerState {
             let Some(layer_index) = self.atlas.alloc() else {
                 continue;
             };
-            self.pending.insert(*key, layer_index);
             let request = TileRequest {
                 request_id: self.request_id,
                 kind: self.kind,
@@ -699,7 +731,11 @@ impl TileLayerState {
                 sea_field: settings.sea_field.clone(),
                 layer_index,
             };
-            fetcher.request(request);
+            if fetcher.request(request) {
+                self.pending.insert(*key, layer_index);
+            } else {
+                self.atlas.free(layer_index);
+            }
         }
 
         renderer.update_tile_instances(self.kind, &instances);
@@ -803,6 +839,12 @@ impl TileLayerState {
                 self.pending.remove(&key);
             }
         }
+    }
+
+    fn bump_request_id(&mut self, fetcher: &TileFetcher, request_id: &mut u64) {
+        *request_id = request_id.wrapping_add(1);
+        self.request_id = *request_id;
+        fetcher.set_current_request_id(self.kind, self.request_id);
     }
 }
 

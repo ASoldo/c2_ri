@@ -1,4 +1,6 @@
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, Sender, SyncSender};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -8,12 +10,23 @@ pub const TILE_SIZE: u32 = 256;
 pub const MAP_TILE_CAPACITY: usize = 256;
 pub const WEATHER_TILE_CAPACITY: usize = 128;
 pub const SEA_TILE_CAPACITY: usize = 128;
+const TILE_QUEUE_DEPTH: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TileKind {
     Base,
     Weather,
     Sea,
+}
+
+impl TileKind {
+    fn index(self) -> usize {
+        match self {
+            TileKind::Base => 0,
+            TileKind::Weather => 1,
+            TileKind::Sea => 2,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -47,8 +60,9 @@ pub struct TileResult {
 }
 
 pub struct TileFetcher {
-    senders: Vec<Sender<TileRequest>>,
+    senders: Vec<SyncSender<TileRequest>>,
     next: usize,
+    tracker: Arc<TileRequestTracker>,
 }
 
 impl TileFetcher {
@@ -60,40 +74,109 @@ impl TileFetcher {
             .to_string();
         let (result_tx, result_rx) = std::sync::mpsc::channel();
         let mut senders = Vec::with_capacity(worker_count);
+        let tracker = Arc::new(TileRequestTracker::new());
         for _ in 0..worker_count {
-            let (job_tx, job_rx) = std::sync::mpsc::channel();
+            let (job_tx, job_rx) = std::sync::mpsc::sync_channel(TILE_QUEUE_DEPTH);
             senders.push(job_tx);
-            spawn_worker(job_rx, result_tx.clone(), base_url.clone());
+            spawn_worker(job_rx, result_tx.clone(), base_url.clone(), tracker.clone());
         }
         (
             Self {
                 senders,
                 next: 0,
+                tracker,
             },
             result_rx,
         )
     }
 
-    pub fn request(&mut self, request: TileRequest) {
+    pub fn request(&mut self, request: TileRequest) -> bool {
         if self.senders.is_empty() {
-            return;
+            return false;
         }
         let idx = self.next % self.senders.len();
         self.next = self.next.wrapping_add(1);
-        let _ = self.senders[idx].send(request);
+        self.senders[idx].try_send(request).is_ok()
+    }
+
+    pub fn set_current_request_id(&self, kind: TileKind, request_id: u64) {
+        self.tracker.set_current(kind, request_id);
     }
 }
 
-fn spawn_worker(receiver: Receiver<TileRequest>, sender: Sender<TileResult>, base_url: String) {
+struct TileRequestTracker {
+    current: [AtomicU64; 3],
+}
+
+impl TileRequestTracker {
+    fn new() -> Self {
+        Self {
+            current: [
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+            ],
+        }
+    }
+
+    fn set_current(&self, kind: TileKind, request_id: u64) {
+        self.current[kind.index()].store(request_id, Ordering::Relaxed);
+    }
+
+    fn is_current(&self, kind: TileKind, request_id: u64) -> bool {
+        self.current[kind.index()].load(Ordering::Relaxed) == request_id
+    }
+}
+
+fn spawn_worker(
+    receiver: Receiver<TileRequest>,
+    sender: Sender<TileResult>,
+    base_url: String,
+    tracker: Arc<TileRequestTracker>,
+) {
     thread::spawn(move || {
+        let allow_insecure = std::env::var("C2_NATIVE_TILE_INSECURE")
+            .ok()
+            .as_deref()
+            .map(|v| v == "1")
+            .unwrap_or_else(|| base_url.contains(".local"));
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(12))
+            .danger_accept_invalid_certs(allow_insecure)
+            .build();
         while let Ok(request) = receiver.recv() {
-            let result = fetch_tile(&request, &base_url);
-            let _ = sender.send(result);
+            if !tracker.is_current(request.kind, request.request_id) {
+                continue;
+            }
+            let result = match client.as_ref() {
+                Ok(client) => fetch_tile(&request, &base_url, client),
+                Err(_) => empty_result(&request),
+            };
+            if tracker.is_current(request.kind, request.request_id) {
+                let _ = sender.send(result);
+            }
         }
     });
 }
 
-fn fetch_tile(request: &TileRequest, base_url: &str) -> TileResult {
+fn empty_result(request: &TileRequest) -> TileResult {
+    TileResult {
+        request_id: request.request_id,
+        kind: request.kind,
+        key: request.key,
+        layer_index: request.layer_index,
+        width: TILE_SIZE,
+        height: TILE_SIZE,
+        data: vec![0; (TILE_SIZE * TILE_SIZE * 4) as usize],
+        valid: false,
+    }
+}
+
+fn fetch_tile(
+    request: &TileRequest,
+    base_url: &str,
+    client: &reqwest::blocking::Client,
+) -> TileResult {
     let x = request.key.x;
     let y = request.key.y;
     let template = match request.kind {
@@ -103,30 +186,6 @@ fn fetch_tile(request: &TileRequest, base_url: &str) -> TileResult {
         ),
         TileKind::Weather => format!("{}/ui/tiles/weather/{{z}}/{{x}}/{{y}}", base_url),
         TileKind::Sea => format!("{}/ui/tiles/sea/{{z}}/{{x}}/{{y}}", base_url),
-    };
-    let allow_insecure = std::env::var("C2_NATIVE_TILE_INSECURE")
-        .ok()
-        .as_deref()
-        .map(|v| v == "1")
-        .unwrap_or_else(|| template.contains(".local"));
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(12))
-        .danger_accept_invalid_certs(allow_insecure)
-        .build()
-    {
-        Ok(client) => client,
-        Err(_) => {
-            return TileResult {
-                request_id: request.request_id,
-                kind: request.kind,
-                key: request.key,
-                layer_index: request.layer_index,
-                width: TILE_SIZE,
-                height: TILE_SIZE,
-                data: vec![0; (TILE_SIZE * TILE_SIZE * 4) as usize],
-                valid: false,
-            };
-        }
     };
 
     let mut url = template
