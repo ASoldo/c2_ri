@@ -170,7 +170,7 @@ impl UiState {
                 .show_inside(ui, &mut viewer);
         });
 
-        self.draw_edge_compass(ctx, renderer, instances);
+        self.draw_edge_compass(ctx, renderer, instances, world.globe_radius());
         self.draw_globe_overlay(ctx, tile_bars);
     }
 
@@ -187,12 +187,14 @@ impl UiState {
         ctx: &egui::Context,
         renderer: &Renderer,
         instances: &[RenderInstance],
+        globe_radius: f32,
     ) {
         let Some(rect) = self.globe_rect else {
             return;
         };
         let bounds = rect.shrink(16.0);
         let view_proj = renderer.view_proj();
+        let camera_pos = renderer.camera_position();
         let painter = ctx.layer_painter(egui::LayerId::new(
             egui::Order::Foreground,
             egui::Id::new("edge-compass"),
@@ -205,11 +207,14 @@ impl UiState {
                 continue;
             }
             let mut ndc = Vec3::new(clip.x, clip.y, clip.z) / clip.w;
-            let behind = clip.w < 0.0;
-            if behind {
+            let behind_camera = clip.w < 0.0;
+            let behind_globe =
+                is_occluded_by_globe(camera_pos, instance.position, globe_radius);
+            if behind_camera {
                 ndc = -ndc;
             }
-            let on_screen = !behind
+            let on_screen = !behind_camera
+                && !behind_globe
                 && ndc.x >= -1.0
                 && ndc.x <= 1.0
                 && ndc.y >= -1.0
@@ -454,5 +459,38 @@ impl TabViewer for DockViewer<'_> {
                 ui.label("Selection details will be shown here.");
             }
         }
+    }
+}
+
+fn is_occluded_by_globe(camera_pos: Vec3, target: Vec3, radius: f32) -> bool {
+    let delta = target - camera_pos;
+    let dist = delta.length();
+    if dist <= f32::EPSILON {
+        return false;
+    }
+    let dir = delta / dist;
+    if let Some(t) = ray_sphere_intersect(camera_pos, dir, radius) {
+        t < dist
+    } else {
+        false
+    }
+}
+
+fn ray_sphere_intersect(origin: Vec3, dir: Vec3, radius: f32) -> Option<f32> {
+    let b = origin.dot(dir);
+    let c = origin.length_squared() - radius * radius;
+    let disc = b * b - c;
+    if disc < 0.0 {
+        return None;
+    }
+    let sqrt_disc = disc.sqrt();
+    let mut t = -b - sqrt_disc;
+    if t <= 0.0 {
+        t = -b + sqrt_disc;
+    }
+    if t <= 0.0 {
+        None
+    } else {
+        Some(t)
     }
 }

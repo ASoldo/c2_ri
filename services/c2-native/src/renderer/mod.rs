@@ -589,7 +589,7 @@ impl Renderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode: None,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
@@ -597,7 +597,7 @@ impl Renderer {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_compare: wgpu::CompareFunction::Always,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
@@ -644,7 +644,7 @@ impl Renderer {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
+                front_face: wgpu::FrontFace::Cw,
                 cull_mode: Some(wgpu::Face::Back),
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
@@ -653,7 +653,7 @@ impl Renderer {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_compare: wgpu::CompareFunction::Always,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
@@ -719,8 +719,8 @@ impl Renderer {
             &camera_buffer,
             TILE_SIZE,
             MAP_TILE_CAPACITY as u32,
-            120.12,
-            0.85,
+            120.0,
+            1.0,
             "map tiles",
         )?;
         let weather_tiles = TileLayerGpu::new(
@@ -730,7 +730,7 @@ impl Renderer {
             &camera_buffer,
             TILE_SIZE,
             WEATHER_TILE_CAPACITY as u32,
-            120.28,
+            120.0,
             0.55,
             "weather tiles",
         )?;
@@ -741,7 +741,7 @@ impl Renderer {
             &camera_buffer,
             TILE_SIZE,
             SEA_TILE_CAPACITY as u32,
-            120.2,
+            120.0,
             0.45,
             "sea tiles",
         )?;

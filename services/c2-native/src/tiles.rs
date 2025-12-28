@@ -94,6 +94,8 @@ fn spawn_worker(receiver: Receiver<TileRequest>, sender: Sender<TileResult>, bas
 }
 
 fn fetch_tile(request: &TileRequest, base_url: &str) -> TileResult {
+    let x = request.key.x;
+    let y = request.key.y;
     let template = match request.kind {
         TileKind::Base => format!(
             "{}/ui/tiles/{}/{{z}}/{{x}}/{{y}}",
@@ -129,8 +131,8 @@ fn fetch_tile(request: &TileRequest, base_url: &str) -> TileResult {
 
     let mut url = template
         .replace("{z}", &request.key.zoom.to_string())
-        .replace("{x}", &request.key.x.to_string())
-        .replace("{y}", &request.key.y.to_string());
+        .replace("{x}", &x.to_string())
+        .replace("{y}", &y.to_string());
     match request.kind {
         TileKind::Weather => {
             url.push_str("?field=");
@@ -149,7 +151,7 @@ fn fetch_tile(request: &TileRequest, base_url: &str) -> TileResult {
         if let Ok(bytes) = response.bytes() {
             if let Ok(image) = image::load_from_memory(&bytes) {
                 let tile = image.to_rgba8();
-                let tile = if tile.width() != TILE_SIZE || tile.height() != TILE_SIZE {
+                let mut tile = if tile.width() != TILE_SIZE || tile.height() != TILE_SIZE {
                     imageops::resize(
                         &tile,
                         TILE_SIZE,
@@ -159,6 +161,11 @@ fn fetch_tile(request: &TileRequest, base_url: &str) -> TileResult {
                 } else {
                     tile
                 };
+                if matches!(request.kind, TileKind::Base) {
+                    for pixel in tile.pixels_mut() {
+                        pixel.0[3] = 255;
+                    }
+                }
                 data.copy_from_slice(tile.as_raw());
                 valid = true;
             }

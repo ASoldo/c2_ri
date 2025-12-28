@@ -63,6 +63,7 @@ struct App {
     ui: UiState,
     instances: Vec<RenderInstance>,
     filtered_instances: Vec<RenderInstance>,
+    render_instances: Vec<RenderInstance>,
     egui_ctx: egui::Context,
     egui_state: egui_winit::State,
     egui_renderer: egui_wgpu::Renderer,
@@ -73,6 +74,7 @@ struct App {
     world_accum: f32,
     world_update_interval: f32,
     instances_dirty: bool,
+    cull_dirty: bool,
     tile_fetcher: TileFetcher,
     tile_rx: std::sync::mpsc::Receiver<TileResult>,
     tile_request_id: u64,
@@ -117,6 +119,7 @@ impl App {
             ui,
             instances: Vec::new(),
             filtered_instances: Vec::new(),
+            render_instances: Vec::new(),
             egui_ctx,
             egui_state,
             egui_renderer,
@@ -127,6 +130,7 @@ impl App {
             world_accum: 1.0 / 30.0,
             world_update_interval: 1.0 / 30.0,
             instances_dirty: true,
+            cull_dirty: true,
             tile_fetcher,
             tile_rx,
             tile_request_id,
@@ -175,15 +179,23 @@ impl App {
         }
         if world_updated || self.instances_dirty {
             self.world.collect_instances(&mut self.instances);
-        }
-        if self.instances_dirty {
             filter_instances(
                 &self.instances,
                 &self.overlay_settings,
                 &mut self.filtered_instances,
             );
-            self.renderer.update_instances(&self.filtered_instances);
             self.instances_dirty = false;
+            self.cull_dirty = true;
+        }
+        if self.cull_dirty {
+            cull_instances_for_render(
+                &self.filtered_instances,
+                &self.renderer,
+                self.world.globe_radius(),
+                &mut self.render_instances,
+            );
+            self.renderer.update_instances(&self.render_instances);
+            self.cull_dirty = false;
         }
 
         for result in self.tile_rx.try_iter() {
@@ -229,12 +241,14 @@ impl App {
                         let delta = input.pointer.delta();
                         if delta.x.abs() > 0.0 || delta.y.abs() > 0.0 {
                             self.renderer.orbit_delta(delta.x, delta.y);
+                            self.cull_dirty = true;
                         }
                     }
                     if hovered {
                         let scroll = input.smooth_scroll_delta.y;
                         if scroll.abs() > 0.0 {
                             self.renderer.zoom_delta(scroll);
+                            self.cull_dirty = true;
                         }
                     }
                 } else if input.pointer.primary_released() {
@@ -251,8 +265,8 @@ impl App {
                 &self.overlay_settings,
                 &mut self.filtered_instances,
             );
-            self.renderer.update_instances(&self.filtered_instances);
             self.instances_dirty = false;
+            self.cull_dirty = true;
             self.renderer.update_overlay(
                 if self.overlay_settings.show_base { 1.0 } else { 0.0 },
                 0.0,
@@ -661,7 +675,7 @@ impl TileLayerState {
                 entry.last_used = now;
                 let bounds = tile_bounds(*key);
                 instances.push(TileInstanceRaw {
-                    bounds: [bounds.lon_min, bounds.lon_max, bounds.lat_min, bounds.lat_max],
+                    bounds: [bounds.lon_min, bounds.lon_max, bounds.merc_min, bounds.merc_max],
                     layer: entry.layer_index as f32,
                 });
                 continue;
@@ -743,7 +757,7 @@ impl TileLayerState {
             if let Some(entry) = self.tiles.get(key) {
                 let bounds = tile_bounds(*key);
                 instances.push(TileInstanceRaw {
-                    bounds: [bounds.lon_min, bounds.lon_max, bounds.lat_min, bounds.lat_max],
+                    bounds: [bounds.lon_min, bounds.lon_max, bounds.merc_min, bounds.merc_max],
                     layer: entry.layer_index as f32,
                 });
             }
@@ -846,8 +860,8 @@ struct GeoSample {
 struct TileBounds {
     lon_min: f32,
     lon_max: f32,
-    lat_min: f32,
-    lat_max: f32,
+    merc_min: f32,
+    merc_max: f32,
 }
 
 fn filter_instances(
@@ -862,6 +876,22 @@ fn filter_instances(
             KIND_SHIP if !settings.show_ships => continue,
             KIND_SATELLITE if !settings.show_satellites => continue,
             _ => {}
+        }
+        out.push(*instance);
+    }
+}
+
+fn cull_instances_for_render(
+    instances: &[RenderInstance],
+    renderer: &Renderer,
+    globe_radius: f32,
+    out: &mut Vec<RenderInstance>,
+) {
+    let camera_pos = renderer.camera_position();
+    out.clear();
+    for instance in instances {
+        if is_occluded_by_globe(camera_pos, instance.position, globe_radius) {
+            continue;
         }
         out.push(*instance);
     }
@@ -1021,6 +1051,20 @@ fn ray_sphere_intersect(origin: Vec3, dir: Vec3, radius: f32) -> Option<f32> {
     }
 }
 
+fn is_occluded_by_globe(camera_pos: Vec3, target: Vec3, radius: f32) -> bool {
+    let delta = target - camera_pos;
+    let dist = delta.length();
+    if dist <= f32::EPSILON {
+        return false;
+    }
+    let dir = delta / dist;
+    if let Some(t) = ray_sphere_intersect(camera_pos, dir, radius) {
+        t < dist
+    } else {
+        false
+    }
+}
+
 fn tile_x_for_lon(lon: f32, zoom: u8) -> u32 {
     let n = 1u32 << zoom;
     let mut value = ((lon + 180.0) / 360.0 * n as f32).floor() as i64;
@@ -1041,13 +1085,13 @@ fn tile_bounds(key: TileKey) -> TileBounds {
     let n = 1u32 << key.zoom;
     let lon_min = key.x as f32 / n as f32 * 360.0 - 180.0;
     let lon_max = (key.x + 1) as f32 / n as f32 * 360.0 - 180.0;
-    let lat_max = tile_lat_from_y(key.y, key.zoom);
-    let lat_min = tile_lat_from_y(key.y + 1, key.zoom);
+    let merc_min = key.y as f32 / n as f32;
+    let merc_max = (key.y + 1) as f32 / n as f32;
     TileBounds {
         lon_min,
         lon_max,
-        lat_min,
-        lat_max,
+        merc_min,
+        merc_max,
     }
 }
 

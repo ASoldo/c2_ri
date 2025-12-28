@@ -33,11 +33,18 @@ fn to_radians(deg: f32) -> f32 {
   return deg * 0.01745329252;
 }
 
+fn mercator_lat(merc: f32) -> f32 {
+  let y = (0.5 - merc) * 6.28318530718;
+  return 2.0 * atan(exp(y)) - 1.57079632679;
+}
+
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
   var out: VertexOutput;
-  let lon = to_radians(mix(input.bounds.x, input.bounds.y, input.uv.x));
-  let lat = to_radians(mix(input.bounds.w, input.bounds.z, input.uv.y));
+  let u = 1.0 - input.uv.x;
+  let lon = to_radians(mix(input.bounds.x, input.bounds.y, u));
+  let merc = mix(input.bounds.z, input.bounds.w, input.uv.y);
+  let lat = mercator_lat(merc);
   let cos_lat = cos(lat);
   let pos = vec3<f32>(
     tile.radius * cos_lat * cos(lon),
@@ -45,7 +52,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     tile.radius * cos_lat * sin(lon)
   );
   out.clip_position = camera.view_proj * vec4<f32>(pos, 1.0);
-  out.uv = input.uv;
+  out.uv = vec2<f32>(u, input.uv.y);
   out.layer = input.layer;
   return out;
 }
