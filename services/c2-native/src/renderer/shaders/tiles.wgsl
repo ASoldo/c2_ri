@@ -41,8 +41,9 @@ fn mercator_lat(merc: f32) -> f32 {
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
   var out: VertexOutput;
-  let u = 1.0 - input.uv.x;
-  let lon = to_radians(mix(input.bounds.x, input.bounds.y, u));
+  let u = input.uv.x;
+  let lon_tex = mix(input.bounds.x, input.bounds.y, u);
+  let lon = to_radians(180.0 - lon_tex);
   let merc = mix(input.bounds.z, input.bounds.w, input.uv.y);
   let lat = mercator_lat(merc);
   let cos_lat = cos(lat);

@@ -930,6 +930,7 @@ fn compute_visible_tiles(renderer: &Renderer, zoom: u8, max_tiles: usize) -> Vec
         return Vec::new();
     }
 
+    let tile_lons: Vec<f32> = geos.iter().map(|geo| flip_lon(geo.lon)).collect();
     let lat_min = geos
         .iter()
         .map(|geo| geo.lat)
@@ -940,7 +941,7 @@ fn compute_visible_tiles(renderer: &Renderer, zoom: u8, max_tiles: usize) -> Vec
         .map(|geo| geo.lat)
         .fold(f32::NEG_INFINITY, f32::max)
         .min(85.0);
-    let lon_range = compute_lon_range(&geos.iter().map(|geo| geo.lon).collect::<Vec<_>>());
+    let lon_range = compute_lon_range(&tile_lons);
     let (lon_min, lon_max) = match lon_range {
         Some(range) => range,
         None => (-180.0, 180.0),
@@ -951,7 +952,8 @@ fn compute_visible_tiles(renderer: &Renderer, zoom: u8, max_tiles: usize) -> Vec
     let lon_max = lon_max + lon_padding;
 
     let n = 1u32 << zoom;
-    let center_x = tile_x_for_lon(center.lon, zoom);
+    let center_lon = flip_lon(center.lon);
+    let center_x = tile_x_for_lon(center_lon, zoom);
     let center_y = tile_y_for_lat(center.lat, zoom);
     let y_min = tile_y_for_lat(lat_max, zoom).saturating_sub(1);
     let y_max = tile_y_for_lat(lat_min, zoom).saturating_add(1).min(n - 1);
@@ -1004,6 +1006,20 @@ fn wrap_tile_delta(delta: i64, tiles: i64) -> i64 {
         value += tiles;
     }
     value
+}
+
+fn wrap_lon(mut lon: f32) -> f32 {
+    while lon > 180.0 {
+        lon -= 360.0;
+    }
+    while lon < -180.0 {
+        lon += 360.0;
+    }
+    lon
+}
+
+fn flip_lon(lon: f32) -> f32 {
+    wrap_lon(180.0 - lon)
 }
 
 fn pick_focus_box_px(width: u32, height: u32, zoom: u8) -> f32 {
