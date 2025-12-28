@@ -261,6 +261,9 @@ impl App {
             let Some(detached) = self.detached_windows.get_mut(&window_id) else {
                 return;
             };
+            if !detached.visible {
+                return;
+            }
             let window = Arc::clone(&detached.window);
             let _ = detached.egui_state.on_window_event(window.as_ref(), event);
             let mut close_requested = false;
@@ -435,6 +438,7 @@ impl App {
         if should_position {
             self.position_detached_window(tab, window.as_ref());
         }
+        window.set_minimized(false);
         window.set_visible(true);
         window.request_redraw();
         self.ui.set_tab_docked(tab, false);
@@ -444,14 +448,21 @@ impl App {
         let Some(window_id) = self.detached_tabs.get(&tab).copied() else {
             return;
         };
-        let Some(detached) = self.detached_windows.get_mut(&window_id) else {
-            return;
+        let window = {
+            let Some(detached) = self.detached_windows.get_mut(&window_id) else {
+                return;
+            };
+            if !detached.visible {
+                return;
+            }
+            detached.visible = false;
+            detached.user_moved = false;
+            detached.last_pos = None;
+            Arc::clone(&detached.window)
         };
-        if !detached.visible {
-            return;
-        }
-        detached.visible = false;
-        detached.window.set_visible(false);
+        window.set_visible(false);
+        window.set_minimized(true);
+        self.position_hidden_window(window.as_ref());
         self.ui.set_tab_docked(tab, true);
     }
 
@@ -521,6 +532,16 @@ impl App {
         };
         let x = main_pos.x + main_size.width as i32 + 24;
         let y = main_pos.y + offset_y;
+        window.set_outer_position(PhysicalPosition::new(x, y));
+    }
+
+    fn position_hidden_window(&self, window: &Window) {
+        let offset = 10000;
+        let (x, y) = if let Ok(main_pos) = self.window.outer_position() {
+            (main_pos.x - offset, main_pos.y - offset)
+        } else {
+            (-offset, -offset)
+        };
         window.set_outer_position(PhysicalPosition::new(x, y));
     }
 
