@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use egui_dock::DockState;
 use glam::Vec3;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{Event, WindowEvent};
@@ -16,8 +17,8 @@ use crate::tiles::{
     SEA_TILE_CAPACITY, TILE_SIZE, WEATHER_TILE_CAPACITY,
 };
 use crate::ui::{
-    tile_provider_config, Diagnostics, DockTab, OperationsState, PerfSnapshot, TileProviderConfig,
-    UiState,
+    tile_provider_config, Diagnostics, DockDetachRequest, DockDragStart, DockHost, DockTab,
+    OperationsState, PerfSnapshot, TileProviderConfig, UiState,
 };
 
 const DEFAULT_GLOBE_RADIUS: f32 = 120.0;
@@ -105,10 +106,12 @@ struct App {
     perf_stats: PerfStats,
     detached_windows: HashMap<WindowId, DetachedWindow>,
     detached_tabs: HashMap<DockTab, WindowId>,
+    active_drag: Option<DockDragStart>,
+    main_cursor_pos: Option<PhysicalPosition<f64>>,
 }
 
 struct DetachedWindow {
-    tab: DockTab,
+    dock_state: DockState<DockTab>,
     window: Arc<Window>,
     egui_ctx: egui::Context,
     egui_state: egui_winit::State,
@@ -117,6 +120,7 @@ struct DetachedWindow {
     config: wgpu::SurfaceConfiguration,
     size: (u32, u32),
     last_pos: Option<PhysicalPosition<i32>>,
+    last_cursor_pos: Option<PhysicalPosition<f64>>,
     user_moved: bool,
 }
 
@@ -185,15 +189,17 @@ impl App {
             perf_stats: PerfStats::new(),
             detached_windows: HashMap::new(),
             detached_tabs: HashMap::new(),
+            active_drag: None,
+            main_cursor_pos: None,
         })
     }
 
     fn register_detached_window(
         &mut self,
-        tab: DockTab,
+        dock_state: DockState<DockTab>,
         window: Arc<Window>,
     ) -> anyhow::Result<WindowId> {
-        let viewport_id = egui::ViewportId::from_hash_of((tab, "detached"));
+        let viewport_id = egui::ViewportId::from_hash_of((window.id(), "detached"));
         let egui_ctx = egui::Context::default();
         egui_ctx.set_style(self.egui_ctx.style().clone());
         let egui_state = egui_winit::State::new(
@@ -212,11 +218,13 @@ impl App {
         let (surface, config) = self.renderer.create_window_surface(window.as_ref())?;
         let size = (config.width, config.height);
         let window_id = window.id();
-        self.detached_tabs.insert(tab, window_id);
+        for (_, tab) in dock_state.iter_all_tabs() {
+            self.detached_tabs.insert(*tab, window_id);
+        }
         self.detached_windows.insert(
             window_id,
             DetachedWindow {
-                tab,
+                dock_state,
                 window,
                 egui_ctx,
                 egui_state,
@@ -225,6 +233,7 @@ impl App {
                 config,
                 size,
                 last_pos: None,
+                last_cursor_pos: None,
                 user_moved: false,
             },
         );
@@ -243,7 +252,7 @@ impl App {
     }
 
     fn handle_detached_window_event(&mut self, window_id: WindowId, event: &WindowEvent) {
-        let (tab, window, close_requested, moved, resize, user_moved) = {
+        let (window, close_requested, moved, resize, user_moved, drag_released) = {
             let Some(detached) = self.detached_windows.get_mut(&window_id) else {
                 return;
             };
@@ -252,6 +261,7 @@ impl App {
             let mut close_requested = false;
             let mut moved = false;
             let mut resize = None;
+            let mut drag_released = false;
             match event {
                 WindowEvent::CloseRequested => {
                     close_requested = true;
@@ -262,6 +272,16 @@ impl App {
                 WindowEvent::ScaleFactorChanged { .. } => {
                     let size = window.inner_size();
                     resize = Some((size.width, size.height));
+                }
+                WindowEvent::MouseInput { state, button, .. } => {
+                    if *state == winit::event::ElementState::Released
+                        && *button == winit::event::MouseButton::Left
+                    {
+                        drag_released = true;
+                    }
+                }
+                WindowEvent::CursorMoved { position, .. } => {
+                    detached.last_cursor_pos = Some(*position);
                 }
                 WindowEvent::Moved(pos) => {
                     moved = true;
@@ -278,20 +298,23 @@ impl App {
                 _ => {}
             }
             (
-                detached.tab,
                 window,
                 close_requested,
                 moved,
                 resize,
                 detached.user_moved,
+                drag_released,
             )
         };
 
         if let Some((width, height)) = resize {
             self.resize_detached_window(window_id, width, height);
         }
+        if drag_released {
+            self.handle_drag_release(window_id);
+        }
         if close_requested || (moved && user_moved && self.should_attach_to_main(window.as_ref())) {
-            self.attach_tab(tab);
+            self.dock_back_window(window_id);
         }
     }
 
@@ -304,7 +327,8 @@ impl App {
         let output = detached.egui_ctx.run(raw_input, |ctx| {
             self.ui.show_detached_panel(
                 ctx,
-                detached.tab,
+                DockHost::Detached(window_id.into()),
+                &mut detached.dock_state,
                 &self.world,
                 &self.renderer,
                 &self.diagnostics,
@@ -313,7 +337,9 @@ impl App {
         detached
             .egui_state
             .handle_platform_output(window, output.platform_output);
-        let paint_jobs = self.egui_ctx.tessellate(output.shapes, output.pixels_per_point);
+        let paint_jobs = detached
+            .egui_ctx
+            .tessellate(output.shapes, output.pixels_per_point);
 
         for (id, image_delta) in &output.textures_delta.set {
             detached.egui_renderer.update_texture(
@@ -394,24 +420,24 @@ impl App {
         for id in &output.textures_delta.free {
             detached.egui_renderer.free_texture(id);
         }
+        self.capture_drag_start();
 
         Ok(())
     }
 
-    fn detach_tab(&mut self, target: &ActiveEventLoop, tab: DockTab) -> anyhow::Result<()> {
-        if tab == DockTab::Globe {
+    fn detach_tab(&mut self, target: &ActiveEventLoop, request: DockDetachRequest) -> anyhow::Result<()> {
+        if request.tab == DockTab::Globe {
             return Ok(());
         }
-        if self.detached_tabs.contains_key(&tab) {
-            return Ok(());
-        }
-        let (title, size) = Self::detached_window_spec(tab);
+        self.remove_tab_from_host(request.host, request.tab);
+        let (title, size) = Self::detached_window_spec(request.tab);
+        let dock_state = DockState::new(vec![request.tab]);
         let window = Arc::new(target.create_window(
             WindowAttributes::default()
                 .with_title(title)
                 .with_inner_size(size),
         )?);
-        let window_id = self.register_detached_window(tab, window)?;
+        let window_id = self.register_detached_window(dock_state, window)?;
         let window = if let Some(detached) = self.detached_windows.get_mut(&window_id) {
             detached.user_moved = false;
             detached.last_pos = None;
@@ -419,32 +445,198 @@ impl App {
         } else {
             return Ok(());
         };
-        self.position_detached_window(tab, window.as_ref());
+        self.position_detached_window(request.tab, window.as_ref());
         window.request_redraw();
-        self.ui.set_tab_docked(tab, false);
         Ok(())
     }
 
-    fn attach_tab(&mut self, tab: DockTab) {
-        let Some(window_id) = self.detached_tabs.remove(&tab) else {
+    fn dock_back_window(&mut self, window_id: WindowId) {
+        let Some(detached) = self.detached_windows.remove(&window_id) else {
             return;
         };
-        if let Some(detached) = self.detached_windows.remove(&window_id) {
-            detached.window.set_visible(false);
-            self.position_hidden_window(detached.window.as_ref());
+        let tabs: Vec<DockTab> = detached
+            .dock_state
+            .iter_all_tabs()
+            .map(|(_, tab)| *tab)
+            .collect();
+        for tab in tabs {
+            self.detached_tabs.remove(&tab);
+            self.ui.main_dock_mut().push_to_focused_leaf(tab);
         }
-        self.ui.set_tab_docked(tab, true);
+        detached.window.set_visible(false);
+        self.position_hidden_window(detached.window.as_ref());
     }
 
     fn process_ui_requests(&mut self, target: &ActiveEventLoop) {
-        for tab in self.ui.take_detach_requests() {
-            if let Err(error) = self.detach_tab(target, tab) {
+        for request in self.ui.take_detach_requests() {
+            if let Err(error) = self.detach_tab(target, request) {
                 eprintln!("detach failed: {error:?}");
             }
         }
-        for tab in self.ui.take_attach_requests() {
-            self.attach_tab(tab);
+        for host in self.ui.take_attach_requests() {
+            if let DockHost::Detached(window_id) = host {
+                self.dock_back_window(WindowId::from(window_id));
+            }
         }
+    }
+
+    fn capture_drag_start(&mut self) {
+        let Some(start) = self.ui.take_drag_start() else {
+            return;
+        };
+        if self.active_drag.is_none() {
+            self.active_drag = Some(start);
+        }
+    }
+
+    fn handle_drag_release(&mut self, window_id: WindowId) {
+        let Some(active_drag) = self.active_drag.take() else {
+            return;
+        };
+        let target_host = self
+            .cursor_global_position(window_id)
+            .and_then(|pos| self.dock_host_at_global_position(pos))
+            .unwrap_or_else(|| self.dock_host_for_window_id(window_id));
+        if target_host == active_drag.host {
+            return;
+        }
+        self.move_tab_between_hosts(active_drag.tab, active_drag.host, target_host);
+    }
+
+    fn dock_host_for_window_id(&self, window_id: WindowId) -> DockHost {
+        if window_id == self.main_window_id {
+            DockHost::Main
+        } else {
+            DockHost::Detached(window_id.into())
+        }
+    }
+
+    fn cursor_global_position(
+        &self,
+        window_id: WindowId,
+    ) -> Option<PhysicalPosition<f64>> {
+        if window_id == self.main_window_id {
+            let cursor = self.main_cursor_pos?;
+            let window_pos = self.window.outer_position().ok()?;
+            return Some(PhysicalPosition::new(
+                window_pos.x as f64 + cursor.x,
+                window_pos.y as f64 + cursor.y,
+            ));
+        }
+        let detached = self.detached_windows.get(&window_id)?;
+        let cursor = detached.last_cursor_pos?;
+        let window_pos = detached.window.outer_position().ok()?;
+        Some(PhysicalPosition::new(
+            window_pos.x as f64 + cursor.x,
+            window_pos.y as f64 + cursor.y,
+        ))
+    }
+
+    fn dock_host_at_global_position(
+        &self,
+        position: PhysicalPosition<f64>,
+    ) -> Option<DockHost> {
+        for (window_id, detached) in &self.detached_windows {
+            let Ok(window_pos) = detached.window.outer_position() else {
+                continue;
+            };
+            let window_size = detached.window.outer_size();
+            if position.x >= window_pos.x as f64
+                && position.y >= window_pos.y as f64
+                && position.x <= window_pos.x as f64 + window_size.width as f64
+                && position.y <= window_pos.y as f64 + window_size.height as f64
+            {
+                return Some(DockHost::Detached((*window_id).into()));
+            }
+        }
+        if let Ok(window_pos) = self.window.outer_position() {
+            let window_size = self.window.outer_size();
+            if position.x >= window_pos.x as f64
+                && position.y >= window_pos.y as f64
+                && position.x <= window_pos.x as f64 + window_size.width as f64
+                && position.y <= window_pos.y as f64 + window_size.height as f64
+            {
+                return Some(DockHost::Main);
+            }
+        }
+        None
+    }
+
+    fn dock_state_for_host_mut(
+        &mut self,
+        host: DockHost,
+    ) -> Option<&mut DockState<DockTab>> {
+        match host {
+            DockHost::Main => Some(self.ui.main_dock_mut()),
+            DockHost::Detached(window_id) => self
+                .detached_windows
+                .get_mut(&WindowId::from(window_id))
+                .map(|detached| &mut detached.dock_state),
+        }
+    }
+
+    fn dock_host_exists(&self, host: DockHost) -> bool {
+        match host {
+            DockHost::Main => true,
+            DockHost::Detached(window_id) => {
+                self.detached_windows.contains_key(&WindowId::from(window_id))
+            }
+        }
+    }
+
+    fn remove_tab_from_host(&mut self, host: DockHost, tab: DockTab) {
+        let Some(dock_state) = self.dock_state_for_host_mut(host) else {
+            return;
+        };
+        if let Some((surface, node, tab_index)) = dock_state.find_tab(&tab) {
+            dock_state.remove_tab((surface, node, tab_index));
+        }
+        let should_close = match host {
+            DockHost::Detached(_) => dock_state.main_surface().is_empty(),
+            DockHost::Main => false,
+        };
+        let window_id = match host {
+            DockHost::Detached(window_id) => Some(WindowId::from(window_id)),
+            DockHost::Main => None,
+        };
+        if should_close {
+            if let Some(window_id) = window_id {
+                self.close_detached_window(window_id);
+            }
+        }
+    }
+
+    fn move_tab_between_hosts(&mut self, tab: DockTab, from: DockHost, to: DockHost) {
+        if tab == DockTab::Globe {
+            return;
+        }
+        if !self.dock_host_exists(to) {
+            return;
+        }
+        self.remove_tab_from_host(from, tab);
+        let Some(target_state) = self.dock_state_for_host_mut(to) else {
+            return;
+        };
+        target_state.push_to_focused_leaf(tab);
+        match to {
+            DockHost::Main => {
+                self.detached_tabs.remove(&tab);
+            }
+            DockHost::Detached(window_id) => {
+                self.detached_tabs.insert(tab, WindowId::from(window_id));
+            }
+        }
+    }
+
+    fn close_detached_window(&mut self, window_id: WindowId) {
+        let Some(detached) = self.detached_windows.remove(&window_id) else {
+            return;
+        };
+        for (_, tab) in detached.dock_state.iter_all_tabs() {
+            self.detached_tabs.remove(tab);
+        }
+        detached.window.set_visible(false);
+        self.position_hidden_window(detached.window.as_ref());
     }
 
     fn sync_operations_settings(&mut self) {
@@ -553,6 +745,16 @@ impl App {
                 let size = window.inner_size();
                 self.renderer.resize(size.width, size.height);
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.main_cursor_pos = Some(*position);
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                if *state == winit::event::ElementState::Released
+                    && *button == winit::event::MouseButton::Left
+                {
+                    self.handle_drag_release(self.main_window_id);
+                }
+            }
             _ => {}
         }
         true
@@ -638,6 +840,7 @@ impl App {
         });
         self.egui_state
             .handle_platform_output(window, output.platform_output);
+        self.capture_drag_start();
         let paint_jobs = self.egui_ctx.tessellate(output.shapes, output.pixels_per_point);
         let ui_ms = ui_start.elapsed().as_secs_f32() * 1000.0;
 

@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use glam::{Vec2, Vec3, Vec4};
 
@@ -12,6 +10,24 @@ pub enum DockTab {
     Operations,
     Entities,
     Inspector,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DockHost {
+    Main,
+    Detached(u64),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DockDragStart {
+    pub tab: DockTab,
+    pub host: DockHost,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DockDetachRequest {
+    pub tab: DockTab,
+    pub host: DockHost,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -103,12 +119,12 @@ const SEA_FIELDS: &[&str] = &[
 ];
 
 pub struct UiState {
-    dock_state: DockState<DockTab>,
+    main_dock: DockState<DockTab>,
     globe_rect: Option<egui::Rect>,
     operations: OperationsState,
-    docked_tabs: HashSet<DockTab>,
-    pending_detach: Vec<DockTab>,
-    pending_attach: Vec<DockTab>,
+    pending_detach: Vec<DockDetachRequest>,
+    pending_attach: Vec<DockHost>,
+    pending_drag_start: Option<DockDragStart>,
 }
 
 #[derive(Clone)]
@@ -153,19 +169,13 @@ pub struct Diagnostics {
 
 impl UiState {
     pub fn new() -> Self {
-        let mut docked_tabs = HashSet::new();
-        docked_tabs.insert(DockTab::Globe);
-        docked_tabs.insert(DockTab::Operations);
-        docked_tabs.insert(DockTab::Entities);
-        docked_tabs.insert(DockTab::Inspector);
-        let dock_state = build_dock_state(&docked_tabs);
         Self {
-            dock_state,
+            main_dock: build_default_dock_state(),
             globe_rect: None,
             operations: OperationsState::default(),
-            docked_tabs,
             pending_detach: Vec::new(),
             pending_attach: Vec::new(),
+            pending_drag_start: None,
         }
     }
 
@@ -195,16 +205,18 @@ impl UiState {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let mut viewer = DockViewer {
+                dock_host: DockHost::Main,
                 world,
                 renderer,
-                globe_rect: &mut self.globe_rect,
+                globe_rect: Some(&mut self.globe_rect),
                 globe_texture_id,
                 operations: &mut self.operations,
                 diagnostics,
                 detach_requests: &mut self.pending_detach,
+                drag_requests: &mut self.pending_drag_start,
             };
             let style = Style::from_egui(ui.style());
-            DockArea::new(&mut self.dock_state)
+            DockArea::new(&mut self.main_dock)
                 .style(style)
                 .show_inside(ui, &mut viewer);
         });
@@ -221,59 +233,60 @@ impl UiState {
         &self.operations
     }
 
-    pub fn take_detach_requests(&mut self) -> Vec<DockTab> {
+    pub fn main_dock_mut(&mut self) -> &mut DockState<DockTab> {
+        &mut self.main_dock
+    }
+
+    pub fn take_detach_requests(&mut self) -> Vec<DockDetachRequest> {
         std::mem::take(&mut self.pending_detach)
     }
 
-    pub fn take_attach_requests(&mut self) -> Vec<DockTab> {
+    pub fn take_attach_requests(&mut self) -> Vec<DockHost> {
         std::mem::take(&mut self.pending_attach)
     }
 
-    pub fn set_tab_docked(&mut self, tab: DockTab, docked: bool) {
-        if tab == DockTab::Globe {
-            return;
-        }
-        let changed = if docked {
-            self.docked_tabs.insert(tab)
-        } else {
-            self.docked_tabs.remove(&tab)
-        };
-        if changed {
-            self.dock_state = build_dock_state(&self.docked_tabs);
-        }
+    pub fn take_drag_start(&mut self) -> Option<DockDragStart> {
+        self.pending_drag_start.take()
     }
 
     pub fn show_detached_panel(
         &mut self,
         ctx: &egui::Context,
-        tab: DockTab,
+        dock_host: DockHost,
+        dock_state: &mut DockState<DockTab>,
         world: &WorldState,
         renderer: &Renderer,
         diagnostics: &Diagnostics,
     ) {
-        let label = tab_label(tab);
-        egui::TopBottomPanel::top(format!("detached-topbar-{}", tab_key(tab))).show(ctx, |ui| {
+        egui::TopBottomPanel::top(format!(
+            "detached-topbar-{}",
+            dock_host_key(dock_host)
+        ))
+        .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(label);
+                ui.label("Dock Window");
                 ui.add_space(6.0);
                 if ui.button("Dock Back").clicked() {
-                    self.pending_attach.push(tab);
+                    self.pending_attach.push(dock_host);
                 }
             });
         });
-        egui::CentralPanel::default().show(ctx, |ui| match tab {
-            DockTab::Operations => {
-                operations_panel(ui, &mut self.operations);
-            }
-            DockTab::Entities => {
-                entities_panel(ui, world);
-            }
-            DockTab::Inspector => {
-                inspector_panel(ui, renderer, diagnostics);
-            }
-            DockTab::Globe => {
-                ui.label("Globe cannot be detached.");
-            }
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let mut viewer = DockViewer {
+                dock_host,
+                world,
+                renderer,
+                globe_rect: None,
+                globe_texture_id: None,
+                operations: &mut self.operations,
+                diagnostics,
+                detach_requests: &mut self.pending_detach,
+                drag_requests: &mut self.pending_drag_start,
+            };
+            let style = Style::from_egui(ui.style());
+            DockArea::new(dock_state)
+                .style(style)
+                .show_inside(ui, &mut viewer);
         });
     }
 
@@ -400,45 +413,28 @@ impl UiState {
     }
 }
 
-fn build_dock_state(docked_tabs: &HashSet<DockTab>) -> DockState<DockTab> {
+fn build_default_dock_state() -> DockState<DockTab> {
     let mut dock_state = DockState::new(vec![DockTab::Globe]);
     let root = NodeIndex::root();
     let mut center = root;
-    if docked_tabs.contains(&DockTab::Operations) {
-        let [new_center, _left] = dock_state
-            .main_surface_mut()
-            .split_left(center, 0.28, vec![DockTab::Operations]);
-        center = new_center;
-    }
-    if docked_tabs.contains(&DockTab::Entities) {
-        let [new_center, _right] = dock_state
-            .main_surface_mut()
-            .split_right(center, 0.28, vec![DockTab::Entities]);
-        center = new_center;
-    }
-    if docked_tabs.contains(&DockTab::Inspector) {
-        dock_state
-            .main_surface_mut()
-            .split_below(center, 0.28, vec![DockTab::Inspector]);
-    }
+    let [new_center, _left] = dock_state
+        .main_surface_mut()
+        .split_left(center, 0.28, vec![DockTab::Operations]);
+    center = new_center;
+    let [new_center, _right] = dock_state
+        .main_surface_mut()
+        .split_right(center, 0.28, vec![DockTab::Entities]);
+    center = new_center;
+    dock_state
+        .main_surface_mut()
+        .split_below(center, 0.28, vec![DockTab::Inspector]);
     dock_state
 }
 
-fn tab_label(tab: DockTab) -> &'static str {
-    match tab {
-        DockTab::Globe => "Globe",
-        DockTab::Operations => "Operations",
-        DockTab::Entities => "Entities",
-        DockTab::Inspector => "Inspector",
-    }
-}
-
-fn tab_key(tab: DockTab) -> &'static str {
-    match tab {
-        DockTab::Globe => "globe",
-        DockTab::Operations => "operations",
-        DockTab::Entities => "entities",
-        DockTab::Inspector => "inspector",
+fn dock_host_key(host: DockHost) -> String {
+    match host {
+        DockHost::Main => "main".to_string(),
+        DockHost::Detached(id) => format!("detached-{id}"),
     }
 }
 
@@ -618,13 +614,15 @@ pub fn tile_provider_config(id: &str) -> TileProviderConfig {
 }
 
 struct DockViewer<'a> {
+    dock_host: DockHost,
     world: &'a WorldState,
     renderer: &'a Renderer,
-    globe_rect: &'a mut Option<egui::Rect>,
+    globe_rect: Option<&'a mut Option<egui::Rect>>,
     globe_texture_id: Option<egui::TextureId>,
     operations: &'a mut OperationsState,
     diagnostics: &'a Diagnostics,
-    detach_requests: &'a mut Vec<DockTab>,
+    detach_requests: &'a mut Vec<DockDetachRequest>,
+    drag_requests: &'a mut Option<DockDragStart>,
 }
 
 impl TabViewer for DockViewer<'_> {
@@ -642,7 +640,11 @@ impl TabViewer for DockViewer<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         match tab {
             DockTab::Globe => {
-                globe_panel(ui, self.globe_rect, self.globe_texture_id);
+                if let Some(globe_rect) = self.globe_rect.as_mut() {
+                    globe_panel(ui, *globe_rect, self.globe_texture_id);
+                } else {
+                    ui.label("Globe is available only in the main window.");
+                }
             }
             DockTab::Operations => {
                 operations_panel(ui, self.operations);
@@ -665,9 +667,21 @@ impl TabViewer for DockViewer<'_> {
     ) {
         if matches!(tab, DockTab::Operations | DockTab::Entities | DockTab::Inspector) {
             if ui.button("Detach to window").clicked() {
-                self.detach_requests.push(*tab);
+                self.detach_requests.push(DockDetachRequest {
+                    tab: *tab,
+                    host: self.dock_host,
+                });
                 ui.close();
             }
+        }
+    }
+
+    fn on_tab_button(&mut self, tab: &mut Self::Tab, response: &egui::Response) {
+        if *tab != DockTab::Globe && response.drag_started() && self.drag_requests.is_none() {
+            *self.drag_requests = Some(DockDragStart {
+                tab: *tab,
+                host: self.dock_host,
+            });
         }
     }
 
