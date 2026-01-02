@@ -43,6 +43,7 @@ const SEA_UPDATE_INTERVAL_MS: u64 = 1100;
 const MAX_TILE_UPLOADS_PER_FRAME: usize = 24;
 const TILE_STALL_THRESHOLD_MS: f32 = 8000.0;
 const PERF_SAMPLE_COUNT: usize = 120;
+const DROP_TARGET_MARGIN_PX: f64 = 12.0;
 
 pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoop::new()?;
@@ -412,6 +413,13 @@ impl App {
 
     fn render_main(&mut self, event_loop: &ActiveEventLoop) -> anyhow::Result<()> {
         let drag_state = self.drag_state;
+        let drag_cursor = if drag_state.is_some() {
+            self.main.as_ref().and_then(|main| {
+                self.cursor_logical_for_window(&main.window, main.cursor_logical)
+            })
+        } else {
+            None
+        };
         let active_globe_bounds = self.active_globe_bounds();
         let now = Instant::now();
         let frame_start = now;
@@ -503,16 +511,15 @@ impl App {
             };
             let events: Vec<IcedEvent> = main.ui_events.drain(..).collect();
             let mut messages = Vec::new();
-            let drag_preview = drag_state
-                .and_then(|state| {
-                    main.cursor_logical.map(|cursor| DragPreview {
-                        panel: state.panel,
-                        cursor,
-                    })
-                });
+            let drag_preview = drag_state.and_then(|state| {
+                drag_cursor.map(|cursor| DragPreview {
+                    panel: state.panel,
+                    cursor,
+                })
+            });
             let drop_indicator = drag_state
                 .and_then(|state| main.drop_target.then_some(state.panel))
-                .and_then(|panel| main.cursor_logical.map(|cursor| (panel, cursor)))
+                .and_then(|panel| drag_cursor.map(|cursor| (panel, cursor)))
                 .and_then(|(panel, cursor)| drop_indicator_for_main(core, main, panel, cursor));
             let element = core.ui.view_main(
                 main.window.id(),
@@ -640,6 +647,13 @@ impl App {
         window_id: WindowId,
     ) -> anyhow::Result<()> {
         let drag_state = self.drag_state;
+        let drag_cursor = if drag_state.is_some() {
+            self.detached.get(&window_id).and_then(|detached| {
+                self.cursor_logical_for_window(&detached.window, detached.cursor_logical)
+            })
+        } else {
+            None
+        };
         let (messages, viewport, globe_active) = {
             let core = self.core.as_mut().expect("core ready");
             let Some(detached) = self.detached.get_mut(&window_id) else {
@@ -656,16 +670,15 @@ impl App {
             let mut messages = Vec::new();
             let tile_bars = core.tile_layers.progress_bars();
             let globe_active = detached.active_panel == PanelId::Globe;
-            let drag_preview = drag_state
-                .and_then(|state| {
-                    detached.cursor_logical.map(|cursor| DragPreview {
-                        panel: state.panel,
-                        cursor,
-                    })
-                });
+            let drag_preview = drag_state.and_then(|state| {
+                drag_cursor.map(|cursor| DragPreview {
+                    panel: state.panel,
+                    cursor,
+                })
+            });
             let drop_indicator = drag_state
                 .and_then(|state| detached.drop_target.then_some(state.panel))
-                .and_then(|panel| detached.cursor_logical.map(|cursor| (panel, cursor)))
+                .and_then(|panel| drag_cursor.map(|cursor| (panel, cursor)))
                 .and_then(|(panel, cursor)| drop_indicator_for_detached(core, detached, panel, cursor));
             let element = core.ui.view_detached(
                 detached.window.id(),
@@ -822,8 +835,18 @@ impl App {
         self.clear_drop_targets();
 
         match target {
-            Some(target_window) if target_window != drag_state.source_window => {
-                if let Some(target_panel) = target_panel {
+            Some(target_window) => {
+                if target_window == drag_state.source_window {
+                    if let Some(target_panel) = target_panel {
+                        if target_panel != drag_state.panel {
+                            self.swap_panels_in_window(
+                                target_window,
+                                drag_state.panel,
+                                target_panel,
+                            );
+                        }
+                    }
+                } else if let Some(target_panel) = target_panel {
                     if target_panel != drag_state.panel {
                         self.swap_panels(
                             drag_state.panel,
@@ -846,7 +869,6 @@ impl App {
                     );
                 }
             }
-            Some(_) => {}
             None => {
                 self.detach_panel(event_loop, drag_state.panel, drag_state.source_window);
             }
@@ -858,12 +880,12 @@ impl App {
         let target = self.window_at_cursor()?;
         if let Some(main) = self.main.as_ref() {
             if main.window.id() == target {
-                let cursor = main.cursor_logical?;
+                let cursor = self.cursor_logical_for_window(&main.window, main.cursor_logical)?;
                 return panel_at_point_main(core, main, cursor);
             }
         }
         let detached = self.detached.get(&target)?;
-        let cursor = detached.cursor_logical?;
+        let cursor = self.cursor_logical_for_window(&detached.window, detached.cursor_logical)?;
         panel_at_point_detached(core, detached, cursor)
     }
 
@@ -880,6 +902,31 @@ impl App {
         self.add_panel_to_window(panel_b, window_a);
         self.cleanup_window(window_a);
         self.cleanup_window(window_b);
+    }
+
+    fn swap_panels_in_window(
+        &mut self,
+        window: WindowId,
+        panel_a: PanelId,
+        panel_b: PanelId,
+    ) {
+        let Some(detached) = self.detached.get_mut(&window) else {
+            return;
+        };
+        let mut index_a = None;
+        let mut index_b = None;
+        for (index, panel) in detached.panels.iter().enumerate() {
+            if *panel == panel_a {
+                index_a = Some(index);
+            } else if *panel == panel_b {
+                index_b = Some(index);
+            }
+        }
+        let (Some(index_a), Some(index_b)) = (index_a, index_b) else {
+            return;
+        };
+        detached.panels.swap(index_a, index_b);
+        detached.active_panel = panel_a;
     }
 
     fn detach_panel(&mut self, event_loop: &ActiveEventLoop, panel: PanelId, source_window: WindowId) {
@@ -987,18 +1034,48 @@ impl App {
 
     fn window_at_cursor(&self) -> Option<WindowId> {
         if let Some(cursor) = self.global_cursor {
+            let margin = if self.drag_state.is_some() {
+                DROP_TARGET_MARGIN_PX
+            } else {
+                0.0
+            };
             if let Some(main) = self.main.as_ref() {
-                if window_contains(&main.window, cursor) {
+                if window_contains(&main.window, cursor, margin) {
                     return Some(main.window.id());
                 }
             }
             for (id, window) in &self.detached {
-                if window_contains(&window.window, cursor) {
+                if window_contains(&window.window, cursor, margin) {
                     return Some(*id);
                 }
             }
         }
         self.hovered_window
+    }
+
+    fn cursor_logical_for_window(&self, window: &Window, fallback: Option<Point>) -> Option<Point> {
+        let Some(cursor) = self.global_cursor else {
+            return fallback;
+        };
+        let Ok(pos) = window.inner_position() else {
+            return fallback;
+        };
+        let size = window.inner_size();
+        let local_x = cursor.x - pos.x as f64;
+        let local_y = cursor.y - pos.y as f64;
+        let margin = DROP_TARGET_MARGIN_PX;
+        if local_x < -margin
+            || local_y < -margin
+            || local_x > size.width as f64 + margin
+            || local_y > size.height as f64 + margin
+        {
+            return fallback;
+        }
+        let clamped_x = local_x.clamp(0.0, size.width as f64);
+        let clamped_y = local_y.clamp(0.0, size.height as f64);
+        let logical =
+            PhysicalPosition::new(clamped_x, clamped_y).to_logical::<f64>(window.scale_factor());
+        Some(Point::new(logical.x as f32, logical.y as f32))
     }
 
     fn update_drop_targets(&mut self) {
@@ -1441,15 +1518,15 @@ fn remove_panel_from_detached(detached: &mut DetachedWindow, panel: PanelId) {
     }
 }
 
-fn window_contains(window: &Window, cursor: PhysicalPosition<f64>) -> bool {
+fn window_contains(window: &Window, cursor: PhysicalPosition<f64>, margin: f64) -> bool {
     let Ok(position) = window.inner_position() else {
         return false;
     };
     let size = window.inner_size();
-    let left = position.x as f64;
-    let top = position.y as f64;
-    let right = left + size.width as f64;
-    let bottom = top + size.height as f64;
+    let left = position.x as f64 - margin;
+    let top = position.y as f64 - margin;
+    let right = left + size.width as f64 + margin * 2.0;
+    let bottom = top + size.height as f64 + margin * 2.0;
     cursor.x >= left && cursor.x <= right && cursor.y >= top && cursor.y <= bottom
 }
 
