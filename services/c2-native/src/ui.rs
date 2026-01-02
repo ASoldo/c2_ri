@@ -1132,12 +1132,10 @@ impl canvas::Program<UiMessage, Theme, UiRenderer> for DragPreviewOverlay {
         let height = text_size + padding_y * 2.0;
         let mut x = self.preview.cursor.x + 12.0;
         let mut y = self.preview.cursor.y + 12.0;
-        if x + width > bounds.width {
-            x = (bounds.width - width - 6.0).max(6.0);
-        }
-        if y + height > bounds.height {
-            y = (bounds.height - height - 6.0).max(6.0);
-        }
+        let max_x = (bounds.width - width - 6.0).max(6.0);
+        let max_y = (bounds.height - height - 6.0).max(6.0);
+        x = x.clamp(6.0, max_x);
+        y = y.clamp(6.0, max_y);
         let rect = canvas::Path::rectangle(Point::new(x, y), Size::new(width, height));
         frame.fill(&rect, Color::from_rgba8(24, 28, 38, 0.92));
         frame.stroke(

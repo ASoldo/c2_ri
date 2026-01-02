@@ -233,7 +233,9 @@ impl App {
                 WindowEvent::CursorLeft { .. } => {
                     main.cursor_logical = None;
                     main.last_cursor_physical = None;
-                    self.global_cursor = None;
+                    if self.drag_state.is_none() {
+                        self.global_cursor = None;
+                    }
                     if self.hovered_window == Some(main.window.id()) {
                         self.hovered_window = None;
                     }
@@ -353,7 +355,9 @@ impl App {
                 WindowEvent::CursorLeft { .. } => {
                     detached.cursor_logical = None;
                     detached.last_cursor_physical = None;
-                    self.global_cursor = None;
+                    if self.drag_state.is_none() {
+                        self.global_cursor = None;
+                    }
                     if self.hovered_window == Some(detached.window.id()) {
                         self.hovered_window = None;
                     }
@@ -508,7 +512,8 @@ impl App {
                 });
             let drop_indicator = drag_state
                 .and_then(|state| main.drop_target.then_some(state.panel))
-                .and_then(|panel| drop_indicator_for_main(core, main, panel));
+                .and_then(|panel| main.cursor_logical.map(|cursor| (panel, cursor)))
+                .and_then(|(panel, cursor)| drop_indicator_for_main(core, main, panel, cursor));
             let element = core.ui.view_main(
                 main.window.id(),
                 main.panels,
@@ -660,7 +665,8 @@ impl App {
                 });
             let drop_indicator = drag_state
                 .and_then(|state| detached.drop_target.then_some(state.panel))
-                .and_then(|panel| drop_indicator_for_detached(core, detached, panel));
+                .and_then(|panel| detached.cursor_logical.map(|cursor| (panel, cursor)))
+                .and_then(|(panel, cursor)| drop_indicator_for_detached(core, detached, panel, cursor));
             let element = core.ui.view_detached(
                 detached.window.id(),
                 &detached.panels,
@@ -807,12 +813,38 @@ impl App {
             return;
         };
 
+        let target_panel = self
+            .core
+            .as_ref()
+            .and_then(|core| self.panel_at_cursor(core));
+
         let target = self.window_at_cursor();
         self.clear_drop_targets();
 
         match target {
             Some(target_window) if target_window != drag_state.source_window => {
-                self.move_panel_to_window(drag_state.panel, drag_state.source_window, target_window);
+                if let Some(target_panel) = target_panel {
+                    if target_panel != drag_state.panel {
+                        self.swap_panels(
+                            drag_state.panel,
+                            drag_state.source_window,
+                            target_panel,
+                            target_window,
+                        );
+                    } else {
+                        self.move_panel_to_window(
+                            drag_state.panel,
+                            drag_state.source_window,
+                            target_window,
+                        );
+                    }
+                } else {
+                    self.move_panel_to_window(
+                        drag_state.panel,
+                        drag_state.source_window,
+                        target_window,
+                    );
+                }
             }
             Some(_) => {}
             None => {
@@ -820,6 +852,34 @@ impl App {
             }
         }
         self.set_drag_cursor(false);
+    }
+
+    fn panel_at_cursor(&self, core: &AppCore) -> Option<PanelId> {
+        let target = self.window_at_cursor()?;
+        if let Some(main) = self.main.as_ref() {
+            if main.window.id() == target {
+                let cursor = main.cursor_logical?;
+                return panel_at_point_main(core, main, cursor);
+            }
+        }
+        let detached = self.detached.get(&target)?;
+        let cursor = detached.cursor_logical?;
+        panel_at_point_detached(core, detached, cursor)
+    }
+
+    fn swap_panels(
+        &mut self,
+        panel_a: PanelId,
+        window_a: WindowId,
+        panel_b: PanelId,
+        window_b: WindowId,
+    ) {
+        self.remove_panel_from_window(panel_a, window_a);
+        self.remove_panel_from_window(panel_b, window_b);
+        self.add_panel_to_window(panel_a, window_b);
+        self.add_panel_to_window(panel_b, window_a);
+        self.cleanup_window(window_a);
+        self.cleanup_window(window_b);
     }
 
     fn detach_panel(&mut self, event_loop: &ActiveEventLoop, panel: PanelId, source_window: WindowId) {
@@ -1397,6 +1457,7 @@ fn drop_indicator_for_main(
     core: &AppCore,
     main: &MainWindow,
     panel: PanelId,
+    cursor: Point,
 ) -> Option<DropIndicator> {
     let scale_factor = main.window.scale_factor() as f32;
     let size = core.renderer.size();
@@ -1405,6 +1466,10 @@ fn drop_indicator_for_main(
         size.1 as f32 / scale_factor,
     );
     let layout = core.ui.layout();
+    if let Some(target_panel) = panel_at_point_main(core, main, cursor) {
+        let rect = main_panel_rect(layout, logical_size, main.panels, target_panel)?;
+        return Some(DropIndicator { rect });
+    }
     let mut panels = main.panels;
     match panel {
         PanelId::Globe => panels.globe = true,
@@ -1420,6 +1485,7 @@ fn drop_indicator_for_detached(
     core: &AppCore,
     detached: &DetachedWindow,
     _panel: PanelId,
+    cursor: Point,
 ) -> Option<DropIndicator> {
     let scale_factor = detached.window.scale_factor() as f32;
     let logical_size = Size::new(
@@ -1427,7 +1493,15 @@ fn drop_indicator_for_detached(
         detached.size.height as f32 / scale_factor,
     );
     let layout = core.ui.layout();
-    let rect = detached_tab_drop_rect(layout, logical_size)?;
+    if detached.panels.len() > 1 {
+        if let Some(tab_rect) = detached_tab_drop_rect(layout, logical_size) {
+            if tab_rect.contains(cursor) {
+                return Some(DropIndicator { rect: tab_rect });
+            }
+        }
+    }
+    let has_tabs = detached.panels.len() > 1;
+    let rect = core.ui.detached_globe_rect(logical_size, has_tabs);
     Some(DropIndicator { rect })
 }
 
@@ -1503,6 +1577,52 @@ fn detached_tab_drop_rect(layout: crate::ui::UiLayout, window_size: Size) -> Opt
         Point::new(x, y),
         Size::new(content_width, layout.tab_bar_height),
     ))
+}
+
+fn panel_at_point_main(core: &AppCore, main: &MainWindow, cursor: Point) -> Option<PanelId> {
+    let scale_factor = main.window.scale_factor() as f32;
+    let size = core.renderer.size();
+    let logical_size = Size::new(
+        size.0 as f32 / scale_factor,
+        size.1 as f32 / scale_factor,
+    );
+    let layout = core.ui.layout();
+    for panel in PanelId::ALL {
+        if !main.panels.contains(panel) {
+            continue;
+        }
+        let rect = main_panel_rect(layout, logical_size, main.panels, panel)?;
+        if rect.contains(cursor) {
+            return Some(panel);
+        }
+    }
+    None
+}
+
+fn panel_at_point_detached(
+    core: &AppCore,
+    detached: &DetachedWindow,
+    cursor: Point,
+) -> Option<PanelId> {
+    let scale_factor = detached.window.scale_factor() as f32;
+    let logical_size = Size::new(
+        detached.size.width as f32 / scale_factor,
+        detached.size.height as f32 / scale_factor,
+    );
+    let layout = core.ui.layout();
+    if detached.panels.len() > 1 {
+        if let Some(tab_rect) = detached_tab_drop_rect(layout, logical_size) {
+            if tab_rect.contains(cursor) {
+                return None;
+            }
+        }
+    }
+    let has_tabs = detached.panels.len() > 1;
+    let body_rect = core.ui.detached_globe_rect(logical_size, has_tabs);
+    if body_rect.contains(cursor) {
+        return Some(detached.active_panel);
+    }
+    None
 }
 
 fn detached_window_size(layout: crate::ui::UiLayout, panel: PanelId) -> winit::dpi::LogicalSize<f64> {
