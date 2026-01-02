@@ -85,6 +85,20 @@ impl TileInstanceRaw {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct RenderBounds {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+const GLOBE_RADIUS: f32 = 120.0;
+const MAP_TILE_RADIUS: f32 = GLOBE_RADIUS + 0.04;
+const SEA_TILE_RADIUS: f32 = GLOBE_RADIUS + 0.08;
+const WEATHER_TILE_RADIUS: f32 = GLOBE_RADIUS + 0.12;
+
+#[allow(dead_code)]
 pub struct Renderer {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
@@ -133,6 +147,7 @@ pub struct Renderer {
     viewport_size: (u32, u32),
 }
 
+#[allow(dead_code)]
 impl Renderer {
     pub async fn new(window: &winit::window::Window) -> anyhow::Result<Self> {
         let size = window.inner_size();
@@ -508,7 +523,7 @@ impl Renderer {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("globe pipeline layout"),
                 bind_group_layouts: &[&globe_bind_group_layout],
-                immediate_size: 0,
+                push_constant_ranges: &[],
             });
         let globe_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("globe pipeline"),
@@ -550,7 +565,7 @@ impl Renderer {
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
-            multiview_mask: None,
+            multiview: None,
             cache: None,
         });
 
@@ -565,7 +580,7 @@ impl Renderer {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("marker pipeline layout"),
                 bind_group_layouts: &[&marker_bind_group_layout],
-                immediate_size: 0,
+                push_constant_ranges: &[],
             });
 
         let marker_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -599,7 +614,7 @@ impl Renderer {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
+                depth_compare: wgpu::CompareFunction::LessEqual,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
@@ -608,7 +623,7 @@ impl Renderer {
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
-            multiview_mask: None,
+            multiview: None,
             cache: None,
         });
 
@@ -622,7 +637,7 @@ impl Renderer {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("tile pipeline layout"),
                 bind_group_layouts: &[&tile_bind_group_layout],
-                immediate_size: 0,
+                push_constant_ranges: &[],
             });
         let tile_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("tile pipeline"),
@@ -664,11 +679,11 @@ impl Renderer {
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
-            multiview_mask: None,
+            multiview: None,
             cache: None,
         });
 
-        let (globe_vertices, globe_indices) = build_sphere(120.0, 128, 64);
+        let (globe_vertices, globe_indices) = build_sphere(GLOBE_RADIUS, 128, 64);
         let globe_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("globe vertex buffer"),
             contents: bytemuck::cast_slice(&globe_vertices),
@@ -721,7 +736,7 @@ impl Renderer {
             &camera_buffer,
             TILE_SIZE,
             MAP_TILE_CAPACITY as u32,
-            120.0,
+            MAP_TILE_RADIUS,
             1.0,
             "map tiles",
         )?;
@@ -732,7 +747,7 @@ impl Renderer {
             &camera_buffer,
             TILE_SIZE,
             WEATHER_TILE_CAPACITY as u32,
-            120.0,
+            WEATHER_TILE_RADIUS,
             0.55,
             "weather tiles",
         )?;
@@ -743,7 +758,7 @@ impl Renderer {
             &camera_buffer,
             TILE_SIZE,
             SEA_TILE_CAPACITY as u32,
-            120.0,
+            SEA_TILE_RADIUS,
             0.45,
             "sea tiles",
         )?;
@@ -801,6 +816,18 @@ impl Renderer {
         self.surface_format
     }
 
+    pub fn create_surface(
+        &self,
+        window: &winit::window::Window,
+    ) -> anyhow::Result<wgpu::Surface<'static>> {
+        let surface = self.instance.create_surface(window)?;
+        Ok(unsafe { std::mem::transmute::<wgpu::Surface<'_>, wgpu::Surface<'static>>(surface) })
+    }
+
+    pub fn adapter(&self) -> &wgpu::Adapter {
+        &self.adapter
+    }
+
     pub fn size(&self) -> (u32, u32) {
         self.size
     }
@@ -827,6 +854,10 @@ impl Renderer {
 
     pub fn camera_aspect(&self) -> f32 {
         self.camera.aspect
+    }
+
+    pub fn set_camera_aspect(&mut self, width: u32, height: u32) {
+        self.camera.update_aspect(width, height);
     }
 
     pub fn viewport_view(&self) -> &wgpu::TextureView {
@@ -895,7 +926,7 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
-        self.camera.update_aspect(width, height);
+        self.ensure_viewport_size(width, height);
     }
 
     pub fn handle_input(&mut self, event: &winit::event::WindowEvent) {
@@ -941,12 +972,18 @@ impl Renderer {
         self.camera.view_proj()
     }
 
-    pub fn render_scene(&mut self, encoder: &mut wgpu::CommandEncoder) {
+    pub fn render_scene(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        color_view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        bounds: Option<RenderBounds>,
+    ) {
         self.update_camera();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("globe + marker pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.viewport_view,
+                view: color_view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -960,7 +997,7 @@ impl Renderer {
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &self.viewport_depth_view,
+                view: depth_view,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
                     store: wgpu::StoreOp::Store,
@@ -969,8 +1006,20 @@ impl Renderer {
             }),
             timestamp_writes: None,
             occlusion_query_set: None,
-            multiview_mask: None,
         });
+        if let Some(bounds) = bounds {
+            if bounds.width > 0 && bounds.height > 0 {
+                pass.set_viewport(
+                    bounds.x as f32,
+                    bounds.y as f32,
+                    bounds.width as f32,
+                    bounds.height as f32,
+                    0.0,
+                    1.0,
+                );
+                pass.set_scissor_rect(bounds.x, bounds.y, bounds.width, bounds.height);
+            }
+        }
         pass.set_pipeline(&self.globe_pipeline);
         pass.set_bind_group(0, &self.globe_bind_group, &[]);
         pass.set_vertex_buffer(0, self.globe_vertex_buffer.slice(..));
@@ -1196,6 +1245,7 @@ impl Renderer {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum GlobeLayer {
     Base,
     Map,

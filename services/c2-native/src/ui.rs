@@ -1,33 +1,204 @@
-use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
-use glam::{Vec2, Vec3, Vec4};
+use iced::mouse;
+use iced::widget::{
+    button, checkbox, column, container, mouse_area, pick_list, progress_bar, row, scrollable,
+    space, stack, text,
+};
+use iced::widget::canvas;
+use iced::{alignment, Alignment, Background, Border, Color, Length, Point, Rectangle, Size, Theme};
+use iced_wgpu::Renderer as UiRenderer;
+use iced_winit::core::Element as IcedElement;
+use winit::window::WindowId;
 
-use crate::ecs::{RenderInstance, WorldState};
+use crate::ecs::WorldState;
 use crate::renderer::Renderer;
 
+const OUTER_PADDING: f32 = 10.0;
+const COLUMN_SPACING: f32 = 10.0;
+const ROW_SPACING: f32 = 10.0;
+const TOP_BAR_HEIGHT: f32 = 34.0;
+const TAB_BAR_HEIGHT: f32 = 30.0;
+const GLOBE_HEADER_HEIGHT: f32 = 26.0;
+const PANEL_HEADER_SPACING: f32 = 6.0;
+const PANEL_WIDTH: f32 = 300.0;
+const INSPECTOR_HEIGHT: f32 = 220.0;
+const PANEL_PADDING: f32 = 12.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DockTab {
+pub enum PanelId {
     Globe,
     Operations,
     Entities,
     Inspector,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DockHost {
-    Main,
-    Detached(u64),
+impl PanelId {
+    #[allow(dead_code)]
+    pub const ALL: [PanelId; 4] = [
+        PanelId::Globe,
+        PanelId::Operations,
+        PanelId::Entities,
+        PanelId::Inspector,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            PanelId::Globe => "Globe",
+            PanelId::Operations => "Operations",
+            PanelId::Entities => "Entities",
+            PanelId::Inspector => "Inspector",
+        }
+    }
+
+    pub fn order(self) -> u8 {
+        match self {
+            PanelId::Globe => 0,
+            PanelId::Operations => 1,
+            PanelId::Entities => 2,
+            PanelId::Inspector => 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MainPanels {
+    pub globe: bool,
+    pub operations: bool,
+    pub entities: bool,
+    pub inspector: bool,
+}
+
+impl MainPanels {
+    pub fn contains(self, panel: PanelId) -> bool {
+        match panel {
+            PanelId::Globe => self.globe,
+            PanelId::Operations => self.operations,
+            PanelId::Entities => self.entities,
+            PanelId::Inspector => self.inspector,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct UiLayout {
+    pub outer_padding: f32,
+    pub column_spacing: f32,
+    pub row_spacing: f32,
+    pub top_bar_height: f32,
+    pub tab_bar_height: f32,
+    pub globe_header_height: f32,
+    pub panel_width: f32,
+    pub inspector_height: f32,
+    pub panel_padding: f32,
+}
+
+impl UiLayout {
+    pub fn new() -> Self {
+        Self {
+            outer_padding: OUTER_PADDING,
+            column_spacing: COLUMN_SPACING,
+            row_spacing: ROW_SPACING,
+            top_bar_height: TOP_BAR_HEIGHT,
+            tab_bar_height: TAB_BAR_HEIGHT,
+            globe_header_height: GLOBE_HEADER_HEIGHT,
+            panel_width: PANEL_WIDTH,
+            inspector_height: INSPECTOR_HEIGHT,
+            panel_padding: PANEL_PADDING,
+        }
+    }
+
+    pub fn globe_rect(&self, window_size: Size, panels: MainPanels) -> Rectangle {
+        if !panels.globe {
+            return Rectangle::new(iced::Point::new(0.0, 0.0), Size::new(0.0, 0.0));
+        }
+        let width = window_size.width;
+        let height = window_size.height;
+        let content_width = (width - 2.0 * self.outer_padding).max(0.0);
+        let content_height = (height - 2.0 * self.outer_padding).max(0.0);
+
+        let left_panel = if panels.operations {
+            self.panel_width + self.row_spacing
+        } else {
+            0.0
+        };
+        let right_panel = if panels.entities {
+            self.panel_width + self.row_spacing
+        } else {
+            0.0
+        };
+        let bottom_panel = if panels.inspector {
+            self.inspector_height + self.column_spacing
+        } else {
+            0.0
+        };
+
+        let left = self.outer_padding + left_panel + self.panel_padding;
+        let right = self.outer_padding + content_width - right_panel - self.panel_padding;
+        let top = self.outer_padding
+            + self.top_bar_height
+            + self.column_spacing
+            + self.panel_padding
+            + self.globe_header_height
+            + PANEL_HEADER_SPACING;
+        let bottom = self.outer_padding + content_height - bottom_panel - self.panel_padding;
+        let rect_width = (right - left).max(0.0);
+        let rect_height = (bottom - top).max(0.0);
+        Rectangle::new(
+            iced::Point::new(left, top),
+            Size::new(rect_width, rect_height),
+        )
+    }
+
+    pub fn detached_globe_rect(&self, window_size: Size, has_tabs: bool) -> Rectangle {
+        let width = window_size.width;
+        let height = window_size.height;
+        let content_width = (width - 2.0 * self.outer_padding).max(0.0);
+        let content_height = (height - 2.0 * self.outer_padding).max(0.0);
+
+        let left = self.outer_padding;
+        let right = self.outer_padding + content_width;
+        let tabs = if has_tabs {
+            self.tab_bar_height + self.column_spacing
+        } else {
+            0.0
+        };
+        let top = self.outer_padding + self.top_bar_height + self.column_spacing + tabs;
+        let bottom = self.outer_padding + content_height;
+        let rect_width = (right - left).max(0.0);
+        let rect_height = (bottom - top).max(0.0);
+        Rectangle::new(
+            iced::Point::new(left, top),
+            Size::new(rect_width, rect_height),
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum UiMessage {
+    ToggleFlights(bool),
+    ToggleShips(bool),
+    ToggleSatellites(bool),
+    ToggleBase(bool),
+    ToggleMap(bool),
+    ToggleWeather(bool),
+    ToggleSea(bool),
+    TileProviderSelected(TileProviderConfig),
+    WeatherFieldSelected(&'static str),
+    SeaFieldSelected(&'static str),
+    StartDrag { panel: PanelId, window: WindowId },
+    SelectTab { panel: PanelId, window: WindowId },
+    DetachPanel { panel: PanelId, window: WindowId },
+    DockBack { window: WindowId },
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct DockDragStart {
-    pub tab: DockTab,
-    pub host: DockHost,
+pub struct DragPreview {
+    pub panel: PanelId,
+    pub cursor: Point,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct DockDetachRequest {
-    pub tab: DockTab,
-    pub host: DockHost,
+pub struct DropIndicator {
+    pub rect: Rectangle,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,19 +232,27 @@ impl Default for OperationsState {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TileProviderConfig {
     pub id: &'static str,
     pub name: &'static str,
+    pub url: &'static str,
     pub min_zoom: u8,
     pub max_zoom: u8,
     pub zoom_bias: i8,
+}
+
+impl std::fmt::Display for TileProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name)
+    }
 }
 
 const TILE_PROVIDERS: &[TileProviderConfig] = &[
     TileProviderConfig {
         id: "osm",
         name: "OSM Standard",
+        url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
         min_zoom: 0,
         max_zoom: 19,
         zoom_bias: 0,
@@ -81,6 +260,7 @@ const TILE_PROVIDERS: &[TileProviderConfig] = &[
     TileProviderConfig {
         id: "hot",
         name: "OSM Humanitarian",
+        url: "https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
         min_zoom: 0,
         max_zoom: 19,
         zoom_bias: 0,
@@ -88,6 +268,7 @@ const TILE_PROVIDERS: &[TileProviderConfig] = &[
     TileProviderConfig {
         id: "opentopo",
         name: "OpenTopoMap",
+        url: "https://tile.opentopomap.org/{z}/{x}/{y}.png",
         min_zoom: 0,
         max_zoom: 17,
         zoom_bias: 0,
@@ -95,6 +276,7 @@ const TILE_PROVIDERS: &[TileProviderConfig] = &[
     TileProviderConfig {
         id: "nasa",
         name: "NASA Blue Marble",
+        url: "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief/default/2013-12-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg",
         min_zoom: 0,
         max_zoom: 8,
         zoom_bias: 0,
@@ -119,19 +301,16 @@ const SEA_FIELDS: &[&str] = &[
 ];
 
 pub struct UiState {
-    main_dock: DockState<DockTab>,
-    globe_rect: Option<egui::Rect>,
     operations: OperationsState,
-    pending_detach: Vec<DockDetachRequest>,
-    pending_attach: Vec<DockHost>,
-    pending_drag_start: Option<DockDragStart>,
+    layout: UiLayout,
 }
 
 #[derive(Clone)]
 pub struct TileBar {
+    pub label: &'static str,
     pub enabled: bool,
     pub progress: Option<f32>,
-    pub color: egui::Color32,
+    pub color: Color,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -167,411 +346,461 @@ pub struct Diagnostics {
     pub sea: TileLayerStats,
 }
 
+type UiElement<'a> = IcedElement<'a, UiMessage, Theme, UiRenderer>;
+
 impl UiState {
     pub fn new() -> Self {
         Self {
-            main_dock: build_default_dock_state(),
-            globe_rect: None,
             operations: OperationsState::default(),
-            pending_detach: Vec::new(),
-            pending_attach: Vec::new(),
-            pending_drag_start: None,
+            layout: UiLayout::new(),
         }
-    }
-
-    pub fn show(
-        &mut self,
-        ctx: &egui::Context,
-        world: &WorldState,
-        renderer: &Renderer,
-        instances: &[RenderInstance],
-        globe_texture_id: Option<egui::TextureId>,
-        tile_bars: &[TileBar],
-        diagnostics: &Diagnostics,
-    ) {
-        self.globe_rect = None;
-        egui::TopBottomPanel::top("c2-topbar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("C2 Walaris");
-                ui.separator();
-                ui.label(format!("Entities: {}", world.entity_count()));
-                ui.label(format!(
-                    "Viewport: {}x{}",
-                    renderer.size().0,
-                    renderer.size().1
-                ));
-            });
-        });
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let mut viewer = DockViewer {
-                dock_host: DockHost::Main,
-                world,
-                renderer,
-                globe_rect: Some(&mut self.globe_rect),
-                globe_texture_id,
-                operations: &mut self.operations,
-                diagnostics,
-                detach_requests: &mut self.pending_detach,
-                drag_requests: &mut self.pending_drag_start,
-            };
-            let style = Style::from_egui(ui.style());
-            DockArea::new(&mut self.main_dock)
-                .style(style)
-                .show_inside(ui, &mut viewer);
-        });
-
-        self.draw_edge_compass(ctx, renderer, instances, world.globe_radius());
-        self.draw_globe_overlay(ctx, tile_bars);
-    }
-
-    pub fn globe_rect(&self) -> Option<egui::Rect> {
-        self.globe_rect
     }
 
     pub fn operations(&self) -> &OperationsState {
         &self.operations
     }
 
-    pub fn main_dock_mut(&mut self) -> &mut DockState<DockTab> {
-        &mut self.main_dock
+    pub fn update(&mut self, message: UiMessage) {
+        match message {
+            UiMessage::ToggleFlights(value) => self.operations.show_flights = value,
+            UiMessage::ToggleShips(value) => self.operations.show_ships = value,
+            UiMessage::ToggleSatellites(value) => self.operations.show_satellites = value,
+            UiMessage::ToggleBase(value) => self.operations.show_base = value,
+            UiMessage::ToggleMap(value) => self.operations.show_map = value,
+            UiMessage::ToggleWeather(value) => self.operations.show_weather = value,
+            UiMessage::ToggleSea(value) => self.operations.show_sea = value,
+            UiMessage::TileProviderSelected(provider) => {
+                self.operations.tile_provider = provider.id.to_string();
+            }
+            UiMessage::WeatherFieldSelected(field) => {
+                self.operations.weather_field = field.to_string();
+            }
+            UiMessage::SeaFieldSelected(field) => {
+                self.operations.sea_field = field.to_string();
+            }
+            _ => {}
+        }
     }
 
-    pub fn take_detach_requests(&mut self) -> Vec<DockDetachRequest> {
-        std::mem::take(&mut self.pending_detach)
+    pub fn layout(&self) -> UiLayout {
+        self.layout
     }
 
-    pub fn take_attach_requests(&mut self) -> Vec<DockHost> {
-        std::mem::take(&mut self.pending_attach)
+    pub fn globe_rect(&self, window_size: Size, panels: MainPanels) -> Rectangle {
+        self.layout.globe_rect(window_size, panels)
     }
 
-    pub fn take_drag_start(&mut self) -> Option<DockDragStart> {
-        self.pending_drag_start.take()
+    pub fn detached_globe_rect(&self, window_size: Size, has_tabs: bool) -> Rectangle {
+        self.layout.detached_globe_rect(window_size, has_tabs)
     }
 
-    pub fn show_detached_panel(
-        &mut self,
-        ctx: &egui::Context,
-        dock_host: DockHost,
-        dock_state: &mut DockState<DockTab>,
+    pub fn view_main<'a>(
+        &'a self,
+        window_id: WindowId,
+        panels: MainPanels,
         world: &WorldState,
         renderer: &Renderer,
         diagnostics: &Diagnostics,
-    ) {
-        egui::TopBottomPanel::top(format!(
-            "detached-topbar-{}",
-            dock_host_key(dock_host)
-        ))
-        .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Dock Window");
-                ui.add_space(6.0);
-                if ui.button("Dock Back").clicked() {
-                    self.pending_attach.push(dock_host);
-                }
+        tile_bars: &'a [TileBar],
+        drop_target: bool,
+        drag_preview: Option<DragPreview>,
+        drop_indicator: Option<DropIndicator>,
+    ) -> UiElement<'a> {
+        let header = container(
+            row![
+                text("C2 Walaris").size(16),
+                space().width(Length::Fixed(12.0)),
+                text(format!("Entities: {}", world.entity_count())).size(12),
+                space().width(Length::Fixed(12.0)),
+                text(format!(
+                    "Viewport: {}x{}",
+                    renderer.size().0,
+                    renderer.size().1
+                ))
+                .size(12)
+            ]
+            .align_y(Alignment::Center)
+            .spacing(8),
+        )
+        .height(Length::Fixed(self.layout.top_bar_height))
+        .padding([4, 8])
+        .style(top_bar_style);
+
+        let operations_panel = panels
+            .contains(PanelId::Operations)
+            .then(|| {
+                panel_card(
+                    panel_header(PanelId::Operations, window_id, true),
+                    operations_body(&self.operations),
+                    Length::Fixed(self.layout.panel_width),
+                    Length::Fill,
+                    self.layout,
+                )
             });
+
+        let entities_panel = panels
+            .contains(PanelId::Entities)
+            .then(|| {
+                panel_card(
+                    panel_header(PanelId::Entities, window_id, true),
+                    entities_body(world),
+                    Length::Fixed(self.layout.panel_width),
+                    Length::Fill,
+                    self.layout,
+                )
+            });
+
+        let inspector_panel = panels
+            .contains(PanelId::Inspector)
+            .then(|| {
+                panel_card(
+                    panel_header(PanelId::Inspector, window_id, true),
+                    inspector_body(renderer, diagnostics, tile_bars),
+                    Length::Fill,
+                    Length::Fixed(self.layout.inspector_height),
+                    self.layout,
+                )
+            });
+
+        let globe_panel = panels.contains(PanelId::Globe).then(|| {
+            globe_panel_card(
+                panel_header(PanelId::Globe, window_id, true),
+                globe_body(),
+                Length::Fill,
+                Length::Fill,
+                self.layout,
+            )
         });
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let mut viewer = DockViewer {
-                dock_host,
-                world,
-                renderer,
-                globe_rect: None,
-                globe_texture_id: None,
-                operations: &mut self.operations,
-                diagnostics,
-                detach_requests: &mut self.pending_detach,
-                drag_requests: &mut self.pending_drag_start,
-            };
-            let style = Style::from_egui(ui.style());
-            DockArea::new(dock_state)
-                .style(style)
-                .show_inside(ui, &mut viewer);
-        });
+
+        let mut main_row = row![].spacing(self.layout.row_spacing).height(Length::Fill);
+        if let Some(panel) = operations_panel {
+            main_row = main_row.push(panel);
+        }
+        if let Some(panel) = globe_panel {
+            main_row = main_row.push(panel);
+        } else {
+            main_row = main_row.push(space().width(Length::Fill));
+        }
+        if let Some(panel) = entities_panel {
+            main_row = main_row.push(panel);
+        }
+
+        let mut layout = column![header, main_row]
+            .spacing(self.layout.column_spacing)
+            .padding(self.layout.outer_padding)
+            .height(Length::Fill)
+            .width(Length::Fill);
+        if let Some(panel) = inspector_panel {
+            layout = layout.push(panel);
+        }
+
+        let globe_active = panels.contains(PanelId::Globe);
+        let root = container(layout)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(root_style(drop_target, globe_active));
+        let mut layers: Vec<UiElement> = vec![root.into()];
+        if let Some(indicator) = drop_indicator {
+            layers.push(drop_indicator_layer(indicator));
+        }
+        if let Some(preview) = drag_preview {
+            layers.push(drag_preview_layer(preview));
+        }
+        stack(layers)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 
-    fn draw_edge_compass(
-        &self,
-        ctx: &egui::Context,
+    pub fn view_detached<'a>(
+        &'a self,
+        window_id: WindowId,
+        panels: &[PanelId],
+        active: PanelId,
+        world: &WorldState,
         renderer: &Renderer,
-        instances: &[RenderInstance],
-        globe_radius: f32,
-    ) {
-        let Some(rect) = self.globe_rect else {
-            return;
+        diagnostics: &Diagnostics,
+        tile_bars: &'a [TileBar],
+        drop_target: bool,
+        drag_preview: Option<DragPreview>,
+        drop_indicator: Option<DropIndicator>,
+    ) -> UiElement<'a> {
+        let active_panel = panels
+            .iter()
+            .copied()
+            .find(|panel| *panel == active)
+            .or_else(|| panels.first().copied())
+            .unwrap_or(PanelId::Operations);
+
+        let header = container(
+            row![
+                text(active_panel.title()).size(14),
+                space().width(Length::Fill),
+                button(text("Dock Back").size(11)).on_press(UiMessage::DockBack { window: window_id })
+            ]
+            .align_y(Alignment::Center)
+            .spacing(8),
+        )
+        .height(Length::Fixed(self.layout.top_bar_height))
+        .padding([4, 8])
+        .style(top_bar_style);
+
+        let tabs = (panels.len() > 1).then(|| {
+            let mut tabs = row![].spacing(6).align_y(Alignment::Center);
+            for panel in panels.iter().copied() {
+                tabs = tabs.push(panel_tab(panel, window_id, panel == active_panel));
+            }
+            container(tabs)
+                .height(Length::Fixed(self.layout.tab_bar_height))
+                .padding([4, 8])
+                .style(tab_bar_style)
+        });
+
+        let body = match active_panel {
+            PanelId::Globe => globe_body(),
+            PanelId::Operations => operations_body(&self.operations),
+            PanelId::Entities => entities_body(world),
+            PanelId::Inspector => inspector_body(renderer, diagnostics, tile_bars),
         };
-        let bounds = rect.shrink(16.0);
-        let view_proj = renderer.view_proj();
-        let camera_pos = renderer.camera_position();
-        let painter = ctx.layer_painter(egui::LayerId::new(
-            egui::Order::Foreground,
-            egui::Id::new("edge-compass"),
-        ));
 
-        let max_indicators = 128usize;
-        for instance in instances.iter().take(max_indicators) {
-            let clip = view_proj * instance.position.extend(1.0);
-            if clip.w == 0.0 {
-                continue;
-            }
-            let mut ndc = Vec3::new(clip.x, clip.y, clip.z) / clip.w;
-            let behind_camera = clip.w < 0.0;
-            let behind_globe =
-                is_occluded_by_globe(camera_pos, instance.position, globe_radius);
-            if behind_camera {
-                ndc = -ndc;
-            }
-            let on_screen = !behind_camera
-                && !behind_globe
-                && ndc.x >= -1.0
-                && ndc.x <= 1.0
-                && ndc.y >= -1.0
-                && ndc.y <= 1.0;
-            if on_screen {
-                continue;
-            }
-
-            let dir = Vec2::new(ndc.x, ndc.y);
-            let max_comp = dir.x.abs().max(dir.y.abs());
-            if max_comp <= f32::EPSILON {
-                continue;
-            }
-            let edge = dir / max_comp;
-            let t_x = (edge.x * 0.5 + 0.5).clamp(0.0, 1.0);
-            let t_y = (1.0 - (edge.y * 0.5 + 0.5)).clamp(0.0, 1.0);
-            let pos = egui::pos2(
-                egui::lerp(bounds.left()..=bounds.right(), t_x),
-                egui::lerp(bounds.top()..=bounds.bottom(), t_y),
-            );
-
-            let color = egui_color_from_rgba(instance.color);
-            painter.circle_filled(pos, 10.0, color);
-            painter.circle_stroke(
-                pos,
-                10.0,
-                egui::Stroke::new(1.0, egui::Color32::from_white_alpha(160)),
-            );
-            let label = kind_label(instance.category);
-            let text_pos = egui::pos2(pos.x, pos.y - 16.0);
-            painter.text(
-                text_pos,
-                egui::Align2::CENTER_BOTTOM,
-                label,
-                egui::FontId::monospace(10.0),
-                egui::Color32::WHITE,
-            );
-        }
-    }
-
-    fn draw_globe_overlay(&self, ctx: &egui::Context, tile_bars: &[TileBar]) {
-        let Some(rect) = self.globe_rect else {
-            return;
+        let globe_active = active_panel == PanelId::Globe;
+        let panel = if globe_active {
+            globe_panel_container(body, self.layout)
+        } else {
+            panel_body_container(body, self.layout)
         };
-        let painter = ctx.layer_painter(egui::LayerId::new(
-            egui::Order::Foreground,
-            egui::Id::new("globe-overlay"),
-        ));
-        let center = rect.center();
-        let cross = 10.0;
-        let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(220, 48, 48));
-        painter.line_segment(
-            [egui::pos2(center.x - cross, center.y), egui::pos2(center.x + cross, center.y)],
-            stroke,
-        );
-        painter.line_segment(
-            [egui::pos2(center.x, center.y - cross), egui::pos2(center.x, center.y + cross)],
-            stroke,
-        );
 
-        let bar_height = 3.0;
-        let gap = 2.0;
-        let mut bar_top = rect.top();
-        for bar in tile_bars {
-            if !bar.enabled {
-                continue;
-            }
-            let background = egui::Rect::from_min_size(
-                egui::pos2(rect.left(), bar_top),
-                egui::vec2(rect.width(), bar_height),
-            );
-            painter.rect_filled(
-                background,
-                0.0,
-                egui::Color32::from_white_alpha(28),
-            );
-            if let Some(progress) = bar.progress {
-                let progress = progress.clamp(0.0, 1.0);
-                let bar_width = rect.width() * progress;
-                let bar_rect = egui::Rect::from_min_size(
-                    egui::pos2(rect.left(), bar_top),
-                    egui::vec2(bar_width, bar_height),
-                );
-                painter.rect_filled(bar_rect, 0.0, bar.color);
-            }
-            bar_top += bar_height + gap;
+        let mut layout = column![header]
+            .spacing(self.layout.column_spacing)
+            .padding(self.layout.outer_padding)
+            .height(Length::Fill)
+            .width(Length::Fill);
+        if let Some(tabs) = tabs {
+            layout = layout.push(tabs);
         }
+        layout = layout.push(panel);
+
+        let root = container(layout)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(root_style(drop_target, globe_active));
+        let mut layers: Vec<UiElement> = vec![root.into()];
+        if let Some(indicator) = drop_indicator {
+            layers.push(drop_indicator_layer(indicator));
+        }
+        if let Some(preview) = drag_preview {
+            layers.push(drag_preview_layer(preview));
+        }
+        stack(layers)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 }
 
-fn build_default_dock_state() -> DockState<DockTab> {
-    let mut dock_state = DockState::new(vec![DockTab::Globe]);
-    let root = NodeIndex::root();
-    let mut center = root;
-    let [new_center, _left] = dock_state
-        .main_surface_mut()
-        .split_left(center, 0.28, vec![DockTab::Operations]);
-    center = new_center;
-    let [new_center, _right] = dock_state
-        .main_surface_mut()
-        .split_right(center, 0.28, vec![DockTab::Entities]);
-    center = new_center;
-    dock_state
-        .main_surface_mut()
-        .split_below(center, 0.28, vec![DockTab::Inspector]);
-    dock_state
+fn operations_body<'a>(operations: &'a OperationsState) -> UiElement<'a> {
+    let selected_provider = TILE_PROVIDERS
+        .iter()
+        .copied()
+        .find(|provider| provider.id == operations.tile_provider);
+    let selected_weather = WEATHER_FIELDS
+        .iter()
+        .copied()
+        .find(|field| *field == operations.weather_field);
+    let selected_sea = SEA_FIELDS
+        .iter()
+        .copied()
+        .find(|field| *field == operations.sea_field);
+
+    let content = column![
+        text("Operations Menu").size(16),
+        text("Visibility").size(12),
+        checkbox(operations.show_flights)
+            .label("Flights")
+            .on_toggle(UiMessage::ToggleFlights),
+        checkbox(operations.show_ships)
+            .label("Ships")
+            .on_toggle(UiMessage::ToggleShips),
+        checkbox(operations.show_satellites)
+            .label("Satellites")
+            .on_toggle(UiMessage::ToggleSatellites),
+        text("Layers").size(12),
+        checkbox(operations.show_base)
+            .label("Base texture")
+            .on_toggle(UiMessage::ToggleBase),
+        checkbox(operations.show_map)
+            .label("Map tiles")
+            .on_toggle(UiMessage::ToggleMap),
+        checkbox(operations.show_sea)
+            .label("Sea overlay")
+            .on_toggle(UiMessage::ToggleSea),
+        checkbox(operations.show_weather)
+            .label("Weather overlay")
+            .on_toggle(UiMessage::ToggleWeather),
+        text("Map layers").size(12),
+        pick_list(TILE_PROVIDERS, selected_provider, UiMessage::TileProviderSelected)
+            .width(Length::Fill)
+            .placeholder("Tile provider"),
+        pick_list(
+            WEATHER_FIELDS,
+            selected_weather,
+            UiMessage::WeatherFieldSelected,
+        )
+        .width(Length::Fill)
+        .placeholder("Weather field"),
+        pick_list(SEA_FIELDS, selected_sea, UiMessage::SeaFieldSelected)
+            .width(Length::Fill)
+            .placeholder("Sea field"),
+        text("Status: connected to ECS runtime.").size(11),
+    ]
+    .spacing(6);
+
+    scrollable(content).into()
 }
 
-fn dock_host_key(host: DockHost) -> String {
-    match host {
-        DockHost::Main => "main".to_string(),
-        DockHost::Detached(id) => format!("detached-{id}"),
-    }
+fn globe_body<'a>() -> UiElement<'a> {
+    globe_surface().into()
 }
 
-fn globe_panel(
-    ui: &mut egui::Ui,
-    globe_rect: &mut Option<egui::Rect>,
-    globe_texture_id: Option<egui::TextureId>,
-) {
-    let available = ui.available_size();
-    let (rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
-    *globe_rect = Some(rect);
-    ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(6, 8, 12));
-    if let Some(texture_id) = globe_texture_id {
-        let image = egui::Image::new((texture_id, rect.size()));
-        ui.put(rect, image);
-    } else {
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "Globe loading...",
-            egui::FontId::proportional(14.0),
-            egui::Color32::from_gray(180),
-        );
-    }
+fn entities_body<'a>(world: &WorldState) -> UiElement<'a> {
+    let content = column![
+        text("Entities").size(16),
+        text(format!("Total entities: {}", world.entity_count())).size(12),
+        text("Filters and tasking controls will appear here.").size(11),
+    ]
+    .spacing(6);
+
+    content.into()
 }
 
-fn operations_panel(ui: &mut egui::Ui, operations: &mut OperationsState) {
-    ui.heading("Operations Menu");
-    ui.separator();
-    ui.label("Visibility");
-    ui.checkbox(&mut operations.show_flights, "Flights");
-    ui.checkbox(&mut operations.show_ships, "Ships");
-    ui.checkbox(&mut operations.show_satellites, "Satellites");
-    ui.add_space(8.0);
-    ui.separator();
-    ui.label("Layers");
-    ui.checkbox(&mut operations.show_base, "Base texture");
-    ui.checkbox(&mut operations.show_map, "Map tiles");
-    ui.checkbox(&mut operations.show_sea, "Sea overlay");
-    ui.checkbox(&mut operations.show_weather, "Weather overlay");
-    ui.add_space(8.0);
-    ui.separator();
-    ui.label("Map layers");
-    let provider_label = provider_name(&operations.tile_provider);
-    egui::ComboBox::from_id_salt("tile-provider")
-        .selected_text(provider_label)
-        .show_ui(ui, |ui| {
-            for provider in TILE_PROVIDERS {
-                ui.selectable_value(
-                    &mut operations.tile_provider,
-                    provider.id.to_string(),
-                    provider.name,
-                );
-            }
-        });
-    ui.add_space(4.0);
-    egui::ComboBox::from_id_salt("weather-field")
-        .selected_text(operations.weather_field.clone())
-        .show_ui(ui, |ui| {
-            for field in WEATHER_FIELDS {
-                ui.selectable_value(
-                    &mut operations.weather_field,
-                    (*field).to_string(),
-                    *field,
-                );
-            }
-        });
-    ui.add_space(4.0);
-    egui::ComboBox::from_id_salt("sea-field")
-        .selected_text(operations.sea_field.clone())
-        .show_ui(ui, |ui| {
-            for field in SEA_FIELDS {
-                ui.selectable_value(
-                    &mut operations.sea_field,
-                    (*field).to_string(),
-                    *field,
-                );
-            }
-        });
-    ui.add_space(8.0);
-    ui.label("Status: connected to ECS runtime.");
-}
-
-fn entities_panel(ui: &mut egui::Ui, world: &WorldState) {
-    ui.heading("Entities");
-    ui.separator();
-    ui.label(format!("Total entities: {}", world.entity_count()));
-    ui.label("Filters and tasking controls will appear here.");
-}
-
-fn inspector_panel(ui: &mut egui::Ui, renderer: &Renderer, diagnostics: &Diagnostics) {
-    ui.heading("Inspector");
-    ui.separator();
-    ui.label(format!(
-        "Render targets: {}x{}",
-        renderer.size().0,
-        renderer.size().1
-    ));
+fn inspector_body<'a>(
+    renderer: &Renderer,
+    diagnostics: &Diagnostics,
+    tile_bars: &'a [TileBar],
+) -> UiElement<'a> {
     let perf = diagnostics.perf;
-    ui.add_space(4.0);
-    ui.label(format!(
-        "Frame: {:.1} ms (p95 {:.1} / p99 {:.1})  FPS {:.1}",
-        perf.frame_ms, perf.frame_p95_ms, perf.frame_p99_ms, perf.fps
-    ));
-    ui.label(format!(
-        "World: {:.1} ms  Tiles: {:.1} ms  UI: {:.1} ms  Render: {:.1} ms",
-        perf.world_ms, perf.tile_ms, perf.ui_ms, perf.render_ms
-    ));
-    ui.add_space(8.0);
-    ui.separator();
-    ui.label("Tile cache");
-    draw_tile_stats(ui, "Map", diagnostics.map);
-    draw_tile_stats(ui, "Weather", diagnostics.weather);
-    draw_tile_stats(ui, "Sea", diagnostics.sea);
-    ui.label("Selection details will be shown here.");
+    let content = column![
+        text("Inspector").size(16),
+        text(format!(
+            "Render targets: {}x{}",
+            renderer.size().0,
+            renderer.size().1
+        ))
+        .size(12),
+        text(format!(
+            "Frame: {:.1} ms (p95 {:.1} / p99 {:.1})  FPS {:.1}",
+            perf.frame_ms, perf.frame_p95_ms, perf.frame_p99_ms, perf.fps
+        ))
+        .size(12),
+        text(format!(
+            "World: {:.1} ms  Tiles: {:.1} ms  UI: {:.1} ms  Render: {:.1} ms",
+            perf.world_ms, perf.tile_ms, perf.ui_ms, perf.render_ms
+        ))
+        .size(12),
+        text("Tile cache").size(12),
+        text(tile_stats_line("Map", diagnostics.map)).size(11),
+        text(tile_stats_line("Weather", diagnostics.weather)).size(11),
+        text(tile_stats_line("Sea", diagnostics.sea)).size(11),
+        tile_bar_column(tile_bars),
+        text("Selection details will be shown here.").size(11),
+    ]
+    .spacing(6);
+
+    scrollable(content).into()
 }
 
-fn egui_color_from_rgba(color: [f32; 4]) -> egui::Color32 {
-    let rgba = Vec4::from_array(color).clamp(Vec4::ZERO, Vec4::ONE);
-    egui::Color32::from_rgba_unmultiplied(
-        (rgba.x * 255.0) as u8,
-        (rgba.y * 255.0) as u8,
-        (rgba.z * 255.0) as u8,
-        (rgba.w * 255.0) as u8,
-    )
-}
-
-fn kind_label(kind: u8) -> &'static str {
-    match kind {
-        crate::ecs::KIND_FLIGHT => "FLT",
-        crate::ecs::KIND_SHIP => "SHP",
-        crate::ecs::KIND_SATELLITE => "SAT",
-        _ => "AST",
+fn panel_header(panel: PanelId, window_id: WindowId, allow_detach: bool) -> UiElement<'static> {
+    let mut header = row![text(panel.title()).size(12)]
+        .align_y(Alignment::Center)
+        .spacing(6);
+    header = header.push(space().width(Length::Fill));
+    if allow_detach {
+        header = header.push(
+            button(text("Detach").size(11))
+                .on_press(UiMessage::DetachPanel { panel, window: window_id }),
+        );
     }
+
+    let header = container(header)
+        .padding([4, 8])
+        .style(panel_header_style);
+
+    mouse_area(header)
+        .on_press(UiMessage::StartDrag {
+            panel,
+            window: window_id,
+        })
+        .interaction(mouse::Interaction::Grab)
+        .into()
 }
 
-fn draw_tile_stats(ui: &mut egui::Ui, label: &str, stats: TileLayerStats) {
+fn panel_card<'a>(
+    header: UiElement<'a>,
+    body: UiElement<'a>,
+    width: Length,
+    height: Length,
+    layout: UiLayout,
+) -> UiElement<'a> {
+    container(column![header, body].spacing(PANEL_HEADER_SPACING))
+        .width(width)
+        .height(height)
+        .padding(layout.panel_padding)
+        .style(panel_style)
+        .into()
+}
+
+fn globe_panel_card<'a>(
+    header: UiElement<'a>,
+    body: UiElement<'a>,
+    width: Length,
+    height: Length,
+    layout: UiLayout,
+) -> UiElement<'a> {
+    container(column![header, body].spacing(PANEL_HEADER_SPACING))
+        .width(width)
+        .height(height)
+        .padding(layout.panel_padding)
+        .style(globe_panel_style)
+        .into()
+}
+
+fn panel_body_container<'a>(body: UiElement<'a>, layout: UiLayout) -> UiElement<'a> {
+    container(body)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(layout.panel_padding)
+        .style(panel_style)
+        .into()
+}
+
+fn globe_panel_container<'a>(body: UiElement<'a>, _layout: UiLayout) -> UiElement<'a> {
+    container(body)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(globe_panel_style)
+        .into()
+}
+
+fn panel_tab(panel: PanelId, window_id: WindowId, active: bool) -> UiElement<'static> {
+    let label = text(panel.title()).size(11);
+    let tab = container(label)
+        .padding([4, 8])
+        .style(tab_style(active));
+    let tab_button = button(tab).on_press(UiMessage::SelectTab {
+        panel,
+        window: window_id,
+    });
+
+    mouse_area(tab_button)
+        .on_press(UiMessage::StartDrag {
+            panel,
+            window: window_id,
+        })
+        .interaction(mouse::Interaction::Grab)
+        .into()
+}
+
+fn tile_stats_line(label: &str, stats: TileLayerStats) -> String {
     let status = if !stats.enabled {
         "off"
     } else if stats.stalled {
@@ -579,7 +808,7 @@ fn draw_tile_stats(ui: &mut egui::Ui, label: &str, stats: TileLayerStats) {
     } else {
         "ok"
     };
-    ui.label(format!(
+    format!(
         "{label}: zoom {}  loaded {}/{}  pending {}  cache {}/{}  {status} {:.0} ms",
         stats.zoom,
         stats.loaded,
@@ -588,15 +817,346 @@ fn draw_tile_stats(ui: &mut egui::Ui, label: &str, stats: TileLayerStats) {
         stats.cache_used,
         stats.cache_cap,
         stats.last_activity_ms
-    ));
+    )
 }
 
-fn provider_name(id: &str) -> String {
-    TILE_PROVIDERS
-        .iter()
-        .find(|provider| provider.id == id)
-        .map(|provider| provider.name.to_string())
-        .unwrap_or_else(|| id.to_string())
+fn tile_bar_column<'a>(tile_bars: &'a [TileBar]) -> UiElement<'a> {
+    if tile_bars.iter().all(|bar| !bar.enabled) {
+        return space().into();
+    }
+
+    let bars = tile_bars.iter().filter(|bar| bar.enabled).fold(
+        column![text("Tile progress").size(12)].spacing(4),
+        |column, bar| {
+            let progress = bar.progress.unwrap_or(0.0).clamp(0.0, 1.0);
+            let bar_widget = progress_bar(0.0..=1.0, progress)
+                .girth(Length::Fixed(6.0))
+                .style(move |_: &Theme| progress_style(bar.color));
+            column.push(column![text(bar.label).size(11), bar_widget].spacing(2))
+        },
+    );
+
+    bars.into()
+}
+
+fn panel_style(theme: &Theme) -> iced::widget::container::Style {
+    let palette = theme.extended_palette();
+    iced::widget::container::Style {
+        background: Some(Background::Color(Color::from_rgba8(18, 20, 26, 0.92))),
+        text_color: Some(palette.background.weak.text),
+        border: Border {
+            color: Color::from_rgba8(72, 78, 92, 0.6),
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn panel_header_style(theme: &Theme) -> iced::widget::container::Style {
+    let palette = theme.extended_palette();
+    iced::widget::container::Style {
+        background: Some(Background::Color(Color::from_rgba8(28, 30, 38, 1.0))),
+        text_color: Some(palette.background.weak.text),
+        border: Border {
+            color: Color::from_rgba8(66, 72, 88, 0.9),
+            width: 1.0,
+            radius: 3.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn top_bar_style(theme: &Theme) -> iced::widget::container::Style {
+    let palette = theme.extended_palette();
+    iced::widget::container::Style {
+        background: Some(Background::Color(Color::from_rgba8(14, 16, 20, 0.98))),
+        text_color: Some(palette.background.weak.text),
+        border: Border {
+            color: Color::from_rgba8(62, 68, 84, 0.5),
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn tab_bar_style(theme: &Theme) -> iced::widget::container::Style {
+    let palette = theme.extended_palette();
+    iced::widget::container::Style {
+        background: Some(Background::Color(Color::from_rgba8(16, 18, 24, 0.9))),
+        text_color: Some(palette.background.weak.text),
+        border: Border {
+            color: Color::from_rgba8(64, 70, 86, 0.6),
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn tab_style(active: bool) -> impl Fn(&Theme) -> iced::widget::container::Style {
+    move |_theme| iced::widget::container::Style {
+        background: Some(Background::Color(if active {
+            Color::from_rgba8(38, 42, 54, 1.0)
+        } else {
+            Color::from_rgba8(22, 24, 30, 1.0)
+        })),
+        border: Border {
+            color: if active {
+                Color::from_rgba8(96, 180, 240, 0.9)
+            } else {
+                Color::from_rgba8(58, 64, 78, 0.8)
+            },
+            width: if active { 1.5 } else { 1.0 },
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn root_style(drop_target: bool, globe_active: bool) -> impl Fn(&Theme) -> iced::widget::container::Style {
+    move |_theme| iced::widget::container::Style {
+        background: Some(Background::Color(if globe_active {
+            Color::from_rgba8(8, 9, 12, 0.0)
+        } else {
+            Color::from_rgb8(8, 9, 12)
+        })),
+        border: Border {
+            color: if drop_target {
+                Color::from_rgba8(82, 190, 255, 0.9)
+            } else {
+                Color::from_rgba8(8, 9, 12, 1.0)
+            },
+            width: if drop_target { 2.0 } else { 0.0 },
+            radius: 6.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn globe_panel_style(_theme: &Theme) -> iced::widget::container::Style {
+    iced::widget::container::Style {
+        background: Some(Background::Color(Color::from_rgba8(8, 10, 16, 0.12))),
+        border: Border {
+            color: Color::from_rgba8(70, 76, 90, 0.75),
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn progress_style(color: Color) -> iced::widget::progress_bar::Style {
+    iced::widget::progress_bar::Style {
+        background: Background::Color(Color::from_rgba8(28, 30, 38, 1.0)),
+        bar: Background::Color(color),
+        border: Border {
+            color: Color::from_rgba8(28, 30, 38, 1.0),
+            width: 0.0,
+            radius: 3.0.into(),
+        },
+    }
+}
+
+fn globe_surface<'a>() -> UiElement<'a> {
+    let overlay = canvas::Canvas::new(CompassOverlay)
+        .width(Length::Fill)
+        .height(Length::Fill);
+    let content = stack([space().into(), overlay.into()]);
+    content.into()
+}
+
+fn drop_indicator_layer<'a>(indicator: DropIndicator) -> UiElement<'a> {
+    let overlay = canvas::Canvas::new(DropIndicatorOverlay { indicator })
+        .width(Length::Fill)
+        .height(Length::Fill);
+    overlay.into()
+}
+
+fn drag_preview_layer<'a>(preview: DragPreview) -> UiElement<'a> {
+    let overlay = canvas::Canvas::new(DragPreviewOverlay { preview })
+        .width(Length::Fill)
+        .height(Length::Fill);
+    overlay.into()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CompassOverlay;
+
+impl canvas::Program<UiMessage, Theme, UiRenderer> for CompassOverlay {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &UiRenderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry<UiRenderer>> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let size = bounds.size();
+        let radius = (size.width.min(size.height) * 0.5 - 12.0).max(0.0);
+        if radius <= 1.0 {
+            return vec![frame.into_geometry()];
+        }
+        let center = frame.center();
+
+        let ring = canvas::Path::circle(center, radius);
+        frame.stroke(
+            &ring,
+            canvas::Stroke::default()
+                .with_width(1.6)
+                .with_color(Color::from_rgba8(120, 198, 255, 0.85)),
+        );
+
+        let tick_color = Color::from_rgba8(120, 198, 255, 0.95);
+        let ticks = [
+            (-std::f32::consts::FRAC_PI_2, 10.0),
+            (0.0, 10.0),
+            (std::f32::consts::FRAC_PI_2, 10.0),
+            (std::f32::consts::PI, 10.0),
+            (-std::f32::consts::FRAC_PI_4, 6.0),
+            (std::f32::consts::FRAC_PI_4, 6.0),
+            (3.0 * std::f32::consts::FRAC_PI_4, 6.0),
+            (-3.0 * std::f32::consts::FRAC_PI_4, 6.0),
+        ];
+
+        for (angle, length) in ticks {
+            let (sin, cos) = angle.sin_cos();
+            let start = iced::Point::new(center.x + cos * radius, center.y + sin * radius);
+            let end = iced::Point::new(
+                center.x + cos * (radius - length),
+                center.y + sin * (radius - length),
+            );
+            let tick = canvas::Path::line(start, end);
+            frame.stroke(
+                &tick,
+                canvas::Stroke::default()
+                    .with_width(1.4)
+                    .with_color(tick_color),
+            );
+        }
+
+        let labels = [
+            ("N", -std::f32::consts::FRAC_PI_2),
+            ("E", 0.0),
+            ("S", std::f32::consts::FRAC_PI_2),
+            ("W", std::f32::consts::PI),
+        ];
+        for (label, angle) in labels {
+            let (sin, cos) = angle.sin_cos();
+            let position = iced::Point::new(
+                center.x + cos * (radius + 10.0),
+                center.y + sin * (radius + 10.0),
+            );
+            frame.fill_text(canvas::Text {
+                content: label.to_string(),
+                position,
+                color: Color::from_rgba8(230, 242, 255, 0.95),
+                size: 13.0.into(),
+                align_x: alignment::Horizontal::Center.into(),
+                align_y: alignment::Vertical::Center,
+                ..Default::default()
+            });
+        }
+
+        vec![frame.into_geometry()]
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DropIndicatorOverlay {
+    indicator: DropIndicator,
+}
+
+impl canvas::Program<UiMessage, Theme, UiRenderer> for DropIndicatorOverlay {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &UiRenderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry<UiRenderer>> {
+        let rect = self.indicator.rect;
+        if rect.width <= 1.0 || rect.height <= 1.0 {
+            return vec![];
+        }
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let x = rect.x.clamp(0.0, bounds.width.max(0.0));
+        let y = rect.y.clamp(0.0, bounds.height.max(0.0));
+        let width = rect.width.min(bounds.width - x).max(0.0);
+        let height = rect.height.min(bounds.height - y).max(0.0);
+        if width <= 1.0 || height <= 1.0 {
+            return vec![];
+        }
+        let box_rect = canvas::Path::rectangle(Point::new(x, y), Size::new(width, height));
+        frame.fill(&box_rect, Color::from_rgba8(76, 140, 220, 0.18));
+        frame.stroke(
+            &box_rect,
+            canvas::Stroke::default()
+                .with_width(2.0)
+                .with_color(Color::from_rgba8(110, 190, 255, 0.9)),
+        );
+        vec![frame.into_geometry()]
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DragPreviewOverlay {
+    preview: DragPreview,
+}
+
+impl canvas::Program<UiMessage, Theme, UiRenderer> for DragPreviewOverlay {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &UiRenderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry<UiRenderer>> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let label = self.preview.panel.title();
+        let text_size = 12.0;
+        let padding_x = 10.0;
+        let padding_y = 6.0;
+        let text_width = label.len() as f32 * (text_size * 0.55);
+        let width = (text_width + padding_x * 2.0).max(64.0);
+        let height = text_size + padding_y * 2.0;
+        let mut x = self.preview.cursor.x + 12.0;
+        let mut y = self.preview.cursor.y + 12.0;
+        if x + width > bounds.width {
+            x = (bounds.width - width - 6.0).max(6.0);
+        }
+        if y + height > bounds.height {
+            y = (bounds.height - height - 6.0).max(6.0);
+        }
+        let rect = canvas::Path::rectangle(Point::new(x, y), Size::new(width, height));
+        frame.fill(&rect, Color::from_rgba8(24, 28, 38, 0.92));
+        frame.stroke(
+            &rect,
+            canvas::Stroke::default()
+                .with_width(1.0)
+                .with_color(Color::from_rgba8(120, 190, 255, 0.85)),
+        );
+        frame.fill_text(canvas::Text {
+            content: label.to_string(),
+            position: Point::new(x + padding_x, y + height * 0.5),
+            color: Color::from_rgba8(230, 242, 255, 0.95),
+            size: text_size.into(),
+            align_x: alignment::Horizontal::Left.into(),
+            align_y: alignment::Vertical::Center,
+            ..Default::default()
+        });
+        vec![frame.into_geometry()]
+    }
 }
 
 pub fn tile_provider_config(id: &str) -> TileProviderConfig {
@@ -607,122 +1167,9 @@ pub fn tile_provider_config(id: &str) -> TileProviderConfig {
         .unwrap_or(TileProviderConfig {
             id: "custom",
             name: "Custom",
+            url: "",
             min_zoom: 0,
             max_zoom: 19,
             zoom_bias: 0,
         })
-}
-
-struct DockViewer<'a> {
-    dock_host: DockHost,
-    world: &'a WorldState,
-    renderer: &'a Renderer,
-    globe_rect: Option<&'a mut Option<egui::Rect>>,
-    globe_texture_id: Option<egui::TextureId>,
-    operations: &'a mut OperationsState,
-    diagnostics: &'a Diagnostics,
-    detach_requests: &'a mut Vec<DockDetachRequest>,
-    drag_requests: &'a mut Option<DockDragStart>,
-}
-
-impl TabViewer for DockViewer<'_> {
-    type Tab = DockTab;
-
-    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        match tab {
-            DockTab::Globe => "Globe".into(),
-            DockTab::Operations => "Operations".into(),
-            DockTab::Entities => "Entities".into(),
-            DockTab::Inspector => "Inspector".into(),
-        }
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
-        match tab {
-            DockTab::Globe => {
-                if let Some(globe_rect) = self.globe_rect.as_mut() {
-                    globe_panel(ui, *globe_rect, self.globe_texture_id);
-                } else {
-                    ui.label("Globe is available only in the main window.");
-                }
-            }
-            DockTab::Operations => {
-                operations_panel(ui, self.operations);
-            }
-            DockTab::Entities => {
-                entities_panel(ui, self.world);
-            }
-            DockTab::Inspector => {
-                inspector_panel(ui, self.renderer, self.diagnostics);
-            }
-        }
-    }
-
-    fn context_menu(
-        &mut self,
-        ui: &mut egui::Ui,
-        tab: &mut Self::Tab,
-        _surface: egui_dock::SurfaceIndex,
-        _node: NodeIndex,
-    ) {
-        if matches!(tab, DockTab::Operations | DockTab::Entities | DockTab::Inspector) {
-            if ui.button("Detach to window").clicked() {
-                self.detach_requests.push(DockDetachRequest {
-                    tab: *tab,
-                    host: self.dock_host,
-                });
-                ui.close();
-            }
-        }
-    }
-
-    fn on_tab_button(&mut self, tab: &mut Self::Tab, response: &egui::Response) {
-        if *tab != DockTab::Globe && response.drag_started() && self.drag_requests.is_none() {
-            *self.drag_requests = Some(DockDragStart {
-                tab: *tab,
-                host: self.dock_host,
-            });
-        }
-    }
-
-    fn allowed_in_windows(&self, _tab: &mut Self::Tab) -> bool {
-        false
-    }
-
-    fn is_closeable(&self, _tab: &Self::Tab) -> bool {
-        false
-    }
-}
-
-fn is_occluded_by_globe(camera_pos: Vec3, target: Vec3, radius: f32) -> bool {
-    let delta = target - camera_pos;
-    let dist = delta.length();
-    if dist <= f32::EPSILON {
-        return false;
-    }
-    let dir = delta / dist;
-    if let Some(t) = ray_sphere_intersect(camera_pos, dir, radius) {
-        t < dist
-    } else {
-        false
-    }
-}
-
-fn ray_sphere_intersect(origin: Vec3, dir: Vec3, radius: f32) -> Option<f32> {
-    let b = origin.dot(dir);
-    let c = origin.length_squared() - radius * radius;
-    let disc = b * b - c;
-    if disc < 0.0 {
-        return None;
-    }
-    let sqrt_disc = disc.sqrt();
-    let mut t = -b - sqrt_disc;
-    if t <= 0.0 {
-        t = -b + sqrt_disc;
-    }
-    if t <= 0.0 {
-        None
-    } else {
-        Some(t)
-    }
 }

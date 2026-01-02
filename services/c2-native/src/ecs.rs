@@ -1,10 +1,14 @@
 use bevy_ecs::prelude::*;
 use glam::Vec3;
 
+#[allow(dead_code)]
 const KIND_UNKNOWN: u8 = 0;
 const KIND_ASSET: u8 = 1;
+#[allow(dead_code)]
 const KIND_UNIT: u8 = 2;
+#[allow(dead_code)]
 const KIND_MISSION: u8 = 3;
+#[allow(dead_code)]
 const KIND_INCIDENT: u8 = 4;
 pub const KIND_FLIGHT: u8 = 5;
 pub const KIND_SATELLITE: u8 = 6;
@@ -12,6 +16,7 @@ pub const KIND_SHIP: u8 = 7;
 
 const DEFAULT_GLOBE_RADIUS: f32 = 120.0;
 
+#[allow(dead_code)]
 #[derive(Component, Debug, Clone, Copy)]
 pub struct EntityId(pub u64);
 

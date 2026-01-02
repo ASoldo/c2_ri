@@ -8,15 +8,13 @@ version.workspace = true
 anyhow = "1.0.100"
 bevy_ecs = "0.17.3"
 bytemuck = { version = "1.24.0", features = ["derive"] }
-egui = "0.33.3"
-egui-wgpu = "0.33.3"
-egui-winit = "0.33.3"
-egui_dock = "0.18.0"
-egui_tiles = "0.14.1"
 glam = "0.30.9"
+iced = { version = "0.14.0", features = ["canvas", "wgpu"] }
+iced_wgpu = { version = "0.14.0", features = ["image", "svg"] }
+iced_winit = { version = "0.14.0", features = ["x11", "wayland"] }
 image = { version = "0.25.9", features = ["png"], default-features = false }
 pollster = "0.4.0"
 reqwest = { version = "0.12.28", features = ["blocking", "rustls-tls"] }
 resvg = "0.45.1"
-wgpu = "28.0.0"
+wgpu = "27.0.1"
 winit = "0.30.12"

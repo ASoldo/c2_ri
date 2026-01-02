@@ -3,26 +3,36 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use egui_dock::DockState;
 use glam::Vec3;
+use iced::mouse::Cursor;
+use iced::{Point, Rectangle, Size, Theme};
+use iced_wgpu::graphics::{Shell, Viewport};
+use iced_wgpu::Engine;
+use iced_winit::conversion;
+use iced_winit::core::{renderer, Event as IcedEvent};
+use iced_winit::runtime::user_interface::{Cache, UserInterface};
+use iced_winit::Clipboard;
+use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::event::{Event, WindowEvent};
+use winit::event::{
+    DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::window::{Window, WindowAttributes, WindowId};
+use winit::keyboard::ModifiersState;
+use winit::window::{CursorIcon, Window, WindowAttributes, WindowId};
 
 use crate::ecs::{RenderInstance, WorldState, KIND_FLIGHT, KIND_SATELLITE, KIND_SHIP};
-use crate::renderer::{Renderer, TileInstanceRaw};
+use crate::renderer::{RenderBounds, Renderer, TileInstanceRaw};
 use crate::tiles::{
-    TileFetcher, TileKey, TileKind, TileRequest, TileResult, MAP_TILE_CAPACITY,
-    SEA_TILE_CAPACITY, TILE_SIZE, WEATHER_TILE_CAPACITY,
+    TileFetcher, TileKey, TileKind, TileRequest, TileResult, MAP_TILE_CAPACITY, SEA_TILE_CAPACITY,
+    WEATHER_TILE_CAPACITY,
 };
 use crate::ui::{
-    tile_provider_config, Diagnostics, DockDetachRequest, DockDragStart, DockHost, DockTab,
-    OperationsState, PerfSnapshot, TileProviderConfig, UiState,
+    tile_provider_config, Diagnostics, DragPreview, DropIndicator, MainPanels, OperationsState,
+    PanelId, PerfSnapshot, TileBar, TileProviderConfig, UiMessage, UiState,
 };
 
 const DEFAULT_GLOBE_RADIUS: f32 = 120.0;
-const TILE_ZOOM_CAP: u8 = 6;
 const WEATHER_MIN_ZOOM: u8 = 0;
 const WEATHER_MAX_ZOOM: u8 = 6;
 const SEA_MIN_ZOOM: u8 = 0;
@@ -36,64 +46,977 @@ const PERF_SAMPLE_COUNT: usize = 120;
 
 pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoop::new()?;
-    let window = Arc::new(event_loop.create_window(
-        WindowAttributes::default().with_title("C2 Walaris"),
-    )?);
-    let mut app = App::new(window.clone())?;
-
-    event_loop.run(move |event, target| {
-        target.set_control_flow(ControlFlow::Poll);
-        match event {
-            Event::WindowEvent { event, window_id } => {
-                if window_id == app.main_window_id {
-                    if let WindowEvent::RedrawRequested = event {
-                        if let Err(error) = app.update_and_render() {
-                            eprintln!("render error: {error:?}");
-                        }
-                        app.process_ui_requests(target);
-                        return;
-                    }
-                    if !app.handle_window_event(&event) {
-                        target.exit();
-                    }
-                } else if app.is_detached_window(window_id) {
-                    if let WindowEvent::RedrawRequested = event {
-                        if let Err(error) = app.render_detached_window(window_id) {
-                            eprintln!("detach render error: {error:?}");
-                        }
-                        app.sync_operations_settings();
-                        app.process_ui_requests(target);
-                        return;
-                    }
-                    app.handle_detached_window_event(window_id, &event);
-                }
-            }
-            Event::AboutToWait => {
-                app.request_redraws();
-            }
-            _ => {}
-        }
-    })?;
-
+    let mut app = App::default();
+    event_loop.run_app(&mut app)?;
     Ok(())
 }
 
+#[derive(Default)]
 struct App {
-    window: Arc<Window>,
-    main_window_id: WindowId,
+    core: Option<AppCore>,
+    main: Option<MainWindow>,
+    detached: HashMap<WindowId, DetachedWindow>,
+    modifiers: ModifiersState,
+    drag_state: Option<DragState>,
+    global_cursor: Option<PhysicalPosition<f64>>,
+    hovered_window: Option<WindowId>,
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.core.is_some() {
+            return;
+        }
+
+        let window = match event_loop
+            .create_window(WindowAttributes::default().with_title("C2 Walaris"))
+        {
+            Ok(window) => Arc::new(window),
+            Err(err) => {
+                eprintln!("failed to create main window: {err:?}");
+                event_loop.exit();
+                return;
+            }
+        };
+
+        let renderer = match pollster::block_on(Renderer::new(window.as_ref())) {
+            Ok(renderer) => renderer,
+            Err(err) => {
+                eprintln!("failed to create renderer: {err:?}");
+                event_loop.exit();
+                return;
+            }
+        };
+
+        let ui_renderer = build_ui_renderer(&renderer, renderer.surface_format());
+
+        let core = match AppCore::new(renderer) {
+            Ok(core) => core,
+            Err(err) => {
+                eprintln!("failed to initialize core: {err:?}");
+                event_loop.exit();
+                return;
+            }
+        };
+
+        let main = MainWindow::new(window, ui_renderer);
+
+        self.core = Some(core);
+        self.main = Some(main);
+    }
+
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, _cause: StartCause) {
+        event_loop.set_control_flow(ControlFlow::Poll);
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
+        if self
+            .main
+            .as_ref()
+            .is_some_and(|main| main.window.id() == window_id)
+        {
+            self.handle_main_window_event(event_loop, event);
+            return;
+        }
+
+        if self.detached.contains_key(&window_id) {
+            self.handle_detached_window_event(event_loop, window_id, event);
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        match event {
+            DeviceEvent::MouseMotion { delta } => {
+                let mut update_drop_targets = false;
+                if let Some(cursor) = self.global_cursor.as_mut() {
+                    cursor.x += delta.0;
+                    cursor.y += delta.1;
+                    update_drop_targets = true;
+                }
+                if update_drop_targets {
+                    self.update_drop_targets();
+                }
+            }
+            DeviceEvent::Button { button, state } => {
+                if button == 0 && state == ElementState::Released {
+                    if let Some(main) = self.main.as_mut() {
+                        main.globe_dragging = false;
+                        main.last_cursor_physical = None;
+                    }
+                    for detached in self.detached.values_mut() {
+                        detached.globe_dragging = false;
+                        detached.last_cursor_physical = None;
+                    }
+                    self.finish_drag(event_loop);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(main) = self.main.as_ref() {
+            main.window.request_redraw();
+        }
+        for window in self.detached.values() {
+            window.window.request_redraw();
+        }
+    }
+}
+
+impl App {
+    fn handle_main_window_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
+        if matches!(&event, WindowEvent::CloseRequested) {
+            event_loop.exit();
+            return;
+        }
+        if matches!(&event, WindowEvent::RedrawRequested) {
+            if let Err(err) = self.render_main(event_loop) {
+                eprintln!("render error: {err:?}");
+            }
+            return;
+        }
+
+        let scale_factor = self
+            .main
+            .as_ref()
+            .map(|main| main.window.scale_factor() as f32)
+            .unwrap_or(1.0);
+        let mut update_drop_targets = false;
+        let mut finish_drag = false;
+        let mut update_global = None;
+
+        {
+            let Some(core) = self.core.as_mut() else {
+                return;
+            };
+            let Some(main) = self.main.as_mut() else {
+                return;
+            };
+
+            match &event {
+                WindowEvent::CursorEntered { .. } => {
+                    self.hovered_window = Some(main.window.id());
+                    update_drop_targets = true;
+                }
+                WindowEvent::Resized(size) => {
+                    core.renderer.resize(size.width, size.height);
+                    core.cull_dirty = true;
+                }
+                WindowEvent::ScaleFactorChanged { .. } => {
+                    let size = main.window.inner_size();
+                    core.renderer.resize(size.width, size.height);
+                    core.cull_dirty = true;
+                }
+                WindowEvent::CursorMoved { position, .. } => {
+                    let logical = position.to_logical::<f64>(f64::from(scale_factor));
+                    main.cursor_logical = Some(Point::new(logical.x as f32, logical.y as f32));
+                    update_global = Some((main.window.clone(), *position));
+                    if let Some(last_pos) = main.last_cursor_physical {
+                        if main.globe_dragging {
+                            let dx = position.x - last_pos.x;
+                            let dy = position.y - last_pos.y;
+                            if dx != 0.0 || dy != 0.0 {
+                                core.renderer.orbit_delta(dx as f32, dy as f32);
+                                core.cull_dirty = true;
+                            }
+                        }
+                    }
+                    main.last_cursor_physical = Some(*position);
+                    update_drop_targets = true;
+                }
+                WindowEvent::CursorLeft { .. } => {
+                    main.cursor_logical = None;
+                    main.last_cursor_physical = None;
+                    self.global_cursor = None;
+                    if self.hovered_window == Some(main.window.id()) {
+                        self.hovered_window = None;
+                    }
+                    update_drop_targets = true;
+                }
+                WindowEvent::MouseInput { state, button, .. } => {
+                    if *button == MouseButton::Left {
+                        match state {
+                            ElementState::Pressed => {
+                                if cursor_in_globe(core, main) {
+                                    main.globe_dragging = true;
+                                }
+                            }
+                            ElementState::Released => {
+                                main.globe_dragging = false;
+                                finish_drag = true;
+                            }
+                        }
+                    }
+                }
+                WindowEvent::MouseWheel { delta, .. } => {
+                    if cursor_in_globe(core, main) {
+                        let scroll = match delta {
+                            MouseScrollDelta::LineDelta(_, y) => *y,
+                            MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
+                        };
+                        core.renderer.zoom_delta(scroll);
+                        core.cull_dirty = true;
+                    }
+                }
+                WindowEvent::ModifiersChanged(modifiers) => {
+                    self.modifiers = modifiers.state();
+                }
+                _ => {}
+            }
+
+            if let Some(iced_event) = conversion::window_event(event, scale_factor, self.modifiers) {
+                main.ui_events.push(iced_event);
+            }
+        }
+
+        if let Some((window, position)) = update_global {
+            self.update_global_cursor(&window, position);
+        }
+        if update_drop_targets {
+            self.update_drop_targets();
+        }
+        if finish_drag {
+            self.finish_drag(event_loop);
+        }
+    }
+
+    fn handle_detached_window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        if matches!(&event, WindowEvent::CloseRequested) {
+            self.dock_back(window_id);
+            return;
+        }
+        if matches!(&event, WindowEvent::RedrawRequested) {
+            if let Err(err) = self.render_detached(event_loop, window_id) {
+                eprintln!("render error: {err:?}");
+            }
+            return;
+        }
+
+        let scale_factor = self
+            .detached
+            .get(&window_id)
+            .map(|detached| detached.window.scale_factor() as f32)
+            .unwrap_or(1.0);
+        let mut update_drop_targets = false;
+        let mut finish_drag = false;
+        let mut update_global = None;
+
+        {
+            let Some(core) = self.core.as_mut() else {
+                return;
+            };
+            let Some(detached) = self.detached.get_mut(&window_id) else {
+                return;
+            };
+            let globe_active = detached.active_panel == PanelId::Globe;
+
+            match &event {
+                WindowEvent::CursorEntered { .. } => {
+                    self.hovered_window = Some(detached.window.id());
+                    update_drop_targets = true;
+                }
+                WindowEvent::Resized(size) => {
+                    resize_detached_window(core, detached, *size);
+                }
+                WindowEvent::ScaleFactorChanged { .. } => {
+                    let size = detached.window.inner_size();
+                    resize_detached_window(core, detached, size);
+                }
+                WindowEvent::CursorMoved { position, .. } => {
+                    let logical = position.to_logical::<f64>(f64::from(scale_factor));
+                    detached.cursor_logical = Some(Point::new(logical.x as f32, logical.y as f32));
+                    update_global = Some((detached.window.clone(), *position));
+                    if let Some(last_pos) = detached.last_cursor_physical {
+                        if globe_active && detached.globe_dragging {
+                            let dx = position.x - last_pos.x;
+                            let dy = position.y - last_pos.y;
+                            if dx != 0.0 || dy != 0.0 {
+                                core.renderer.orbit_delta(dx as f32, dy as f32);
+                                core.cull_dirty = true;
+                            }
+                        }
+                    }
+                    detached.last_cursor_physical = Some(*position);
+                    update_drop_targets = true;
+                }
+                WindowEvent::CursorLeft { .. } => {
+                    detached.cursor_logical = None;
+                    detached.last_cursor_physical = None;
+                    self.global_cursor = None;
+                    if self.hovered_window == Some(detached.window.id()) {
+                        self.hovered_window = None;
+                    }
+                    update_drop_targets = true;
+                }
+                WindowEvent::MouseInput { state, button, .. } => {
+                    if *button == MouseButton::Left {
+                        match state {
+                            ElementState::Pressed => {
+                                if globe_active && cursor_in_detached_globe(core, detached) {
+                                    detached.globe_dragging = true;
+                                }
+                            }
+                            ElementState::Released => {
+                                detached.globe_dragging = false;
+                                finish_drag = true;
+                            }
+                        }
+                    }
+                }
+                WindowEvent::MouseWheel { delta, .. } => {
+                    if globe_active && cursor_in_detached_globe(core, detached) {
+                        let scroll = match delta {
+                            MouseScrollDelta::LineDelta(_, y) => *y,
+                            MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
+                        };
+                        core.renderer.zoom_delta(scroll);
+                        core.cull_dirty = true;
+                    }
+                }
+                WindowEvent::ModifiersChanged(modifiers) => {
+                    self.modifiers = modifiers.state();
+                }
+                _ => {}
+            }
+
+            if let Some(iced_event) = conversion::window_event(event, scale_factor, self.modifiers) {
+                detached.ui_events.push(iced_event);
+            }
+        }
+
+        if let Some((window, position)) = update_global {
+            self.update_global_cursor(&window, position);
+        }
+        if update_drop_targets {
+            self.update_drop_targets();
+        }
+        if finish_drag {
+            self.finish_drag(event_loop);
+        }
+    }
+
+    fn render_main(&mut self, event_loop: &ActiveEventLoop) -> anyhow::Result<()> {
+        let drag_state = self.drag_state;
+        let active_globe_bounds = self.active_globe_bounds();
+        let now = Instant::now();
+        let frame_start = now;
+
+        let (delta, fps) = {
+            let core = self.core.as_mut().expect("core ready");
+            let delta = (now - core.last_frame).as_secs_f32();
+            core.last_frame = now;
+            let fps = if delta > 0.0 { 1.0 / delta } else { 0.0 };
+            (delta, fps)
+        };
+
+        let (world_ms, tile_ms, tile_bars) = {
+            let core = self.core.as_mut().expect("core ready");
+            let tile_viewport_size = active_globe_bounds
+                .map(|bounds| (bounds.width, bounds.height))
+                .unwrap_or_else(|| {
+                    let (width, height) = core.renderer.size();
+                    (width.max(1), height.max(1))
+                });
+            core.renderer
+                .set_camera_aspect(tile_viewport_size.0, tile_viewport_size.1);
+            let mut world_updated = false;
+            let world_start = Instant::now();
+            core.world_accum += delta.max(0.0);
+            if core.world_accum >= core.world_update_interval {
+                let steps = (core.world_accum / core.world_update_interval)
+                    .floor()
+                    .min(4.0) as u32;
+                for _ in 0..steps {
+                    core.world.update(core.world_update_interval);
+                }
+                core.world_accum -= steps as f32 * core.world_update_interval;
+                world_updated = true;
+                core.instances_dirty = true;
+            }
+            if world_updated || core.instances_dirty {
+                core.world.collect_instances(&mut core.instances);
+                filter_instances(&core.instances, &core.overlay_settings, &mut core.filtered_instances);
+                core.instances_dirty = false;
+                core.cull_dirty = true;
+            }
+            if core.cull_dirty {
+                cull_instances_for_render(
+                    &core.filtered_instances,
+                    &core.renderer,
+                    core.world.globe_radius(),
+                    &mut core.render_instances,
+                );
+                core.renderer.update_instances(&core.render_instances);
+                core.cull_dirty = false;
+            }
+            let world_ms = world_start.elapsed().as_secs_f32() * 1000.0;
+
+            let tile_start = Instant::now();
+            for result in core
+                .tile_rx
+                .try_iter()
+                .take(MAX_TILE_UPLOADS_PER_FRAME)
+            {
+                core.tile_layers
+                    .handle_result(&mut core.renderer, result, now);
+            }
+            core.tile_layers.update(
+                &mut core.renderer,
+                &mut core.tile_fetcher,
+                &core.overlay_settings,
+                now,
+                &mut core.tile_request_id,
+                tile_viewport_size,
+            );
+            let tile_bars = core.tile_layers.progress_bars();
+            core.tile_layers.update_diagnostics(&mut core.diagnostics, now);
+            let tile_ms = tile_start.elapsed().as_secs_f32() * 1000.0;
+
+            (world_ms, tile_ms, tile_bars)
+        };
+
+        let (messages, viewport, ui_ms) = {
+            let core = self.core.as_mut().expect("core ready");
+            let main = self.main.as_mut().expect("main ready");
+            let ui_start = Instant::now();
+            let scale_factor = main.window.scale_factor() as f32;
+            let physical_size = Size::new(core.renderer.size().0, core.renderer.size().1);
+            let viewport = Viewport::with_physical_size(physical_size, scale_factor);
+            let cursor = match main.cursor_logical {
+                Some(point) => Cursor::Available(point),
+                None => Cursor::Unavailable,
+            };
+            let events: Vec<IcedEvent> = main.ui_events.drain(..).collect();
+            let mut messages = Vec::new();
+            let drag_preview = drag_state
+                .and_then(|state| {
+                    main.cursor_logical.map(|cursor| DragPreview {
+                        panel: state.panel,
+                        cursor,
+                    })
+                });
+            let drop_indicator = drag_state
+                .and_then(|state| main.drop_target.then_some(state.panel))
+                .and_then(|panel| drop_indicator_for_main(core, main, panel));
+            let element = core.ui.view_main(
+                main.window.id(),
+                main.panels,
+                &core.world,
+                &core.renderer,
+                &core.diagnostics,
+                &tile_bars,
+                main.drop_target,
+                drag_preview,
+                drop_indicator,
+            );
+            let mut user_interface = UserInterface::build(
+                element,
+                viewport.logical_size(),
+                std::mem::take(&mut main.ui_cache),
+                &mut main.ui_renderer,
+            );
+            let _ = user_interface.update(
+                &events,
+                cursor,
+                &mut main.ui_renderer,
+                &mut main.ui_clipboard,
+                &mut messages,
+            );
+            user_interface.draw(
+                &mut main.ui_renderer,
+                &core.ui_theme,
+                &renderer::Style::default(),
+                cursor,
+            );
+            main.ui_cache = user_interface.into_cache();
+            let ui_ms = ui_start.elapsed().as_secs_f32() * 1000.0;
+            (messages, viewport, ui_ms)
+        };
+
+        self.process_ui_messages(event_loop, messages);
+
+        let render_ms = {
+            let core = self.core.as_mut().expect("core ready");
+            let main = self.main.as_mut().expect("main ready");
+            let render_start = Instant::now();
+            let surface_texture = match core.renderer.begin_frame() {
+                Ok(frame) => frame,
+                Err(wgpu::SurfaceError::Outdated) => {
+                    core.renderer.reconfigure();
+                    return Ok(());
+                }
+                Err(wgpu::SurfaceError::Lost) => {
+                    core.renderer.reconfigure();
+                    return Ok(());
+                }
+                Err(wgpu::SurfaceError::OutOfMemory) => {
+                    return Err(anyhow::anyhow!("surface out of memory"));
+                }
+                Err(err) => {
+                    return Err(anyhow::anyhow!("surface error: {err:?}"));
+                }
+            };
+            let view = surface_texture
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            let depth_view = core.renderer.viewport_depth_view().clone();
+
+            let mut encoder = core
+                .renderer
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("c2-native encoder"),
+                });
+            let globe_bounds = globe_bounds_for_main(core, main);
+            if let Some(bounds) = globe_bounds {
+                core.renderer.set_camera_aspect(bounds.width, bounds.height);
+                core.renderer
+                    .render_scene(&mut encoder, &view, &depth_view, Some(bounds));
+            } else {
+                let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("c2-native clear pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.04,
+                                g: 0.05,
+                                b: 0.07,
+                                a: 1.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                std::mem::drop(pass);
+            }
+            core.renderer.queue.submit([encoder.finish()]);
+
+            main.ui_renderer
+                .present(None, core.renderer.surface_format(), &view, &viewport);
+            surface_texture.present();
+            render_start.elapsed().as_secs_f32() * 1000.0
+        };
+
+        let frame_ms = frame_start.elapsed().as_secs_f32() * 1000.0;
+        if let Some(core) = self.core.as_mut() {
+            core.diagnostics.perf = core.perf_stats.update(
+                frame_ms,
+                world_ms,
+                tile_ms,
+                ui_ms,
+                render_ms,
+                fps,
+            );
+        }
+
+        Ok(())
+    }
+
+    fn render_detached(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+    ) -> anyhow::Result<()> {
+        let drag_state = self.drag_state;
+        let (messages, viewport, globe_active) = {
+            let core = self.core.as_mut().expect("core ready");
+            let Some(detached) = self.detached.get_mut(&window_id) else {
+                return Ok(());
+            };
+            let scale_factor = detached.window.scale_factor() as f32;
+            let physical_size = Size::new(detached.size.width, detached.size.height);
+            let viewport = Viewport::with_physical_size(physical_size, scale_factor);
+            let cursor = match detached.cursor_logical {
+                Some(point) => Cursor::Available(point),
+                None => Cursor::Unavailable,
+            };
+            let events: Vec<IcedEvent> = detached.ui_events.drain(..).collect();
+            let mut messages = Vec::new();
+            let tile_bars = core.tile_layers.progress_bars();
+            let globe_active = detached.active_panel == PanelId::Globe;
+            let drag_preview = drag_state
+                .and_then(|state| {
+                    detached.cursor_logical.map(|cursor| DragPreview {
+                        panel: state.panel,
+                        cursor,
+                    })
+                });
+            let drop_indicator = drag_state
+                .and_then(|state| detached.drop_target.then_some(state.panel))
+                .and_then(|panel| drop_indicator_for_detached(core, detached, panel));
+            let element = core.ui.view_detached(
+                detached.window.id(),
+                &detached.panels,
+                detached.active_panel,
+                &core.world,
+                &core.renderer,
+                &core.diagnostics,
+                &tile_bars,
+                detached.drop_target,
+                drag_preview,
+                drop_indicator,
+            );
+            let mut user_interface = UserInterface::build(
+                element,
+                viewport.logical_size(),
+                std::mem::take(&mut detached.ui_cache),
+                &mut detached.ui_renderer,
+            );
+            let _ = user_interface.update(
+                &events,
+                cursor,
+                &mut detached.ui_renderer,
+                &mut detached.ui_clipboard,
+                &mut messages,
+            );
+            user_interface.draw(
+                &mut detached.ui_renderer,
+                &core.ui_theme,
+                &renderer::Style::default(),
+                cursor,
+            );
+            detached.ui_cache = user_interface.into_cache();
+            (messages, viewport, globe_active)
+        };
+
+        self.process_ui_messages(event_loop, messages);
+
+        if !self.detached.contains_key(&window_id) {
+            return Ok(());
+        }
+
+        let core = self.core.as_mut().expect("core ready");
+        let detached = self.detached.get_mut(&window_id).expect("window ready");
+
+        let surface_texture = match detached.surface.get_current_texture() {
+            Ok(frame) => frame,
+            Err(wgpu::SurfaceError::Outdated) => {
+                detached
+                    .surface
+                    .configure(&core.renderer.device, &detached.surface_config);
+                return Ok(());
+            }
+            Err(wgpu::SurfaceError::Lost) => {
+                detached
+                    .surface
+                    .configure(&core.renderer.device, &detached.surface_config);
+                return Ok(());
+            }
+            Err(wgpu::SurfaceError::OutOfMemory) => {
+                event_loop.exit();
+                return Ok(());
+            }
+            Err(err) => {
+                eprintln!("surface error: {err:?}");
+                return Ok(());
+            }
+        };
+
+        let view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        if globe_active {
+            let mut encoder = core
+                .renderer
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("c2-native dock encoder"),
+                });
+            let globe_bounds = globe_bounds_for_detached(core, detached);
+            let (aspect_width, aspect_height) = globe_bounds
+                .map(|bounds| (bounds.width, bounds.height))
+                .unwrap_or((detached.size.width, detached.size.height));
+            core.renderer.set_camera_aspect(aspect_width, aspect_height);
+            core.renderer
+                .render_scene(&mut encoder, &view, &detached.depth_view, globe_bounds);
+            core.renderer.queue.submit([encoder.finish()]);
+        }
+        detached
+            .ui_renderer
+            .present(None, detached.surface_config.format, &view, &viewport);
+        surface_texture.present();
+
+        Ok(())
+    }
+
+    fn process_ui_messages(&mut self, event_loop: &ActiveEventLoop, messages: Vec<UiMessage>) {
+        if messages.is_empty() {
+            return;
+        }
+
+        if let Some(core) = self.core.as_mut() {
+            for message in &messages {
+                core.ui.update(message.clone());
+            }
+        }
+
+        for message in messages {
+            match message {
+                UiMessage::StartDrag { panel, window } => {
+                    self.start_drag(panel, window);
+                }
+                UiMessage::SelectTab { panel, window } => {
+                    if let Some(detached) = self.detached.get_mut(&window) {
+                        detached.active_panel = panel;
+                        if panel != PanelId::Globe {
+                            detached.globe_dragging = false;
+                        }
+                    }
+                }
+                UiMessage::DetachPanel { panel, window } => {
+                    self.detach_panel(event_loop, panel, window);
+                }
+                UiMessage::DockBack { window } => {
+                    self.dock_back(window);
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(core) = self.core.as_mut() {
+            core.sync_operations_settings();
+        }
+    }
+
+    fn start_drag(&mut self, panel: PanelId, window: WindowId) {
+        self.drag_state = Some(DragState { panel, source_window: window });
+        self.hovered_window = Some(window);
+        self.update_drop_targets();
+        self.set_drag_cursor(true);
+    }
+
+    fn finish_drag(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(drag_state) = self.drag_state.take() else {
+            return;
+        };
+
+        let target = self.window_at_cursor();
+        self.clear_drop_targets();
+
+        match target {
+            Some(target_window) if target_window != drag_state.source_window => {
+                self.move_panel_to_window(drag_state.panel, drag_state.source_window, target_window);
+            }
+            Some(_) => {}
+            None => {
+                self.detach_panel(event_loop, drag_state.panel, drag_state.source_window);
+            }
+        }
+        self.set_drag_cursor(false);
+    }
+
+    fn detach_panel(&mut self, event_loop: &ActiveEventLoop, panel: PanelId, source_window: WindowId) {
+        let Some(core) = self.core.as_ref() else {
+            return;
+        };
+
+        let layout = core.ui.layout();
+        let size = detached_window_size(layout, panel);
+        let position = self
+            .global_cursor
+            .map(|cursor| PhysicalPosition::new(cursor.x as i32, cursor.y as i32))
+            .or_else(|| fallback_window_position(self.main.as_ref()));
+
+        let mut attrs = WindowAttributes::default()
+            .with_title("Dock Window")
+            .with_inner_size(size);
+        if let Some(position) = position {
+            attrs = attrs.with_position(position);
+        }
+
+        let window = match event_loop.create_window(attrs) {
+            Ok(window) => Arc::new(window),
+            Err(err) => {
+                eprintln!("failed to create dock window: {err:?}");
+                return;
+            }
+        };
+
+        let detached = match DetachedWindow::new(window.clone(), core, vec![panel]) {
+            Ok(detached) => detached,
+            Err(err) => {
+                eprintln!("failed to initialize dock window: {err:?}");
+                return;
+            }
+        };
+        let window_id = window.id();
+        self.detached.insert(window_id, detached);
+        self.remove_panel_from_window(panel, source_window);
+        self.cleanup_window(source_window);
+    }
+
+    fn dock_back(&mut self, window_id: WindowId) {
+        let Some(detached) = self.detached.remove(&window_id) else {
+            return;
+        };
+        if let Some(main) = self.main.as_mut() {
+            for panel in detached.panels {
+                add_panel_to_main(main, panel);
+            }
+        }
+    }
+
+    fn move_panel_to_window(&mut self, panel: PanelId, source: WindowId, target: WindowId) {
+        self.remove_panel_from_window(panel, source);
+        self.add_panel_to_window(panel, target);
+        self.cleanup_window(source);
+    }
+
+    fn remove_panel_from_window(&mut self, panel: PanelId, window_id: WindowId) {
+        if let Some(main) = self.main.as_mut() {
+            if main.window.id() == window_id {
+                remove_panel_from_main(main, panel);
+                return;
+            }
+        }
+        if let Some(detached) = self.detached.get_mut(&window_id) {
+            remove_panel_from_detached(detached, panel);
+        }
+    }
+
+    fn add_panel_to_window(&mut self, panel: PanelId, window_id: WindowId) {
+        if let Some(main) = self.main.as_mut() {
+            if main.window.id() == window_id {
+                add_panel_to_main(main, panel);
+                return;
+            }
+        }
+        if let Some(detached) = self.detached.get_mut(&window_id) {
+            add_panel_to_detached(detached, panel);
+        }
+    }
+
+    fn cleanup_window(&mut self, window_id: WindowId) {
+        let remove = self
+            .detached
+            .get(&window_id)
+            .is_some_and(|detached| detached.panels.is_empty());
+        if remove {
+            self.detached.remove(&window_id);
+            if self.hovered_window == Some(window_id) {
+                self.hovered_window = None;
+            }
+        }
+    }
+
+    fn update_global_cursor(&mut self, window: &Window, position: PhysicalPosition<f64>) {
+        if let Ok(inner_pos) = window.inner_position() {
+            self.global_cursor = Some(PhysicalPosition::new(
+                inner_pos.x as f64 + position.x,
+                inner_pos.y as f64 + position.y,
+            ));
+        }
+    }
+
+    fn window_at_cursor(&self) -> Option<WindowId> {
+        if let Some(cursor) = self.global_cursor {
+            if let Some(main) = self.main.as_ref() {
+                if window_contains(&main.window, cursor) {
+                    return Some(main.window.id());
+                }
+            }
+            for (id, window) in &self.detached {
+                if window_contains(&window.window, cursor) {
+                    return Some(*id);
+                }
+            }
+        }
+        self.hovered_window
+    }
+
+    fn update_drop_targets(&mut self) {
+        let dragging = self.drag_state.is_some();
+        if let Some(main) = self.main.as_mut() {
+            main.drop_target = false;
+        }
+        for window in self.detached.values_mut() {
+            window.drop_target = false;
+        }
+        if !dragging {
+            return;
+        }
+        let Some(target) = self.window_at_cursor() else {
+            return;
+        };
+        if let Some(main) = self.main.as_mut() {
+            if main.window.id() == target {
+                main.drop_target = true;
+                return;
+            }
+        }
+        if let Some(detached) = self.detached.get_mut(&target) {
+            detached.drop_target = true;
+        }
+    }
+
+    fn clear_drop_targets(&mut self) {
+        if let Some(main) = self.main.as_mut() {
+            main.drop_target = false;
+        }
+        for window in self.detached.values_mut() {
+            window.drop_target = false;
+        }
+    }
+
+    fn set_drag_cursor(&self, dragging: bool) {
+        let icon = if dragging {
+            CursorIcon::Grabbing
+        } else {
+            CursorIcon::Default
+        };
+        if let Some(main) = self.main.as_ref() {
+            let _ = main.window.set_cursor(icon);
+        }
+        for window in self.detached.values() {
+            let _ = window.window.set_cursor(icon);
+        }
+    }
+
+    fn active_globe_bounds(&self) -> Option<RenderBounds> {
+        let core = self.core.as_ref()?;
+        if let Some(main) = self.main.as_ref() {
+            if main.panels.globe {
+                return globe_bounds_for_main(core, main);
+            }
+        }
+        for detached in self.detached.values() {
+            if detached.active_panel == PanelId::Globe {
+                if let Some(bounds) = globe_bounds_for_detached(core, detached) {
+                    return Some(bounds);
+                }
+            }
+        }
+        None
+    }
+}
+
+struct AppCore {
     renderer: Renderer,
     world: WorldState,
     ui: UiState,
+    ui_theme: Theme,
+    overlay_settings: OperationsState,
+    last_frame: Instant,
     instances: Vec<RenderInstance>,
     filtered_instances: Vec<RenderInstance>,
     render_instances: Vec<RenderInstance>,
-    egui_ctx: egui::Context,
-    egui_state: egui_winit::State,
-    egui_renderer: egui_wgpu::Renderer,
-    last_frame: Instant,
-    globe_texture_id: Option<egui::TextureId>,
-    globe_dragging: bool,
-    overlay_settings: OperationsState,
     world_accum: f32,
     world_update_interval: f32,
     instances_dirty: bool,
@@ -104,54 +1027,13 @@ struct App {
     tile_layers: TileLayers,
     diagnostics: Diagnostics,
     perf_stats: PerfStats,
-    detached_windows: HashMap<WindowId, DetachedWindow>,
-    detached_tabs: HashMap<DockTab, WindowId>,
-    active_drag: Option<DockDragStart>,
-    main_cursor_pos: Option<PhysicalPosition<f64>>,
 }
 
-struct DetachedWindow {
-    dock_state: DockState<DockTab>,
-    window: Arc<Window>,
-    egui_ctx: egui::Context,
-    egui_state: egui_winit::State,
-    egui_renderer: egui_wgpu::Renderer,
-    surface: wgpu::Surface<'static>,
-    config: wgpu::SurfaceConfiguration,
-    size: (u32, u32),
-    last_pos: Option<PhysicalPosition<i32>>,
-    last_cursor_pos: Option<PhysicalPosition<f64>>,
-    user_moved: bool,
-}
-
-impl App {
-    fn new(window: Arc<Window>) -> anyhow::Result<Self> {
-        let mut renderer = pollster::block_on(Renderer::new(window.as_ref()))?;
+impl AppCore {
+    fn new(mut renderer: Renderer) -> anyhow::Result<Self> {
         let world = WorldState::seeded();
         let ui = UiState::new();
-        let main_window_id = window.id();
-
-        let egui_ctx = egui::Context::default();
-        let egui_state = egui_winit::State::new(
-            egui_ctx.clone(),
-            egui::ViewportId::ROOT,
-            window.as_ref(),
-            Some(window.scale_factor() as f32),
-            window.theme(),
-            None,
-        );
-        let egui_renderer = egui_wgpu::Renderer::new(
-            &renderer.device,
-            renderer.surface_format(),
-            egui_wgpu::RendererOptions::default(),
-        );
         let overlay_settings = ui.operations().clone();
-        renderer.update_overlay(
-            if overlay_settings.show_base { 1.0 } else { 0.0 },
-            0.0,
-            0.0,
-            0.0,
-        );
         let (tile_fetcher, tile_rx) = TileFetcher::new(6);
         let mut tile_layers = TileLayers::new();
         let mut tile_request_id = 0;
@@ -161,22 +1043,25 @@ impl App {
             &tile_fetcher,
             &mut tile_request_id,
         );
+        let (map_opacity, sea_opacity, weather_opacity) =
+            tile_layers.overlay_opacities(&overlay_settings);
+        renderer.update_overlay(
+            if overlay_settings.show_base { 1.0 } else { 0.0 },
+            map_opacity,
+            sea_opacity,
+            weather_opacity,
+        );
+
         Ok(Self {
-            window,
-            main_window_id,
             renderer,
             world,
             ui,
+            ui_theme: Theme::Dark,
+            overlay_settings,
+            last_frame: Instant::now(),
             instances: Vec::new(),
             filtered_instances: Vec::new(),
             render_instances: Vec::new(),
-            egui_ctx,
-            egui_state,
-            egui_renderer,
-            last_frame: Instant::now(),
-            globe_texture_id: None,
-            globe_dragging: false,
-            overlay_settings,
             world_accum: 1.0 / 30.0,
             world_update_interval: 1.0 / 30.0,
             instances_dirty: true,
@@ -187,474 +1072,23 @@ impl App {
             tile_layers,
             diagnostics: Diagnostics::default(),
             perf_stats: PerfStats::new(),
-            detached_windows: HashMap::new(),
-            detached_tabs: HashMap::new(),
-            active_drag: None,
-            main_cursor_pos: None,
         })
-    }
-
-    fn register_detached_window(
-        &mut self,
-        dock_state: DockState<DockTab>,
-        window: Arc<Window>,
-    ) -> anyhow::Result<WindowId> {
-        let viewport_id = egui::ViewportId::from_hash_of((window.id(), "detached"));
-        let egui_ctx = egui::Context::default();
-        egui_ctx.set_style(self.egui_ctx.style().clone());
-        let egui_state = egui_winit::State::new(
-            egui_ctx.clone(),
-            viewport_id,
-            window.as_ref(),
-            Some(window.scale_factor() as f32),
-            window.theme(),
-            None,
-        );
-        let egui_renderer = egui_wgpu::Renderer::new(
-            &self.renderer.device,
-            self.renderer.surface_format(),
-            egui_wgpu::RendererOptions::default(),
-        );
-        let (surface, config) = self.renderer.create_window_surface(window.as_ref())?;
-        let size = (config.width, config.height);
-        let window_id = window.id();
-        for (_, tab) in dock_state.iter_all_tabs() {
-            self.detached_tabs.insert(*tab, window_id);
-        }
-        self.detached_windows.insert(
-            window_id,
-            DetachedWindow {
-                dock_state,
-                window,
-                egui_ctx,
-                egui_state,
-                egui_renderer,
-                surface,
-                config,
-                size,
-                last_pos: None,
-                last_cursor_pos: None,
-                user_moved: false,
-            },
-        );
-        Ok(window_id)
-    }
-
-    fn is_detached_window(&self, window_id: WindowId) -> bool {
-        self.detached_windows.contains_key(&window_id)
-    }
-
-    fn request_redraws(&self) {
-        self.window.request_redraw();
-        for window in self.detached_windows.values() {
-            window.window.request_redraw();
-        }
-    }
-
-    fn handle_detached_window_event(&mut self, window_id: WindowId, event: &WindowEvent) {
-        let (window, close_requested, moved, resize, user_moved, drag_released) = {
-            let Some(detached) = self.detached_windows.get_mut(&window_id) else {
-                return;
-            };
-            let window = Arc::clone(&detached.window);
-            let _ = detached.egui_state.on_window_event(window.as_ref(), event);
-            let mut close_requested = false;
-            let mut moved = false;
-            let mut resize = None;
-            let mut drag_released = false;
-            match event {
-                WindowEvent::CloseRequested => {
-                    close_requested = true;
-                }
-                WindowEvent::Resized(size) => {
-                    resize = Some((size.width, size.height));
-                }
-                WindowEvent::ScaleFactorChanged { .. } => {
-                    let size = window.inner_size();
-                    resize = Some((size.width, size.height));
-                }
-                WindowEvent::MouseInput { state, button, .. } => {
-                    if *state == winit::event::ElementState::Released
-                        && *button == winit::event::MouseButton::Left
-                    {
-                        drag_released = true;
-                    }
-                }
-                WindowEvent::CursorMoved { position, .. } => {
-                    detached.last_cursor_pos = Some(*position);
-                }
-                WindowEvent::Moved(pos) => {
-                    moved = true;
-                    let pos = *pos;
-                    if let Some(prev) = detached.last_pos {
-                        let dx = (pos.x - prev.x).abs();
-                        let dy = (pos.y - prev.y).abs();
-                        if dx + dy >= 8 {
-                            detached.user_moved = true;
-                        }
-                    }
-                    detached.last_pos = Some(pos);
-                }
-                _ => {}
-            }
-            (
-                window,
-                close_requested,
-                moved,
-                resize,
-                detached.user_moved,
-                drag_released,
-            )
-        };
-
-        if let Some((width, height)) = resize {
-            self.resize_detached_window(window_id, width, height);
-        }
-        if drag_released {
-            self.handle_drag_release(window_id);
-        }
-        if close_requested || (moved && user_moved && self.should_attach_to_main(window.as_ref())) {
-            self.dock_back_window(window_id);
-        }
-    }
-
-    fn render_detached_window(&mut self, window_id: WindowId) -> anyhow::Result<()> {
-        let Some(detached) = self.detached_windows.get_mut(&window_id) else {
-            return Ok(());
-        };
-        let window = detached.window.as_ref();
-        let raw_input = detached.egui_state.take_egui_input(window);
-        let output = detached.egui_ctx.run(raw_input, |ctx| {
-            self.ui.show_detached_panel(
-                ctx,
-                DockHost::Detached(window_id.into()),
-                &mut detached.dock_state,
-                &self.world,
-                &self.renderer,
-                &self.diagnostics,
-            );
-        });
-        detached
-            .egui_state
-            .handle_platform_output(window, output.platform_output);
-        let paint_jobs = detached
-            .egui_ctx
-            .tessellate(output.shapes, output.pixels_per_point);
-
-        for (id, image_delta) in &output.textures_delta.set {
-            detached.egui_renderer.update_texture(
-                &self.renderer.device,
-                &self.renderer.queue,
-                *id,
-                image_delta,
-            );
-        }
-
-        let screen_descriptor = egui_wgpu::ScreenDescriptor {
-            size_in_pixels: [detached.size.0, detached.size.1],
-            pixels_per_point: output.pixels_per_point,
-        };
-
-        let surface_texture = match detached.surface.get_current_texture() {
-            Ok(frame) => frame,
-            Err(wgpu::SurfaceError::Outdated) | Err(wgpu::SurfaceError::Lost) => {
-                let width = detached.size.0.max(1);
-                let height = detached.size.1.max(1);
-                detached.config.width = width;
-                detached.config.height = height;
-                detached.surface.configure(&self.renderer.device, &detached.config);
-                return Ok(());
-            }
-            Err(wgpu::SurfaceError::OutOfMemory) => {
-                return Err(anyhow::anyhow!("detached surface out of memory"));
-            }
-            Err(err) => {
-                return Err(anyhow::anyhow!("detached surface error: {err:?}"));
-            }
-        };
-
-        let view = surface_texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .renderer
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("c2-native detached encoder"),
-            });
-
-        let mut egui_cmds = detached.egui_renderer.update_buffers(
-            &self.renderer.device,
-            &self.renderer.queue,
-            &mut encoder,
-            &paint_jobs,
-            &screen_descriptor,
-        );
-
-        {
-            let egui_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("egui detached pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            let mut egui_pass = egui_pass.forget_lifetime();
-            detached.egui_renderer
-                .render(&mut egui_pass, &paint_jobs, &screen_descriptor);
-        }
-
-        egui_cmds.push(encoder.finish());
-        self.renderer.queue.submit(egui_cmds);
-        surface_texture.present();
-
-        for id in &output.textures_delta.free {
-            detached.egui_renderer.free_texture(id);
-        }
-        self.capture_drag_start();
-
-        Ok(())
-    }
-
-    fn detach_tab(&mut self, target: &ActiveEventLoop, request: DockDetachRequest) -> anyhow::Result<()> {
-        if request.tab == DockTab::Globe {
-            return Ok(());
-        }
-        self.remove_tab_from_host(request.host, request.tab);
-        let (title, size) = Self::detached_window_spec(request.tab);
-        let dock_state = DockState::new(vec![request.tab]);
-        let window = Arc::new(target.create_window(
-            WindowAttributes::default()
-                .with_title(title)
-                .with_inner_size(size),
-        )?);
-        let window_id = self.register_detached_window(dock_state, window)?;
-        let window = if let Some(detached) = self.detached_windows.get_mut(&window_id) {
-            detached.user_moved = false;
-            detached.last_pos = None;
-            Arc::clone(&detached.window)
-        } else {
-            return Ok(());
-        };
-        self.position_detached_window(request.tab, window.as_ref());
-        window.request_redraw();
-        Ok(())
-    }
-
-    fn dock_back_window(&mut self, window_id: WindowId) {
-        let Some(detached) = self.detached_windows.remove(&window_id) else {
-            return;
-        };
-        let tabs: Vec<DockTab> = detached
-            .dock_state
-            .iter_all_tabs()
-            .map(|(_, tab)| *tab)
-            .collect();
-        for tab in tabs {
-            self.detached_tabs.remove(&tab);
-            self.ui.main_dock_mut().push_to_focused_leaf(tab);
-        }
-        detached.window.set_visible(false);
-        self.position_hidden_window(detached.window.as_ref());
-    }
-
-    fn process_ui_requests(&mut self, target: &ActiveEventLoop) {
-        for request in self.ui.take_detach_requests() {
-            if let Err(error) = self.detach_tab(target, request) {
-                eprintln!("detach failed: {error:?}");
-            }
-        }
-        for host in self.ui.take_attach_requests() {
-            if let DockHost::Detached(window_id) = host {
-                self.dock_back_window(WindowId::from(window_id));
-            }
-        }
-    }
-
-    fn capture_drag_start(&mut self) {
-        let Some(start) = self.ui.take_drag_start() else {
-            return;
-        };
-        if self.active_drag.is_none() {
-            self.active_drag = Some(start);
-        }
-    }
-
-    fn handle_drag_release(&mut self, window_id: WindowId) {
-        let Some(active_drag) = self.active_drag.take() else {
-            return;
-        };
-        let target_host = self
-            .cursor_global_position(window_id)
-            .and_then(|pos| self.dock_host_at_global_position(pos))
-            .unwrap_or_else(|| self.dock_host_for_window_id(window_id));
-        if target_host == active_drag.host {
-            return;
-        }
-        self.move_tab_between_hosts(active_drag.tab, active_drag.host, target_host);
-    }
-
-    fn dock_host_for_window_id(&self, window_id: WindowId) -> DockHost {
-        if window_id == self.main_window_id {
-            DockHost::Main
-        } else {
-            DockHost::Detached(window_id.into())
-        }
-    }
-
-    fn cursor_global_position(
-        &self,
-        window_id: WindowId,
-    ) -> Option<PhysicalPosition<f64>> {
-        if window_id == self.main_window_id {
-            let cursor = self.main_cursor_pos?;
-            let window_pos = self.window.outer_position().ok()?;
-            return Some(PhysicalPosition::new(
-                window_pos.x as f64 + cursor.x,
-                window_pos.y as f64 + cursor.y,
-            ));
-        }
-        let detached = self.detached_windows.get(&window_id)?;
-        let cursor = detached.last_cursor_pos?;
-        let window_pos = detached.window.outer_position().ok()?;
-        Some(PhysicalPosition::new(
-            window_pos.x as f64 + cursor.x,
-            window_pos.y as f64 + cursor.y,
-        ))
-    }
-
-    fn dock_host_at_global_position(
-        &self,
-        position: PhysicalPosition<f64>,
-    ) -> Option<DockHost> {
-        for (window_id, detached) in &self.detached_windows {
-            let Ok(window_pos) = detached.window.outer_position() else {
-                continue;
-            };
-            let window_size = detached.window.outer_size();
-            if position.x >= window_pos.x as f64
-                && position.y >= window_pos.y as f64
-                && position.x <= window_pos.x as f64 + window_size.width as f64
-                && position.y <= window_pos.y as f64 + window_size.height as f64
-            {
-                return Some(DockHost::Detached((*window_id).into()));
-            }
-        }
-        if let Ok(window_pos) = self.window.outer_position() {
-            let window_size = self.window.outer_size();
-            if position.x >= window_pos.x as f64
-                && position.y >= window_pos.y as f64
-                && position.x <= window_pos.x as f64 + window_size.width as f64
-                && position.y <= window_pos.y as f64 + window_size.height as f64
-            {
-                return Some(DockHost::Main);
-            }
-        }
-        None
-    }
-
-    fn dock_state_for_host_mut(
-        &mut self,
-        host: DockHost,
-    ) -> Option<&mut DockState<DockTab>> {
-        match host {
-            DockHost::Main => Some(self.ui.main_dock_mut()),
-            DockHost::Detached(window_id) => self
-                .detached_windows
-                .get_mut(&WindowId::from(window_id))
-                .map(|detached| &mut detached.dock_state),
-        }
-    }
-
-    fn dock_host_exists(&self, host: DockHost) -> bool {
-        match host {
-            DockHost::Main => true,
-            DockHost::Detached(window_id) => {
-                self.detached_windows.contains_key(&WindowId::from(window_id))
-            }
-        }
-    }
-
-    fn remove_tab_from_host(&mut self, host: DockHost, tab: DockTab) {
-        let Some(dock_state) = self.dock_state_for_host_mut(host) else {
-            return;
-        };
-        if let Some((surface, node, tab_index)) = dock_state.find_tab(&tab) {
-            dock_state.remove_tab((surface, node, tab_index));
-        }
-        let should_close = match host {
-            DockHost::Detached(_) => dock_state.main_surface().is_empty(),
-            DockHost::Main => false,
-        };
-        let window_id = match host {
-            DockHost::Detached(window_id) => Some(WindowId::from(window_id)),
-            DockHost::Main => None,
-        };
-        if should_close {
-            if let Some(window_id) = window_id {
-                self.close_detached_window(window_id);
-            }
-        }
-    }
-
-    fn move_tab_between_hosts(&mut self, tab: DockTab, from: DockHost, to: DockHost) {
-        if tab == DockTab::Globe {
-            return;
-        }
-        if !self.dock_host_exists(to) {
-            return;
-        }
-        self.remove_tab_from_host(from, tab);
-        let Some(target_state) = self.dock_state_for_host_mut(to) else {
-            return;
-        };
-        target_state.push_to_focused_leaf(tab);
-        match to {
-            DockHost::Main => {
-                self.detached_tabs.remove(&tab);
-            }
-            DockHost::Detached(window_id) => {
-                self.detached_tabs.insert(tab, WindowId::from(window_id));
-            }
-        }
-    }
-
-    fn close_detached_window(&mut self, window_id: WindowId) {
-        let Some(detached) = self.detached_windows.remove(&window_id) else {
-            return;
-        };
-        for (_, tab) in detached.dock_state.iter_all_tabs() {
-            self.detached_tabs.remove(tab);
-        }
-        detached.window.set_visible(false);
-        self.position_hidden_window(detached.window.as_ref());
     }
 
     fn sync_operations_settings(&mut self) {
         let new_settings = self.ui.operations().clone();
         if new_settings != self.overlay_settings {
             self.overlay_settings = new_settings;
-            filter_instances(
-                &self.instances,
-                &self.overlay_settings,
-                &mut self.filtered_instances,
-            );
+            filter_instances(&self.instances, &self.overlay_settings, &mut self.filtered_instances);
             self.instances_dirty = false;
             self.cull_dirty = true;
+            let (map_opacity, sea_opacity, weather_opacity) =
+                self.tile_layers.overlay_opacities(&self.overlay_settings);
             self.renderer.update_overlay(
                 if self.overlay_settings.show_base { 1.0 } else { 0.0 },
-                0.0,
-                0.0,
-                0.0,
+                map_opacity,
+                sea_opacity,
+                weather_opacity,
             );
             self.tile_layers.apply_settings(
                 &self.overlay_settings,
@@ -664,333 +1098,451 @@ impl App {
             );
         }
     }
+}
 
-    fn should_attach_to_main(&self, detached_window: &Window) -> bool {
-        let Ok(main_pos) = self.window.outer_position() else {
-            return false;
-        };
-        let main_size = self.window.outer_size();
-        let Ok(det_pos) = detached_window.outer_position() else {
-            return false;
-        };
-        let det_size = detached_window.outer_size();
-        let det_center_x = det_pos.x + det_size.width as i32 / 2;
-        let det_center_y = det_pos.y + det_size.height as i32 / 2;
-        let within_x = det_center_x >= main_pos.x
-            && det_center_x <= main_pos.x + main_size.width as i32;
-        let within_y = det_center_y >= main_pos.y
-            && det_center_y <= main_pos.y + main_size.height as i32;
-        within_x && within_y
-    }
+struct MainWindow {
+    window: Arc<Window>,
+    ui_cache: Cache,
+    ui_renderer: iced_wgpu::Renderer,
+    ui_events: Vec<IcedEvent>,
+    ui_clipboard: Clipboard,
+    cursor_logical: Option<Point>,
+    last_cursor_physical: Option<PhysicalPosition<f64>>,
+    globe_dragging: bool,
+    panels: MainPanels,
+    drop_target: bool,
+}
 
-    fn detached_window_spec(tab: DockTab) -> (&'static str, PhysicalSize<u32>) {
-        match tab {
-            DockTab::Operations => ("Operations", PhysicalSize::new(340, 720)),
-            DockTab::Entities => ("Entities", PhysicalSize::new(340, 720)),
-            DockTab::Inspector => ("Inspector", PhysicalSize::new(520, 360)),
-            DockTab::Globe => ("Globe", PhysicalSize::new(520, 360)),
+impl MainWindow {
+    fn new(window: Arc<Window>, ui_renderer: iced_wgpu::Renderer) -> Self {
+        Self {
+            window: window.clone(),
+            ui_cache: Cache::new(),
+            ui_renderer,
+            ui_events: Vec::new(),
+            ui_clipboard: Clipboard::connect(window),
+            cursor_logical: None,
+            last_cursor_physical: None,
+            globe_dragging: false,
+            panels: MainPanels {
+                globe: true,
+                operations: true,
+                entities: true,
+                inspector: true,
+            },
+            drop_target: false,
         }
     }
+}
 
-    fn position_detached_window(&self, tab: DockTab, window: &Window) {
-        let Ok(main_pos) = self.window.outer_position() else {
-            return;
-        };
-        let main_size = self.window.outer_size();
-        let offset_y = match tab {
-            DockTab::Operations => 40,
-            DockTab::Entities => 120,
-            DockTab::Inspector => 200,
-            DockTab::Globe => 40,
-        };
-        let x = main_pos.x + main_size.width as i32 + 24;
-        let y = main_pos.y + offset_y;
-        window.set_outer_position(PhysicalPosition::new(x, y));
-    }
+struct DetachedWindow {
+    window: Arc<Window>,
+    surface: wgpu::Surface<'static>,
+    surface_config: wgpu::SurfaceConfiguration,
+    size: PhysicalSize<u32>,
+    depth_texture: wgpu::Texture,
+    depth_view: wgpu::TextureView,
+    ui_cache: Cache,
+    ui_renderer: iced_wgpu::Renderer,
+    ui_events: Vec<IcedEvent>,
+    ui_clipboard: Clipboard,
+    cursor_logical: Option<Point>,
+    last_cursor_physical: Option<PhysicalPosition<f64>>,
+    globe_dragging: bool,
+    panels: Vec<PanelId>,
+    active_panel: PanelId,
+    drop_target: bool,
+}
 
-    fn position_hidden_window(&self, window: &Window) {
-        let offset = 10000;
-        let (x, y) = if let Ok(main_pos) = self.window.outer_position() {
-            (main_pos.x - offset, main_pos.y - offset)
+impl DetachedWindow {
+    fn new(window: Arc<Window>, core: &AppCore, mut panels: Vec<PanelId>) -> anyhow::Result<Self> {
+        if panels.is_empty() {
+            panels.push(PanelId::Operations);
+        }
+        panels.sort_by_key(|panel| panel.order());
+        let active_panel = panels[0];
+        let size = window.inner_size();
+        let surface = core.renderer.create_surface(window.as_ref())?;
+        let caps = surface.get_capabilities(core.renderer.adapter());
+        let format = if caps.formats.contains(&core.renderer.surface_format()) {
+            core.renderer.surface_format()
         } else {
-            (-offset, -offset)
+            caps.formats[0]
         };
-        window.set_outer_position(PhysicalPosition::new(x, y));
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: size.width.max(1),
+            height: size.height.max(1),
+            present_mode: wgpu::PresentMode::AutoVsync,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+        };
+        surface.configure(&core.renderer.device, &surface_config);
+        let ui_renderer = build_ui_renderer(&core.renderer, format);
+        let (depth_texture, depth_view) =
+            create_depth_texture(&core.renderer.device, surface_config.width, surface_config.height);
+
+        Ok(Self {
+            window: window.clone(),
+            surface,
+            surface_config,
+            size,
+            depth_texture,
+            depth_view,
+            ui_cache: Cache::new(),
+            ui_renderer,
+            ui_events: Vec::new(),
+            ui_clipboard: Clipboard::connect(window),
+            cursor_logical: None,
+            last_cursor_physical: None,
+            globe_dragging: false,
+            panels,
+            active_panel,
+            drop_target: false,
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DragState {
+    panel: PanelId,
+    source_window: WindowId,
+}
+
+fn build_ui_renderer(renderer: &Renderer, format: wgpu::TextureFormat) -> iced_wgpu::Renderer {
+    let ui_engine = Engine::new(
+        renderer.adapter(),
+        renderer.device.clone(),
+        renderer.queue.clone(),
+        format,
+        None,
+        Shell::headless(),
+    );
+    iced_wgpu::Renderer::new(ui_engine, iced::Font::default(), 14.0.into())
+}
+
+fn cursor_in_globe(core: &AppCore, main: &MainWindow) -> bool {
+    if !main.panels.globe {
+        return false;
+    }
+    let Some(cursor) = main.cursor_logical else {
+        return false;
+    };
+    let scale_factor = main.window.scale_factor() as f32;
+    let size = core.renderer.size();
+    let logical_size = Size::new(
+        size.0 as f32 / scale_factor,
+        size.1 as f32 / scale_factor,
+    );
+    let globe_rect = core.ui.globe_rect(logical_size, main.panels);
+    globe_rect.contains(cursor)
+}
+
+fn cursor_in_detached_globe(core: &AppCore, detached: &DetachedWindow) -> bool {
+    if detached.active_panel != PanelId::Globe {
+        return false;
+    }
+    let Some(cursor) = detached.cursor_logical else {
+        return false;
+    };
+    let scale_factor = detached.window.scale_factor() as f32;
+    let logical_size = Size::new(
+        detached.size.width as f32 / scale_factor,
+        detached.size.height as f32 / scale_factor,
+    );
+    let has_tabs = detached.panels.len() > 1;
+    let globe_rect = core.ui.detached_globe_rect(logical_size, has_tabs);
+    globe_rect.contains(cursor)
+}
+
+fn globe_bounds_for_main(core: &AppCore, main: &MainWindow) -> Option<RenderBounds> {
+    if !main.panels.globe {
+        return None;
+    }
+    let scale_factor = main.window.scale_factor() as f32;
+    let size = core.renderer.size();
+    let logical_size = Size::new(
+        size.0 as f32 / scale_factor,
+        size.1 as f32 / scale_factor,
+    );
+    let rect = core.ui.globe_rect(logical_size, main.panels);
+    render_bounds_from_rect(rect, scale_factor, size)
+}
+
+fn globe_bounds_for_detached(core: &AppCore, detached: &DetachedWindow) -> Option<RenderBounds> {
+    if detached.active_panel != PanelId::Globe {
+        return None;
+    }
+    let scale_factor = detached.window.scale_factor() as f32;
+    let logical_size = Size::new(
+        detached.size.width as f32 / scale_factor,
+        detached.size.height as f32 / scale_factor,
+    );
+    let has_tabs = detached.panels.len() > 1;
+    let rect = core.ui.detached_globe_rect(logical_size, has_tabs);
+    render_bounds_from_rect(rect, scale_factor, (detached.size.width, detached.size.height))
+}
+
+fn render_bounds_from_rect(
+    rect: Rectangle,
+    scale_factor: f32,
+    max_size: (u32, u32),
+) -> Option<RenderBounds> {
+    if rect.width <= 1.0 || rect.height <= 1.0 {
+        return None;
+    }
+    let mut x = (rect.x * scale_factor).floor() as i32;
+    let mut y = (rect.y * scale_factor).floor() as i32;
+    let mut width = (rect.width * scale_factor).floor() as i32;
+    let mut height = (rect.height * scale_factor).floor() as i32;
+
+    let max_w = max_size.0 as i32;
+    let max_h = max_size.1 as i32;
+
+    if x < 0 {
+        width += x;
+        x = 0;
+    }
+    if y < 0 {
+        height += y;
+        y = 0;
+    }
+    if x >= max_w || y >= max_h {
+        return None;
+    }
+    if x + width > max_w {
+        width = max_w - x;
+    }
+    if y + height > max_h {
+        height = max_h - y;
+    }
+    if width <= 1 || height <= 1 {
+        return None;
     }
 
-    fn resize_detached_window(&mut self, window_id: WindowId, width: u32, height: u32) {
-        let Some(detached) = self.detached_windows.get_mut(&window_id) else {
-            return;
-        };
-        let width = width.max(1);
-        let height = height.max(1);
-        detached.size = (width, height);
-        detached.config.width = width;
-        detached.config.height = height;
-        detached.surface.configure(&self.renderer.device, &detached.config);
+    Some(RenderBounds {
+        x: x as u32,
+        y: y as u32,
+        width: width as u32,
+        height: height as u32,
+    })
+}
+
+fn resize_detached_window(core: &AppCore, detached: &mut DetachedWindow, size: PhysicalSize<u32>) {
+    let width = size.width.max(1);
+    let height = size.height.max(1);
+    detached.size = PhysicalSize::new(width, height);
+    detached.surface_config.width = width;
+    detached.surface_config.height = height;
+    detached
+        .surface
+        .configure(&core.renderer.device, &detached.surface_config);
+    let (depth_texture, depth_view) = create_depth_texture(&core.renderer.device, width, height);
+    detached.depth_texture = depth_texture;
+    detached.depth_view = depth_view;
+}
+
+fn add_panel_to_main(main: &mut MainWindow, panel: PanelId) {
+    match panel {
+        PanelId::Globe => main.panels.globe = true,
+        PanelId::Operations => main.panels.operations = true,
+        PanelId::Entities => main.panels.entities = true,
+        PanelId::Inspector => main.panels.inspector = true,
     }
+}
 
-    fn handle_window_event(&mut self, event: &WindowEvent) -> bool {
-        let window = self.window.as_ref();
-        let egui_response = self.egui_state.on_window_event(window, event);
-        if !egui_response.consumed {
-            self.renderer.handle_input(event);
-        }
-        match event {
-            WindowEvent::CloseRequested => return false,
-            WindowEvent::Resized(size) => {
-                self.renderer.resize(size.width, size.height);
-            }
-            WindowEvent::ScaleFactorChanged { .. } => {
-                let size = window.inner_size();
-                self.renderer.resize(size.width, size.height);
-            }
-            WindowEvent::CursorMoved { position, .. } => {
-                self.main_cursor_pos = Some(*position);
-            }
-            WindowEvent::MouseInput { state, button, .. } => {
-                if *state == winit::event::ElementState::Released
-                    && *button == winit::event::MouseButton::Left
-                {
-                    self.handle_drag_release(self.main_window_id);
-                }
-            }
-            _ => {}
-        }
-        true
+fn remove_panel_from_main(main: &mut MainWindow, panel: PanelId) {
+    match panel {
+        PanelId::Globe => main.panels.globe = false,
+        PanelId::Operations => main.panels.operations = false,
+        PanelId::Entities => main.panels.entities = false,
+        PanelId::Inspector => main.panels.inspector = false,
     }
+}
 
-    fn update_and_render(&mut self) -> anyhow::Result<()> {
-        let window = self.window.as_ref();
-        let now = Instant::now();
-        let frame_start = now;
-        let delta = (now - self.last_frame).as_secs_f32();
-        self.last_frame = now;
-        let fps = if delta > 0.0 { 1.0 / delta } else { 0.0 };
-
-        let mut world_updated = false;
-        let world_start = Instant::now();
-        self.world_accum += delta.max(0.0);
-        if self.world_accum >= self.world_update_interval {
-            let steps = (self.world_accum / self.world_update_interval)
-                .floor()
-                .min(4.0) as u32;
-            for _ in 0..steps {
-                self.world.update(self.world_update_interval);
-            }
-            self.world_accum -= steps as f32 * self.world_update_interval;
-            world_updated = true;
-            self.instances_dirty = true;
-        }
-        if world_updated || self.instances_dirty {
-            self.world.collect_instances(&mut self.instances);
-            filter_instances(
-                &self.instances,
-                &self.overlay_settings,
-                &mut self.filtered_instances,
-            );
-            self.instances_dirty = false;
-            self.cull_dirty = true;
-        }
-        if self.cull_dirty {
-            cull_instances_for_render(
-                &self.filtered_instances,
-                &self.renderer,
-                self.world.globe_radius(),
-                &mut self.render_instances,
-            );
-            self.renderer.update_instances(&self.render_instances);
-            self.cull_dirty = false;
-        }
-        let world_ms = world_start.elapsed().as_secs_f32() * 1000.0;
-
-        let tile_start = Instant::now();
-        for result in self
-            .tile_rx
-            .try_iter()
-            .take(MAX_TILE_UPLOADS_PER_FRAME)
-        {
-            self.tile_layers
-                .handle_result(&mut self.renderer, result, now);
-        }
-        self.tile_layers.update(
-            &mut self.renderer,
-            &mut self.tile_fetcher,
-            &self.overlay_settings,
-            now,
-            &mut self.tile_request_id,
-        );
-        let tile_bars = self.tile_layers.progress_bars();
-        self.tile_layers.update_diagnostics(&mut self.diagnostics, now);
-        let tile_ms = tile_start.elapsed().as_secs_f32() * 1000.0;
-
-        let ui_start = Instant::now();
-        let raw_input = self.egui_state.take_egui_input(window);
-
-        let output = self.egui_ctx.run(raw_input, |ctx| {
-            self.ui.show(
-                ctx,
-                &self.world,
-                &self.renderer,
-                &self.filtered_instances,
-                self.globe_texture_id,
-                &tile_bars,
-                &self.diagnostics,
-            );
-        });
-        self.egui_state
-            .handle_platform_output(window, output.platform_output);
-        self.capture_drag_start();
-        let paint_jobs = self.egui_ctx.tessellate(output.shapes, output.pixels_per_point);
-        let ui_ms = ui_start.elapsed().as_secs_f32() * 1000.0;
-
-        if let Some(rect) = self.ui.globe_rect() {
-            self.egui_ctx.input(|input| {
-                if let Some(pos) = input.pointer.latest_pos() {
-                    let hovered = rect.contains(pos);
-                    if input.pointer.primary_pressed() && hovered {
-                        self.globe_dragging = true;
-                    }
-                    if input.pointer.primary_released() {
-                        self.globe_dragging = false;
-                    }
-                    if self.globe_dragging && input.pointer.primary_down() {
-                        let delta = input.pointer.delta();
-                        if delta.x.abs() > 0.0 || delta.y.abs() > 0.0 {
-                            self.renderer.orbit_delta(delta.x, delta.y);
-                            self.cull_dirty = true;
-                        }
-                    }
-                    if hovered {
-                        let scroll = input.smooth_scroll_delta.y;
-                        if scroll.abs() > 0.0 {
-                            self.renderer.zoom_delta(scroll);
-                            self.cull_dirty = true;
-                        }
-                    }
-                } else if input.pointer.primary_released() {
-                    self.globe_dragging = false;
-                }
-            });
-        }
-
-        self.sync_operations_settings();
-
-        for (id, image_delta) in &output.textures_delta.set {
-            self.egui_renderer
-                .update_texture(&self.renderer.device, &self.renderer.queue, *id, image_delta);
-        }
-
-        let screen_descriptor = egui_wgpu::ScreenDescriptor {
-            size_in_pixels: [self.renderer.size().0, self.renderer.size().1],
-            pixels_per_point: output.pixels_per_point,
-        };
-
-        if let Some(rect) = self.ui.globe_rect() {
-            let width = (rect.width() * output.pixels_per_point).round() as u32;
-            let height = (rect.height() * output.pixels_per_point).round() as u32;
-            let resized = self.renderer.ensure_viewport_size(width, height);
-            if resized || self.globe_texture_id.is_none() {
-                if let Some(texture_id) = self.globe_texture_id {
-                    self.egui_renderer.update_egui_texture_from_wgpu_texture(
-                        &self.renderer.device,
-                        self.renderer.viewport_view(),
-                        wgpu::FilterMode::Linear,
-                        texture_id,
-                    );
-                } else {
-                    self.globe_texture_id = Some(self.egui_renderer.register_native_texture(
-                        &self.renderer.device,
-                        self.renderer.viewport_view(),
-                        wgpu::FilterMode::Linear,
-                    ));
-                }
-            }
-        }
-
-        let render_start = Instant::now();
-        let mut encoder = self
-            .renderer
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("c2-native encoder"),
-            });
-
-        self.renderer.render_scene(&mut encoder);
-
-        let mut egui_cmds = self.egui_renderer.update_buffers(
-            &self.renderer.device,
-            &self.renderer.queue,
-            &mut encoder,
-            &paint_jobs,
-            &screen_descriptor,
-        );
-
-        let surface_texture = match self.renderer.begin_frame() {
-            Ok(frame) => frame,
-            Err(wgpu::SurfaceError::Outdated) => {
-                self.renderer.reconfigure();
-                return Ok(());
-            }
-            Err(wgpu::SurfaceError::Lost) => {
-                self.renderer.reconfigure();
-                return Ok(());
-            }
-            Err(wgpu::SurfaceError::OutOfMemory) => {
-                return Err(anyhow::anyhow!("surface out of memory"));
-            }
-            Err(err) => {
-                return Err(anyhow::anyhow!("surface error: {err:?}"));
-            }
-        };
-
-        let view = surface_texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        {
-            let egui_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("egui pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            let mut egui_pass = egui_pass.forget_lifetime();
-            self.egui_renderer
-                .render(&mut egui_pass, &paint_jobs, &screen_descriptor);
-        }
-
-        egui_cmds.push(encoder.finish());
-        self.renderer.queue.submit(egui_cmds);
-        surface_texture.present();
-        let render_ms = render_start.elapsed().as_secs_f32() * 1000.0;
-
-        for id in &output.textures_delta.free {
-            self.egui_renderer.free_texture(id);
-        }
-
-        let frame_ms = frame_start.elapsed().as_secs_f32() * 1000.0;
-        self.diagnostics.perf = self.perf_stats.update(
-            frame_ms,
-            world_ms,
-            tile_ms,
-            ui_ms,
-            render_ms,
-            fps,
-        );
-
-        Ok(())
+fn add_panel_to_detached(detached: &mut DetachedWindow, panel: PanelId) {
+    if !detached.panels.contains(&panel) {
+        detached.panels.push(panel);
+        detached.panels.sort_by_key(|panel| panel.order());
     }
+    detached.active_panel = panel;
+}
+
+fn remove_panel_from_detached(detached: &mut DetachedWindow, panel: PanelId) {
+    detached.panels.retain(|entry| *entry != panel);
+    if detached.active_panel == panel {
+        detached.active_panel = detached
+            .panels
+            .first()
+            .copied()
+            .unwrap_or(PanelId::Operations);
+    }
+}
+
+fn window_contains(window: &Window, cursor: PhysicalPosition<f64>) -> bool {
+    let Ok(position) = window.inner_position() else {
+        return false;
+    };
+    let size = window.inner_size();
+    let left = position.x as f64;
+    let top = position.y as f64;
+    let right = left + size.width as f64;
+    let bottom = top + size.height as f64;
+    cursor.x >= left && cursor.x <= right && cursor.y >= top && cursor.y <= bottom
+}
+
+fn drop_indicator_for_main(
+    core: &AppCore,
+    main: &MainWindow,
+    panel: PanelId,
+) -> Option<DropIndicator> {
+    let scale_factor = main.window.scale_factor() as f32;
+    let size = core.renderer.size();
+    let logical_size = Size::new(
+        size.0 as f32 / scale_factor,
+        size.1 as f32 / scale_factor,
+    );
+    let layout = core.ui.layout();
+    let mut panels = main.panels;
+    match panel {
+        PanelId::Globe => panels.globe = true,
+        PanelId::Operations => panels.operations = true,
+        PanelId::Entities => panels.entities = true,
+        PanelId::Inspector => panels.inspector = true,
+    }
+    let rect = main_panel_rect(layout, logical_size, panels, panel)?;
+    Some(DropIndicator { rect })
+}
+
+fn drop_indicator_for_detached(
+    core: &AppCore,
+    detached: &DetachedWindow,
+    _panel: PanelId,
+) -> Option<DropIndicator> {
+    let scale_factor = detached.window.scale_factor() as f32;
+    let logical_size = Size::new(
+        detached.size.width as f32 / scale_factor,
+        detached.size.height as f32 / scale_factor,
+    );
+    let layout = core.ui.layout();
+    let rect = detached_tab_drop_rect(layout, logical_size)?;
+    Some(DropIndicator { rect })
+}
+
+fn main_panel_rect(
+    layout: crate::ui::UiLayout,
+    window_size: Size,
+    panels: MainPanels,
+    panel: PanelId,
+) -> Option<Rectangle> {
+    let content_width = (window_size.width - 2.0 * layout.outer_padding).max(0.0);
+    let content_height = (window_size.height - 2.0 * layout.outer_padding).max(0.0);
+    if content_width <= 1.0 || content_height <= 1.0 {
+        return None;
+    }
+    let header_height = layout.top_bar_height;
+    let inspector_height = if panels.inspector {
+        layout.inspector_height
+    } else {
+        0.0
+    };
+    let top_spacing = layout.column_spacing;
+    let bottom_spacing = if panels.inspector {
+        layout.column_spacing
+    } else {
+        0.0
+    };
+    let row_height =
+        (content_height - header_height - top_spacing - inspector_height - bottom_spacing).max(0.0);
+    let row_y = layout.outer_padding + header_height + top_spacing;
+    let row_x = layout.outer_padding;
+
+    let operations_present = panels.operations;
+    let entities_present = panels.entities;
+    let operations_width = if operations_present { layout.panel_width } else { 0.0 };
+    let entities_width = if entities_present { layout.panel_width } else { 0.0 };
+    let operations_gap = if operations_present { layout.row_spacing } else { 0.0 };
+    let entities_gap = if entities_present { layout.row_spacing } else { 0.0 };
+    let globe_width =
+        (content_width - operations_width - entities_width - operations_gap - entities_gap).max(0.0);
+    let globe_x = row_x + operations_width + operations_gap;
+    let entities_x = globe_x + globe_width + entities_gap;
+
+    let rect = match panel {
+        PanelId::Operations => Rectangle::new(
+            Point::new(row_x, row_y),
+            Size::new(operations_width, row_height),
+        ),
+        PanelId::Globe => Rectangle::new(
+            Point::new(globe_x, row_y),
+            Size::new(globe_width, row_height),
+        ),
+        PanelId::Entities => Rectangle::new(
+            Point::new(entities_x, row_y),
+            Size::new(entities_width, row_height),
+        ),
+        PanelId::Inspector => Rectangle::new(
+            Point::new(row_x, row_y + row_height + bottom_spacing),
+            Size::new(content_width, inspector_height),
+        ),
+    };
+    Some(rect)
+}
+
+fn detached_tab_drop_rect(layout: crate::ui::UiLayout, window_size: Size) -> Option<Rectangle> {
+    let content_width = (window_size.width - 2.0 * layout.outer_padding).max(0.0);
+    let content_height = (window_size.height - 2.0 * layout.outer_padding).max(0.0);
+    if content_width <= 1.0 || content_height <= 1.0 {
+        return None;
+    }
+    let x = layout.outer_padding;
+    let y = layout.outer_padding + layout.top_bar_height + layout.column_spacing;
+    Some(Rectangle::new(
+        Point::new(x, y),
+        Size::new(content_width, layout.tab_bar_height),
+    ))
+}
+
+fn detached_window_size(layout: crate::ui::UiLayout, panel: PanelId) -> winit::dpi::LogicalSize<f64> {
+    let base_width = layout.panel_width + layout.outer_padding * 2.0 + 80.0;
+    let base_height = match panel {
+        PanelId::Globe => 520.0,
+        PanelId::Operations => 560.0,
+        PanelId::Entities => 420.0,
+        PanelId::Inspector => layout.inspector_height + layout.outer_padding * 2.0 + 220.0,
+    };
+    winit::dpi::LogicalSize::new(base_width as f64, base_height as f64)
+}
+
+fn fallback_window_position(main: Option<&MainWindow>) -> Option<PhysicalPosition<i32>> {
+    let main = main?;
+    let pos = main.window.inner_position().ok()?;
+    Some(PhysicalPosition::new(pos.x + 40, pos.y + 40))
+}
+
+fn create_depth_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("detached depth"),
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Depth32Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
 }
 
 struct PerfStats {
@@ -1163,6 +1715,7 @@ impl TileLayers {
         settings: &OperationsState,
         now: Instant,
         request_id: &mut u64,
+        viewport_size: (u32, u32),
     ) {
         let provider = tile_provider_config(&settings.tile_provider);
         self.map.update(
@@ -1172,9 +1725,12 @@ impl TileLayers {
             request_id,
             provider,
             settings,
+            viewport_size,
         );
-        self.weather.update(renderer, fetcher, now, request_id, provider, settings);
-        self.sea.update(renderer, fetcher, now, request_id, provider, settings);
+        self.weather
+            .update(renderer, fetcher, now, request_id, provider, settings, viewport_size);
+        self.sea
+            .update(renderer, fetcher, now, request_id, provider, settings, viewport_size);
     }
 
     fn handle_result(&mut self, renderer: &mut Renderer, result: TileResult, now: Instant) {
@@ -1185,12 +1741,14 @@ impl TileLayers {
         }
     }
 
-    fn progress_bars(&self) -> Vec<crate::ui::TileBar> {
+    fn progress_bars(&self) -> Vec<TileBar> {
         vec![
-            self.map.progress_bar(egui::Color32::from_rgb(86, 156, 255)),
-            self.sea.progress_bar(egui::Color32::from_rgb(64, 196, 196)),
+            self.map
+                .progress_bar("Map", iced::Color::from_rgb8(86, 156, 255)),
+            self.sea
+                .progress_bar("Sea", iced::Color::from_rgb8(64, 196, 196)),
             self.weather
-                .progress_bar(egui::Color32::from_rgb(255, 164, 72)),
+                .progress_bar("Weather", iced::Color::from_rgb8(255, 164, 72)),
         ]
     }
 
@@ -1198,6 +1756,17 @@ impl TileLayers {
         diagnostics.map = self.map.stats(now);
         diagnostics.weather = self.weather.stats(now);
         diagnostics.sea = self.sea.stats(now);
+    }
+
+    fn overlay_opacities(&self, settings: &OperationsState) -> (f32, f32, f32) {
+        let map_opacity = if settings.show_map { self.map.opacity } else { 0.0 };
+        let sea_opacity = if settings.show_sea { self.sea.opacity } else { 0.0 };
+        let weather_opacity = if settings.show_weather {
+            self.weather.opacity
+        } else {
+            0.0
+        };
+        (map_opacity, sea_opacity, weather_opacity)
     }
 }
 
@@ -1214,7 +1783,7 @@ struct TileLayerState {
     update_interval: std::time::Duration,
     last_update: Instant,
     last_activity: Instant,
-    last_direction: Vec3,
+    last_direction: glam::Vec3,
     last_distance: f32,
     tiles: std::collections::HashMap<TileKey, TileEntry>,
     pending: std::collections::HashMap<TileKey, u32>,
@@ -1247,7 +1816,7 @@ impl TileLayerState {
             update_interval: std::time::Duration::from_millis(update_interval_ms),
             last_update: Instant::now(),
             last_activity: Instant::now(),
-            last_direction: Vec3::ZERO,
+            last_direction: glam::Vec3::ZERO,
             last_distance: 0.0,
             tiles: std::collections::HashMap::new(),
             pending: std::collections::HashMap::new(),
@@ -1300,20 +1869,57 @@ impl TileLayerState {
         request_id: &mut u64,
         provider: TileProviderConfig,
         settings: &OperationsState,
+        viewport_size: (u32, u32),
     ) {
         if !self.enabled {
             return;
         }
 
-        let desired_zoom = match self.kind {
-            TileKind::Base => pick_tile_zoom(renderer, provider, DEFAULT_GLOBE_RADIUS),
-            TileKind::Weather => {
-                pick_overlay_zoom(renderer, WEATHER_MIN_ZOOM, WEATHER_MAX_ZOOM, DEFAULT_GLOBE_RADIUS)
-            }
-            TileKind::Sea => {
-                pick_overlay_zoom(renderer, SEA_MIN_ZOOM, SEA_MAX_ZOOM, DEFAULT_GLOBE_RADIUS)
-            }
+        let (min_zoom, max_zoom, desired_zoom) = match self.kind {
+            TileKind::Base => (
+                provider.min_zoom,
+                provider.max_zoom,
+                pick_tile_zoom(renderer, viewport_size, provider, DEFAULT_GLOBE_RADIUS),
+            ),
+            TileKind::Weather => (
+                WEATHER_MIN_ZOOM,
+                WEATHER_MAX_ZOOM,
+                pick_overlay_zoom(
+                    renderer,
+                    viewport_size,
+                    WEATHER_MIN_ZOOM,
+                    WEATHER_MAX_ZOOM,
+                    DEFAULT_GLOBE_RADIUS,
+                ),
+            ),
+            TileKind::Sea => (
+                SEA_MIN_ZOOM,
+                SEA_MAX_ZOOM,
+                pick_overlay_zoom(
+                    renderer,
+                    viewport_size,
+                    SEA_MIN_ZOOM,
+                    SEA_MAX_ZOOM,
+                    DEFAULT_GLOBE_RADIUS,
+                ),
+            ),
         };
+        let mut desired_zoom = desired_zoom.clamp(min_zoom, max_zoom);
+        let mut selection = compute_visible_tiles(
+            renderer,
+            viewport_size,
+            desired_zoom,
+            self.max_tiles,
+        );
+        while selection.total > self.max_tiles && desired_zoom > min_zoom {
+            desired_zoom = desired_zoom.saturating_sub(1);
+            selection = compute_visible_tiles(
+                renderer,
+                viewport_size,
+                desired_zoom,
+                self.max_tiles,
+            );
+        }
         let mut needs_new_request = self.request_id == 0;
         if desired_zoom != self.zoom {
             self.zoom = desired_zoom;
@@ -1348,7 +1954,7 @@ impl TileLayerState {
         self.last_direction = camera_dir;
         self.last_distance = renderer.camera_distance();
 
-        let desired = compute_visible_tiles(renderer, self.zoom, self.max_tiles);
+        let desired = selection.keys;
         self.desired = desired.clone();
         let desired_set: std::collections::HashSet<TileKey> = desired.iter().copied().collect();
 
@@ -1403,6 +2009,8 @@ impl TileLayerState {
                 kind: self.kind,
                 key: *key,
                 provider: settings.tile_provider.clone(),
+                provider_url: (self.kind == TileKind::Base && !provider.url.is_empty())
+                    .then(|| provider.url.to_string()),
                 weather_field: settings.weather_field.clone(),
                 sea_field: settings.sea_field.clone(),
                 layer_index,
@@ -1452,17 +2060,14 @@ impl TileLayerState {
         );
     }
 
-    fn progress_bar(&self, color: egui::Color32) -> crate::ui::TileBar {
+    fn progress_bar(&self, label: &'static str, color: iced::Color) -> TileBar {
         let pending = self.pending.len();
         let loaded = self.progress_loaded;
-        let total = loaded + pending;
-        let has_work = self.enabled && pending > 0 && total > 0;
-        let progress = if has_work {
-            Some(loaded as f32 / total as f32)
-        } else {
-            None
-        };
-        crate::ui::TileBar {
+        let total = self.progress_total.max(loaded + pending);
+        let has_work = self.enabled && total > 0;
+        let progress = has_work.then(|| loaded as f32 / total as f32);
+        TileBar {
+            label,
             enabled: has_work,
             progress,
             color,
@@ -1527,12 +2132,10 @@ impl TileLayerState {
             .iter()
             .map(|(key, entry)| (*key, entry.visible, entry.last_used))
             .collect();
-        entries.sort_by(|a, b| {
-            match (a.1, b.1) {
-                (true, false) => std::cmp::Ordering::Greater,
-                (false, true) => std::cmp::Ordering::Less,
-                _ => a.2.cmp(&b.2),
-            }
+        entries.sort_by(|a, b| match (a.1, b.1) {
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            _ => a.2.cmp(&b.2),
         });
         for (key, _visible, _) in entries {
             if self.tiles.len() <= self.max_cache {
@@ -1610,21 +2213,23 @@ struct TileBounds {
     merc_max: f32,
 }
 
+struct TileSelection {
+    keys: Vec<TileKey>,
+    total: usize,
+}
+
 fn filter_instances(
     instances: &[RenderInstance],
     settings: &OperationsState,
     out: &mut Vec<RenderInstance>,
 ) {
     out.clear();
-    for instance in instances {
-        match instance.category {
-            KIND_FLIGHT if !settings.show_flights => continue,
-            KIND_SHIP if !settings.show_ships => continue,
-            KIND_SATELLITE if !settings.show_satellites => continue,
-            _ => {}
-        }
-        out.push(*instance);
-    }
+    out.extend(instances.iter().copied().filter(|instance| match instance.category {
+        KIND_FLIGHT => settings.show_flights,
+        KIND_SHIP => settings.show_ships,
+        KIND_SATELLITE => settings.show_satellites,
+        _ => true,
+    }));
 }
 
 fn cull_instances_for_render(
@@ -1633,25 +2238,140 @@ fn cull_instances_for_render(
     globe_radius: f32,
     out: &mut Vec<RenderInstance>,
 ) {
-    let camera_pos = renderer.camera_position();
     out.clear();
+    out.reserve(instances.len().min(20_000));
+    let camera_pos = renderer.camera_position();
+    let view_proj = renderer.view_proj();
     for instance in instances {
-        if is_occluded_by_globe(camera_pos, instance.position, globe_radius) {
+        let dist = instance.position.distance(camera_pos);
+        if dist > globe_radius * 6.0 {
+            continue;
+        }
+        let to_instance = instance.position - camera_pos;
+        let to_instance_len = to_instance.length();
+        if to_instance_len > 0.001 {
+            let dir = to_instance / to_instance_len;
+            if let Some(hit) = ray_sphere_intersect(camera_pos, dir, globe_radius) {
+                if hit + 0.05 < to_instance_len {
+                    continue;
+                }
+            }
+        }
+        let clip = view_proj * instance.position.extend(1.0);
+        if clip.w.abs() <= f32::EPSILON {
+            continue;
+        }
+        let ndc = clip.truncate() / clip.w;
+        if ndc.z < -1.2 || ndc.z > 1.2 {
             continue;
         }
         out.push(*instance);
     }
 }
 
-fn compute_visible_tiles(renderer: &Renderer, zoom: u8, max_tiles: usize) -> Vec<TileKey> {
-    let (width, height) = renderer.viewport_size();
+fn pick_tile_zoom(
+    renderer: &Renderer,
+    viewport_size: (u32, u32),
+    provider: TileProviderConfig,
+    globe_radius: f32,
+) -> u8 {
+    pick_zoom(
+        renderer,
+        viewport_size,
+        globe_radius,
+        provider.min_zoom,
+        provider.max_zoom,
+        provider.zoom_bias,
+    )
+}
+
+fn pick_overlay_zoom(
+    renderer: &Renderer,
+    viewport_size: (u32, u32),
+    min_zoom: u8,
+    max_zoom: u8,
+    globe_radius: f32,
+) -> u8 {
+    pick_zoom(renderer, viewport_size, globe_radius, min_zoom, max_zoom, 0)
+}
+
+fn pick_zoom(
+    renderer: &Renderer,
+    viewport_size: (u32, u32),
+    globe_radius: f32,
+    min_zoom: u8,
+    max_zoom: u8,
+    zoom_bias: i8,
+) -> u8 {
+    let (width, height) = viewport_size;
     if width == 0 || height == 0 {
-        return Vec::new();
+        return min_zoom;
     }
-    let center = match sample_geo(renderer, 0.0, 0.0, DEFAULT_GLOBE_RADIUS) {
-        Some(center) => center,
-        None => return Vec::new(),
+    let distance = renderer.camera_distance();
+    let depth = (distance - globe_radius).max(1.0);
+    let fov_v = renderer.camera_fov_y();
+    let aspect = renderer.camera_aspect();
+    let fov_h = 2.0 * ((fov_v * 0.5).tan() * aspect).atan();
+    let visible_width = 2.0 * depth * (fov_h * 0.5).tan();
+    let visible_height = 2.0 * depth * (fov_v * 0.5).tan();
+    let deg_width = (visible_width / globe_radius) * (180.0 / std::f32::consts::PI);
+    let deg_height = (visible_height / globe_radius) * (180.0 / std::f32::consts::PI);
+    let tile_deg_width = deg_width * (crate::tiles::TILE_SIZE as f32 / width as f32);
+    let tile_deg_height = deg_height * (crate::tiles::TILE_SIZE as f32 / height as f32);
+    let tile_deg = tile_deg_width.max(tile_deg_height).max(0.0001);
+    let mut zoom = (360.0 / tile_deg).log2().round() as i32 + zoom_bias as i32;
+    let min_zoom = min_zoom as i32;
+    let max_zoom = max_zoom as i32;
+    zoom = zoom.clamp(min_zoom, max_zoom);
+    zoom as u8
+}
+
+fn tile_bounds(key: TileKey) -> TileBounds {
+    let tiles = 1u32 << key.zoom;
+    let scale = tiles as f32;
+    let lon_min = key.x as f32 / scale * 360.0 - 180.0;
+    let lon_max = (key.x as f32 + 1.0) / scale * 360.0 - 180.0;
+    let merc_min = key.y as f32 / scale;
+    let merc_max = (key.y as f32 + 1.0) / scale;
+    TileBounds {
+        lon_min,
+        lon_max,
+        merc_min,
+        merc_max,
+    }
+}
+
+fn pick_focus_box_px(width: u32, height: u32, zoom: u8) -> f32 {
+    let base = width.min(height) as f32;
+    if base <= 0.0 {
+        return 0.0;
+    }
+    let max_radius = (base * 0.32).max(220.0);
+    let min_radius = (base * 0.2).max(140.0);
+    let ratio = (zoom as f32 / 6.0).clamp(0.0, 1.0);
+    min_radius + (max_radius - min_radius) * ratio
+}
+
+fn compute_visible_tiles(
+    renderer: &Renderer,
+    viewport_size: (u32, u32),
+    zoom: u8,
+    max_tiles: usize,
+) -> TileSelection {
+    let (width, height) = viewport_size;
+    if width == 0 || height == 0 {
+        return TileSelection {
+            keys: Vec::new(),
+            total: 0,
+        };
+    }
+    let Some(center) = sample_geo(renderer, 0.0, 0.0, DEFAULT_GLOBE_RADIUS) else {
+        return TileSelection {
+            keys: Vec::new(),
+            total: 0,
+        };
     };
+    let mut candidates = Vec::new();
     let focus_px = pick_focus_box_px(width, height, zoom);
     let ndc_x = (focus_px / width as f32 * 2.0).min(0.95);
     let ndc_y = (focus_px / height as f32 * 2.0).min(0.95);
@@ -1673,7 +2393,10 @@ fn compute_visible_tiles(renderer: &Renderer, zoom: u8, max_tiles: usize) -> Vec
         }
     }
     if geos.is_empty() {
-        return Vec::new();
+        return TileSelection {
+            keys: Vec::new(),
+            total: 0,
+        };
     }
 
     let tile_lons: Vec<f32> = geos.iter().map(|geo| flip_lon(geo.lon)).collect();
@@ -1688,10 +2411,7 @@ fn compute_visible_tiles(renderer: &Renderer, zoom: u8, max_tiles: usize) -> Vec
         .fold(f32::NEG_INFINITY, f32::max)
         .min(85.0);
     let lon_range = compute_lon_range(&tile_lons);
-    let (lon_min, lon_max) = match lon_range {
-        Some(range) => range,
-        None => (-180.0, 180.0),
-    };
+    let (lon_min, lon_max) = lon_range.unwrap_or((-180.0, 180.0));
     let lon_span = lon_max - lon_min;
     let lon_padding = (lon_span * 0.04).max(1.0);
     let lon_min = lon_min - lon_padding;
@@ -1717,7 +2437,6 @@ fn compute_visible_tiles(renderer: &Renderer, zoom: u8, max_tiles: usize) -> Vec
         ranges.push((lon_min, lon_max));
     }
 
-    let mut candidates = Vec::new();
     for (range_min, range_max) in ranges {
         let start_x = tile_x_for_lon(range_min, zoom);
         let end_x = tile_x_for_lon(range_max, zoom);
@@ -1736,12 +2455,15 @@ fn compute_visible_tiles(renderer: &Renderer, zoom: u8, max_tiles: usize) -> Vec
             }
         }
     }
-    candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-    candidates
+
+    candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+    let total = candidates.len();
+    let keys = candidates
         .into_iter()
         .take(max_tiles)
         .map(|(key, _)| key)
-        .collect()
+        .collect();
+    TileSelection { keys, total }
 }
 
 fn wrap_tile_delta(delta: i64, tiles: i64) -> i64 {
@@ -1768,20 +2490,7 @@ fn flip_lon(lon: f32) -> f32 {
     wrap_lon(180.0 - lon)
 }
 
-fn pick_focus_box_px(width: u32, height: u32, zoom: u8) -> f32 {
-    let base = (width.min(height) as f32).max(1.0);
-    let max_radius = (base * 0.32).max(220.0);
-    let min_radius = (base * 0.2).max(140.0);
-    let ratio = (zoom as f32 / 6.0).clamp(0.0, 1.0);
-    min_radius + (max_radius - min_radius) * ratio
-}
-
-fn sample_geo(
-    renderer: &Renderer,
-    ndc_x: f32,
-    ndc_y: f32,
-    radius: f32,
-) -> Option<GeoSample> {
+fn sample_geo(renderer: &Renderer, ndc_x: f32, ndc_y: f32, radius: f32) -> Option<GeoSample> {
     let inv = renderer.view_proj().inverse();
     let near = inv.project_point3(Vec3::new(ndc_x, ndc_y, 0.0));
     let far = inv.project_point3(Vec3::new(ndc_x, ndc_y, 1.0));
@@ -1813,20 +2522,6 @@ fn ray_sphere_intersect(origin: Vec3, dir: Vec3, radius: f32) -> Option<f32> {
     }
 }
 
-fn is_occluded_by_globe(camera_pos: Vec3, target: Vec3, radius: f32) -> bool {
-    let delta = target - camera_pos;
-    let dist = delta.length();
-    if dist <= f32::EPSILON {
-        return false;
-    }
-    let dir = delta / dist;
-    if let Some(t) = ray_sphere_intersect(camera_pos, dir, radius) {
-        t < dist
-    } else {
-        false
-    }
-}
-
 fn tile_x_for_lon(lon: f32, zoom: u8) -> u32 {
     let n = 1u32 << zoom;
     let mut value = ((lon + 180.0) / 360.0 * n as f32).floor() as i64;
@@ -1841,27 +2536,6 @@ fn tile_y_for_lat(lat: f32, zoom: u8) -> u32 {
     let lat = lat.clamp(-85.0511, 85.0511).to_radians();
     let y = (1.0 - (lat.tan() + 1.0 / lat.cos()).ln() / std::f32::consts::PI) / 2.0;
     (y * n as f32).floor().clamp(0.0, (n - 1) as f32) as u32
-}
-
-fn tile_bounds(key: TileKey) -> TileBounds {
-    let n = 1u32 << key.zoom;
-    let lon_min = key.x as f32 / n as f32 * 360.0 - 180.0;
-    let lon_max = (key.x + 1) as f32 / n as f32 * 360.0 - 180.0;
-    let merc_min = key.y as f32 / n as f32;
-    let merc_max = (key.y + 1) as f32 / n as f32;
-    TileBounds {
-        lon_min,
-        lon_max,
-        merc_min,
-        merc_max,
-    }
-}
-
-fn tile_lat_from_y(y: u32, zoom: u8) -> f32 {
-    let n = 1u32 << zoom;
-    let y = y as f32 / n as f32;
-    let lat = (std::f32::consts::PI * (1.0 - 2.0 * y)).sinh().atan();
-    lat.to_degrees()
 }
 
 fn compute_lon_range(lons: &[f32]) -> Option<(f32, f32)> {
@@ -1885,47 +2559,4 @@ fn compute_lon_range(lons: &[f32]) -> Option<(f32, f32)> {
         max_delta = max_delta.max(delta);
     }
     Some((mean + min_delta, mean + max_delta))
-}
-
-fn pick_tile_zoom(renderer: &Renderer, provider: TileProviderConfig, globe_radius: f32) -> u8 {
-    pick_zoom(renderer, globe_radius, provider.min_zoom, provider.max_zoom, provider.zoom_bias)
-}
-
-fn pick_overlay_zoom(
-    renderer: &Renderer,
-    min_zoom: u8,
-    max_zoom: u8,
-    globe_radius: f32,
-) -> u8 {
-    pick_zoom(renderer, globe_radius, min_zoom, max_zoom, 0)
-}
-
-fn pick_zoom(
-    renderer: &Renderer,
-    globe_radius: f32,
-    min_zoom: u8,
-    max_zoom: u8,
-    zoom_bias: i8,
-) -> u8 {
-    let (width, height) = renderer.viewport_size();
-    if width == 0 || height == 0 {
-        return min_zoom;
-    }
-    let distance = renderer.camera_distance();
-    let depth = (distance - globe_radius).max(1.0);
-    let fov_v = renderer.camera_fov_y();
-    let aspect = renderer.camera_aspect();
-    let fov_h = 2.0 * ((fov_v * 0.5).tan() * aspect).atan();
-    let visible_width = 2.0 * depth * (fov_h * 0.5).tan();
-    let visible_height = 2.0 * depth * (fov_v * 0.5).tan();
-    let deg_width = (visible_width / globe_radius) * (180.0 / std::f32::consts::PI);
-    let deg_height = (visible_height / globe_radius) * (180.0 / std::f32::consts::PI);
-    let tile_deg_width = deg_width * (TILE_SIZE as f32 / width as f32);
-    let tile_deg_height = deg_height * (TILE_SIZE as f32 / height as f32);
-    let tile_deg = tile_deg_width.max(tile_deg_height).max(0.0001);
-    let mut zoom = (360.0 / tile_deg).log2().round() as i32 + zoom_bias as i32;
-    let max_zoom = max_zoom.min(TILE_ZOOM_CAP) as i32;
-    let min_zoom = min_zoom as i32;
-    zoom = zoom.clamp(min_zoom, max_zoom);
-    zoom as u8
 }

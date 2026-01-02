@@ -45,6 +45,7 @@ impl Camera {
     }
 }
 
+#[allow(dead_code)]
 pub struct CameraController {
     rotate_sensitivity: f32,
     zoom_sensitivity: f32,
@@ -54,14 +55,15 @@ pub struct CameraController {
     max_distance: f32,
 }
 
+#[allow(dead_code)]
 impl CameraController {
     pub fn new() -> Self {
         Self {
             rotate_sensitivity: 0.006,
-            zoom_sensitivity: 0.002,
+            zoom_sensitivity: 0.02,
             dragging: false,
             last_cursor: (0.0, 0.0),
-            min_distance: 130.0,
+            min_distance: 121.0,
             max_distance: 600.0,
         }
     }
@@ -110,7 +112,7 @@ impl CameraController {
         if scroll.abs() < f32::EPSILON {
             return;
         }
-        let delta = (scroll * self.zoom_sensitivity).clamp(-0.25, 0.25);
+        let delta = (scroll * self.zoom_sensitivity).clamp(-0.35, 0.35);
         camera.distance = (camera.distance * (1.0 - delta))
             .clamp(self.min_distance, self.max_distance);
     }

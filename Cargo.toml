@@ -9,3 +9,4 @@ version = "0.1.0"
 
 [patch.crates-io]
 egui-wgpu = { path = "crates/egui-wgpu" }
+egui_dock = { path = "crates/egui-dock" }
