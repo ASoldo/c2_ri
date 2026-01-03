@@ -2053,7 +2053,7 @@ impl<'a> canvas::Program<UiMessage, Theme, UiRenderer> for EdgeCompassOverlay<'a
             return vec![];
         }
         let min_side = rect.width.min(rect.height);
-        let mut radius = (min_side * 0.03).clamp(3.0, 9.0);
+        let mut radius = (min_side * 0.035).clamp(4.0, 11.0);
         let max_radius = (min_side * 0.5 - 1.0).max(1.0);
         radius = radius.min(max_radius);
         let mut frame = canvas::Frame::new(renderer, bounds.size());
@@ -2113,8 +2113,8 @@ impl<'a> canvas::Program<UiMessage, Theme, UiRenderer> for EdgeCompassOverlay<'a
                 bounds.y + bounds.height * t_y,
             );
 
-            let fill = color_from_rgba(instance.color);
             let circle = canvas::Path::circle(pos, radius);
+            let fill = color_from_rgba(instance.color);
             frame.fill(&circle, fill);
             frame.stroke(
                 &circle,
@@ -2122,25 +2122,72 @@ impl<'a> canvas::Program<UiMessage, Theme, UiRenderer> for EdgeCompassOverlay<'a
                     .with_width(1.0)
                     .with_color(Color::from_rgba8(240, 244, 255, 0.65)),
             );
+            let icon_color = Color::from_rgba8(220, 232, 248, 0.55);
+            draw_edge_icon(&mut frame, pos, radius, instance.category, icon_color);
             let label = kind_label(instance.category);
-            let mut text_y = pos.y - radius - 4.0;
-            let min_text_y = rect.y + 2.0;
-            if text_y < min_text_y {
-                text_y = (pos.y + radius + 4.0).min(rect.y + rect.height - 2.0);
-            }
-            let text_pos = Point::new(pos.x, text_y);
+            let text_size = (radius * 0.9).clamp(7.0, 11.0);
+            let text_pos = Point::new(pos.x, pos.y - radius * 0.25);
             frame.fill_text(canvas::Text {
                 content: label.to_string(),
                 position: text_pos,
                 color: Color::from_rgba8(230, 240, 255, 0.95),
-                size: 10.0.into(),
+                size: text_size.into(),
                 align_x: alignment::Horizontal::Center.into(),
-                align_y: alignment::Vertical::Bottom,
+                align_y: alignment::Vertical::Center,
                 ..Default::default()
             });
         }
         vec![frame.into_geometry()]
     }
+}
+
+fn draw_edge_icon(
+    frame: &mut canvas::Frame<UiRenderer>,
+    center: Point,
+    radius: f32,
+    kind: u8,
+    color: Color,
+) {
+    let icon_size = (radius * 0.6).clamp(3.0, 8.0);
+    let y = center.y + radius * 0.2;
+    let path = match kind {
+        crate::ecs::KIND_FLIGHT => {
+            canvas::Path::new(|builder| {
+                builder.move_to(Point::new(center.x, y - icon_size));
+                builder.line_to(Point::new(center.x + icon_size, y + icon_size));
+                builder.line_to(Point::new(center.x - icon_size, y + icon_size));
+                builder.close();
+            })
+        }
+        crate::ecs::KIND_SHIP => {
+            canvas::Path::new(|builder| {
+                builder.move_to(Point::new(center.x, y - icon_size));
+                builder.line_to(Point::new(center.x + icon_size, y));
+                builder.line_to(Point::new(center.x, y + icon_size));
+                builder.line_to(Point::new(center.x - icon_size, y));
+                builder.close();
+            })
+        }
+        crate::ecs::KIND_SATELLITE => {
+            let size = icon_size * 0.85;
+            let rect = canvas::Path::rectangle(
+                Point::new(center.x - size * 0.5, y - size * 0.5),
+                Size::new(size, size),
+            );
+            rect
+        }
+        _ => {
+            let size = icon_size * 0.7;
+            canvas::Path::circle(Point::new(center.x, y), size)
+        }
+    };
+    frame.fill(&path, color);
+    frame.stroke(
+        &path,
+        canvas::Stroke::default()
+            .with_width(1.0)
+            .with_color(Color::from_rgba8(250, 252, 255, 0.45)),
+    );
 }
 
 fn color_from_rgba(color: [f32; 4]) -> Color {
