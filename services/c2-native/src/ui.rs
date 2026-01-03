@@ -11,9 +11,10 @@ use iced::{alignment, Alignment, Background, Border, Color, Length, Point, Recta
 use iced::widget::svg::Handle as SvgHandle;
 use iced_wgpu::Renderer as UiRenderer;
 use iced_winit::core::Element as IcedElement;
+use glam::{Mat4, Vec2, Vec3, Vec4};
 use winit::window::WindowId;
 
-use crate::ecs::WorldState;
+use crate::ecs::{RenderInstance, WorldState};
 use crate::renderer::Renderer;
 
 const OUTER_PADDING: f32 = 10.0;
@@ -31,9 +32,6 @@ const TAB_ICON_SIZE: f32 = 16.0;
 const TAB_BUTTON_SIZE: f32 = 26.0;
 const HEADER_TOGGLE_SIZE: f32 = 28.0;
 const HEADER_TOGGLE_ICON: f32 = 16.0;
-const EDGE_COMPASS_SIZE: f32 = 58.0;
-const EDGE_COMPASS_ICON_SIZE: f32 = 18.0;
-const EDGE_COMPASS_TEXT_SIZE: f32 = 9.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PanelId {
@@ -704,9 +702,6 @@ struct UiIcons {
     panel_operations: SvgHandle,
     panel_entities: SvgHandle,
     panel_inspector: SvgHandle,
-    flight: SvgHandle,
-    ship: SvgHandle,
-    satellite: SvgHandle,
 }
 
 impl UiIcons {
@@ -721,9 +716,6 @@ impl UiIcons {
             panel_operations: icon_handle("radar.svg"),
             panel_entities: icon_handle("users.svg"),
             panel_inspector: icon_handle("clipboard-list.svg"),
-            flight: asset_svg_handle("plane.svg"),
-            ship: asset_svg_handle("ship.svg"),
-            satellite: asset_svg_handle("satellite.svg"),
         }
     }
 
@@ -741,13 +733,6 @@ fn icon_handle(file: &str) -> SvgHandle {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("assets")
         .join("icons")
-        .join(file);
-    SvgHandle::from_path(path)
-}
-
-fn asset_svg_handle(file: &str) -> SvgHandle {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("assets")
         .join(file);
     SvgHandle::from_path(path)
 }
@@ -843,6 +828,11 @@ impl UiState {
         window_id: WindowId,
         window_size: Size,
         dock_layout: &DockLayout,
+        view_proj: Mat4,
+        camera_pos: Vec3,
+        camera_aspect: f32,
+        globe_radius: f32,
+        instances: &'a [RenderInstance],
         world: &WorldState,
         renderer: &Renderer,
         diagnostics: &Diagnostics,
@@ -893,6 +883,11 @@ impl UiState {
                     dock_layout.stack(slot),
                     window_id,
                     &self.operations,
+                    view_proj,
+                    camera_pos,
+                    camera_aspect,
+                    globe_radius,
+                    instances,
                     world,
                     renderer,
                     diagnostics,
@@ -1050,6 +1045,11 @@ impl UiState {
         window_id: WindowId,
         window_size: Size,
         dock_layout: &DockLayout,
+        view_proj: Mat4,
+        camera_pos: Vec3,
+        camera_aspect: f32,
+        globe_radius: f32,
+        instances: &'a [RenderInstance],
         world: &WorldState,
         renderer: &Renderer,
         diagnostics: &Diagnostics,
@@ -1102,6 +1102,11 @@ impl UiState {
                     dock_layout.stack(slot),
                     window_id,
                     &self.operations,
+                    view_proj,
+                    camera_pos,
+                    camera_aspect,
+                    globe_radius,
+                    instances,
                     world,
                     renderer,
                     diagnostics,
@@ -1315,8 +1320,14 @@ fn operations_body<'a>(operations: &'a OperationsState) -> UiElement<'a> {
     scrollable(content).into()
 }
 
-fn globe_body<'a>(operations: &'a OperationsState, icons: &UiIcons) -> UiElement<'a> {
-    globe_surface(operations, icons).into()
+fn globe_body<'a>(
+    view_proj: Mat4,
+    camera_pos: Vec3,
+    camera_aspect: f32,
+    globe_radius: f32,
+    instances: &'a [RenderInstance],
+) -> UiElement<'a> {
+    globe_surface(view_proj, camera_pos, camera_aspect, globe_radius, instances).into()
 }
 
 fn entities_body<'a>(world: &WorldState) -> UiElement<'a> {
@@ -1432,6 +1443,11 @@ fn panel_stack_card_for<'a>(
     stack: &DockStack,
     window_id: WindowId,
     operations: &'a OperationsState,
+    view_proj: Mat4,
+    camera_pos: Vec3,
+    camera_aspect: f32,
+    globe_radius: f32,
+    instances: &'a [RenderInstance],
     world: &WorldState,
     renderer: &Renderer,
     diagnostics: &Diagnostics,
@@ -1471,7 +1487,7 @@ fn panel_stack_card_for<'a>(
             .style(tab_bar_style)
     });
     let body = match active_panel {
-        PanelId::Globe => globe_body(operations, icons),
+        PanelId::Globe => globe_body(view_proj, camera_pos, camera_aspect, globe_radius, instances),
         PanelId::Operations => operations_body(operations),
         PanelId::Entities => entities_body(world),
         PanelId::Inspector => inspector_body(world, renderer, diagnostics, tile_bars),
@@ -1823,48 +1839,6 @@ fn header_toggle_button_style(active: bool) -> impl Fn(&Theme, button_widget::St
     }
 }
 
-fn edge_compass_button_style(active: bool) -> impl Fn(&Theme, button_widget::Status) -> button_widget::Style {
-    move |_theme, status| {
-        let (background, border_color) = match status {
-            button_widget::Status::Active => (
-                if active {
-                    Color::from_rgba8(22, 30, 42, 0.92)
-                } else {
-                    Color::from_rgba8(12, 16, 24, 0.7)
-                },
-                if active {
-                    Color::from_rgba8(120, 200, 255, 0.9)
-                } else {
-                    Color::from_rgba8(62, 72, 92, 0.6)
-                },
-            ),
-            button_widget::Status::Hovered => (
-                Color::from_rgba8(28, 40, 58, 0.98),
-                Color::from_rgba8(160, 220, 255, 0.95),
-            ),
-            button_widget::Status::Pressed => (
-                Color::from_rgba8(24, 36, 54, 1.0),
-                Color::from_rgba8(190, 232, 255, 0.95),
-            ),
-            button_widget::Status::Disabled => (
-                Color::from_rgba8(10, 12, 18, 0.4),
-                Color::from_rgba8(40, 46, 60, 0.4),
-            ),
-        };
-        button_widget::Style {
-            background: Some(Background::Color(background)),
-            text_color: Color::from_rgba8(226, 236, 248, 0.95),
-            border: Border {
-                color: border_color,
-                width: if active { 1.6 } else { 1.0 },
-                radius: (EDGE_COMPASS_SIZE * 0.5).into(),
-            },
-            shadow: Shadow::default(),
-            snap: false,
-        }
-    }
-}
-
 fn tooltip_style(theme: &Theme) -> iced::widget::container::Style {
     let palette = theme.extended_palette();
     iced::widget::container::Style {
@@ -2008,74 +1982,28 @@ fn progress_style(color: Color) -> iced::widget::progress_bar::Style {
     }
 }
 
-fn globe_surface<'a>(operations: &'a OperationsState, icons: &UiIcons) -> UiElement<'a> {
-    let overlay = canvas::Canvas::new(CompassOverlay)
+fn globe_surface<'a>(
+    view_proj: Mat4,
+    camera_pos: Vec3,
+    camera_aspect: f32,
+    globe_radius: f32,
+    instances: &'a [RenderInstance],
+) -> UiElement<'a> {
+    let edge_overlay = canvas::Canvas::new(EdgeCompassOverlay {
+        view_proj,
+        camera_pos,
+        camera_aspect,
+        globe_radius,
+        instances,
+    })
+    .width(Length::Fill)
+    .height(Length::Fill);
+    let content = stack([space().into(), edge_overlay.into()])
         .width(Length::Fill)
         .height(Length::Fill);
-    let controls = edge_compass_controls(operations, icons);
-    let content = stack([space().into(), overlay.into(), controls]);
-    content.into()
-}
-
-fn edge_compass_controls<'a>(operations: &'a OperationsState, icons: &UiIcons) -> UiElement<'a> {
-    let flight_icon = svg(icons.flight.clone())
-        .width(Length::Fixed(EDGE_COMPASS_ICON_SIZE))
-        .height(Length::Fixed(EDGE_COMPASS_ICON_SIZE));
-    let ship_icon = svg(icons.ship.clone())
-        .width(Length::Fixed(EDGE_COMPASS_ICON_SIZE))
-        .height(Length::Fixed(EDGE_COMPASS_ICON_SIZE));
-    let satellite_icon = svg(icons.satellite.clone())
-        .width(Length::Fixed(EDGE_COMPASS_ICON_SIZE))
-        .height(Length::Fixed(EDGE_COMPASS_ICON_SIZE));
-
-    let flight = edge_compass_toggle(
-        "Flights",
-        flight_icon.into(),
-        operations.show_flights,
-        UiMessage::ToggleFlights(!operations.show_flights),
-    );
-    let ships = edge_compass_toggle(
-        "Ships",
-        ship_icon.into(),
-        operations.show_ships,
-        UiMessage::ToggleShips(!operations.show_ships),
-    );
-    let satellites = edge_compass_toggle(
-        "Satellites",
-        satellite_icon.into(),
-        operations.show_satellites,
-        UiMessage::ToggleSatellites(!operations.show_satellites),
-    );
-
-    let column = column![flight, ships, satellites]
-        .spacing(10)
-        .align_x(Alignment::Center);
-    container(column)
+    container(content)
         .width(Length::Fill)
         .height(Length::Fill)
-        .align_x(Alignment::End)
-        .align_y(Alignment::Center)
-        .padding([0.0, 16.0])
-        .into()
-}
-
-fn edge_compass_toggle<'a>(
-    label: &'static str,
-    icon: UiElement<'a>,
-    active: bool,
-    message: UiMessage,
-) -> UiElement<'a> {
-    let content = column![text(label).size(EDGE_COMPASS_TEXT_SIZE), icon]
-        .spacing(4)
-        .align_x(Alignment::Center);
-    let bubble = container(content)
-        .width(Length::Fixed(EDGE_COMPASS_SIZE))
-        .height(Length::Fixed(EDGE_COMPASS_SIZE))
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center);
-    button(bubble)
-        .style(edge_compass_button_style(active))
-        .on_press(message)
         .into()
 }
 
@@ -2100,10 +2028,16 @@ fn drag_preview_layer<'a>(preview: DragPreview) -> UiElement<'a> {
     overlay.into()
 }
 
-#[derive(Debug, Clone, Copy)]
-struct CompassOverlay;
+#[derive(Debug, Clone)]
+struct EdgeCompassOverlay<'a> {
+    view_proj: Mat4,
+    camera_pos: Vec3,
+    camera_aspect: f32,
+    globe_radius: f32,
+    instances: &'a [RenderInstance],
+}
 
-impl canvas::Program<UiMessage, Theme, UiRenderer> for CompassOverlay {
+impl<'a> canvas::Program<UiMessage, Theme, UiRenderer> for EdgeCompassOverlay<'a> {
     type State = ();
 
     fn draw(
@@ -2114,81 +2048,149 @@ impl canvas::Program<UiMessage, Theme, UiRenderer> for CompassOverlay {
         bounds: Rectangle,
         _cursor: iced::mouse::Cursor,
     ) -> Vec<canvas::Geometry<UiRenderer>> {
+        let rect = Rectangle::new(Point::new(0.0, 0.0), bounds.size());
+        if rect.width <= 1.0 || rect.height <= 1.0 {
+            return vec![];
+        }
+        let min_side = rect.width.min(rect.height);
+        let mut radius = (min_side * 0.03).clamp(3.0, 9.0);
+        let max_radius = (min_side * 0.5 - 1.0).max(1.0);
+        radius = radius.min(max_radius);
         let mut frame = canvas::Frame::new(renderer, bounds.size());
-        let size = bounds.size();
-        let min_side = size.width.min(size.height);
-        let radius = (min_side * 0.18).min(64.0);
-        if radius < 18.0 {
+        let usable_width = (rect.width - radius * 2.0).max(0.0);
+        let usable_height = (rect.height - radius * 2.0).max(0.0);
+        if usable_width <= 1.0 || usable_height <= 1.0 {
             return vec![frame.into_geometry()];
         }
-        let margin = 16.0;
-        let center = iced::Point::new(
-            (size.width - radius - margin).max(radius + margin),
-            (radius + margin)
-                .min(size.height - radius - margin)
-                .max(radius + margin),
+        let bounds = Rectangle::new(
+            Point::new(rect.x + radius, rect.y + radius),
+            Size::new(usable_width, usable_height),
         );
-
-        let ring = canvas::Path::circle(center, radius);
-        frame.stroke(
-            &ring,
-            canvas::Stroke::default()
-                .with_width(1.4)
-                .with_color(Color::from_rgba8(120, 198, 255, 0.85)),
-        );
-
-        let tick_color = Color::from_rgba8(120, 198, 255, 0.95);
-        let ticks = [
-            (-std::f32::consts::FRAC_PI_2, 8.0),
-            (0.0, 8.0),
-            (std::f32::consts::FRAC_PI_2, 8.0),
-            (std::f32::consts::PI, 8.0),
-            (-std::f32::consts::FRAC_PI_4, 5.0),
-            (std::f32::consts::FRAC_PI_4, 5.0),
-            (3.0 * std::f32::consts::FRAC_PI_4, 5.0),
-            (-3.0 * std::f32::consts::FRAC_PI_4, 5.0),
-        ];
-
-        for (angle, length) in ticks {
-            let (sin, cos) = angle.sin_cos();
-            let start = iced::Point::new(center.x + cos * radius, center.y + sin * radius);
-            let end = iced::Point::new(
-                center.x + cos * (radius - length),
-                center.y + sin * (radius - length),
+        let globe_aspect = rect.width / rect.height.max(1.0);
+        let aspect_scale = if globe_aspect > 0.0 {
+            self.camera_aspect / globe_aspect
+        } else {
+            1.0
+        };
+        let max_indicators = 128usize;
+        for instance in self.instances.iter().take(max_indicators) {
+            let clip = self.view_proj * instance.position.extend(1.0);
+            if clip.w.abs() <= f32::EPSILON {
+                continue;
+            }
+            let mut ndc = Vec3::new(clip.x, clip.y, clip.z) / clip.w;
+            let behind = clip.w < 0.0;
+            if behind {
+                ndc = -ndc;
+            }
+            ndc.x *= aspect_scale;
+            let on_screen = !behind
+                && ndc.x >= -1.0
+                && ndc.x <= 1.0
+                && ndc.y >= -1.0
+                && ndc.y <= 1.0;
+            let in_depth = ndc.z >= -1.2 && ndc.z <= 1.2;
+            let occluded = is_occluded_by_globe(
+                self.camera_pos,
+                instance.position,
+                self.globe_radius,
             );
-            let tick = canvas::Path::line(start, end);
+            if on_screen && in_depth && !occluded {
+                continue;
+            }
+
+            let mut dir = Vec2::new(ndc.x, ndc.y);
+            let mut max_comp = dir.x.abs().max(dir.y.abs());
+            if max_comp <= f32::EPSILON {
+                dir = Vec2::new(0.0, -1.0);
+                max_comp = 1.0;
+            }
+            let edge = dir / max_comp;
+            let t_x = (edge.x * 0.5 + 0.5).clamp(0.0, 1.0);
+            let t_y = (1.0 - (edge.y * 0.5 + 0.5)).clamp(0.0, 1.0);
+            let pos = Point::new(
+                bounds.x + bounds.width * t_x,
+                bounds.y + bounds.height * t_y,
+            );
+
+            let fill = color_from_rgba(instance.color);
+            let circle = canvas::Path::circle(pos, radius);
+            frame.fill(&circle, fill);
             frame.stroke(
-                &tick,
+                &circle,
                 canvas::Stroke::default()
-                    .with_width(1.2)
-                    .with_color(tick_color),
+                    .with_width(1.0)
+                    .with_color(Color::from_rgba8(240, 244, 255, 0.65)),
             );
-        }
-
-        let labels = [
-            ("N", -std::f32::consts::FRAC_PI_2),
-            ("E", 0.0),
-            ("S", std::f32::consts::FRAC_PI_2),
-            ("W", std::f32::consts::PI),
-        ];
-        for (label, angle) in labels {
-            let (sin, cos) = angle.sin_cos();
-            let position = iced::Point::new(
-                center.x + cos * (radius + 8.0),
-                center.y + sin * (radius + 8.0),
-            );
+            let label = kind_label(instance.category);
+            let mut text_y = pos.y - radius - 4.0;
+            let min_text_y = rect.y + 2.0;
+            if text_y < min_text_y {
+                text_y = (pos.y + radius + 4.0).min(rect.y + rect.height - 2.0);
+            }
+            let text_pos = Point::new(pos.x, text_y);
             frame.fill_text(canvas::Text {
                 content: label.to_string(),
-                position,
-                color: Color::from_rgba8(230, 242, 255, 0.95),
-                size: 11.0.into(),
+                position: text_pos,
+                color: Color::from_rgba8(230, 240, 255, 0.95),
+                size: 10.0.into(),
                 align_x: alignment::Horizontal::Center.into(),
-                align_y: alignment::Vertical::Center,
+                align_y: alignment::Vertical::Bottom,
                 ..Default::default()
             });
         }
-
         vec![frame.into_geometry()]
+    }
+}
+
+fn color_from_rgba(color: [f32; 4]) -> Color {
+    let rgba = Vec4::from_array(color).clamp(Vec4::ZERO, Vec4::ONE);
+    Color::from_rgba8(
+        (rgba.x * 255.0) as u8,
+        (rgba.y * 255.0) as u8,
+        (rgba.z * 255.0) as u8,
+        rgba.w,
+    )
+}
+
+fn kind_label(kind: u8) -> &'static str {
+    match kind {
+        crate::ecs::KIND_FLIGHT => "FLT",
+        crate::ecs::KIND_SHIP => "SHP",
+        crate::ecs::KIND_SATELLITE => "SAT",
+        _ => "AST",
+    }
+}
+
+fn is_occluded_by_globe(camera_pos: Vec3, position: Vec3, radius: f32) -> bool {
+    let to_instance = position - camera_pos;
+    let distance = to_instance.length();
+    if distance <= 0.001 {
+        return false;
+    }
+    let dir = to_instance / distance;
+    if let Some(hit) = ray_sphere_intersect(camera_pos, dir, radius) {
+        return hit + 0.05 < distance;
+    }
+    false
+}
+
+fn ray_sphere_intersect(origin: Vec3, dir: Vec3, radius: f32) -> Option<f32> {
+    let b = origin.dot(dir);
+    let c = origin.length_squared() - radius * radius;
+    let disc = b * b - c;
+    if disc < 0.0 {
+        return None;
+    }
+    let sqrt_disc = disc.sqrt();
+    let mut t = -b - sqrt_disc;
+    if t <= 0.0 {
+        t = -b + sqrt_disc;
+    }
+    if t <= 0.0 {
+        None
+    } else {
+        Some(t)
     }
 }
 
