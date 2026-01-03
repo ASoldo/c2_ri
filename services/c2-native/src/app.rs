@@ -28,7 +28,7 @@ use crate::tiles::{
     WEATHER_TILE_CAPACITY,
 };
 use crate::ui::{
-    tile_provider_config, Diagnostics, DockLayout, DockSlot, DragPreview, DropIndicator,
+    tile_provider_config, Diagnostics, DockGrid, DockLayout, DockSlot, DragPreview, DropIndicator,
     OperationsState, PanelId, PerfSnapshot, TileBar, TileProviderConfig, UiMessage, UiState,
     WindowOption,
 };
@@ -596,6 +596,16 @@ impl App {
                     None
                 }
             });
+            let dock_grid = drag_state.and_then(|state| {
+                if state.source_window == main.window.id() {
+                    let layout = core.ui.layout();
+                    Some(DockGrid {
+                        rects: dock_grid_rects(layout, viewport.logical_size()),
+                    })
+                } else {
+                    None
+                }
+            });
             let element = core.ui.view_main(
                 main.window.id(),
                 &main.dock_layout,
@@ -606,6 +616,7 @@ impl App {
                 main.drop_target,
                 drag_preview,
                 drop_indicator,
+                dock_grid,
                 &hidden_panels,
                 &window_options,
                 swap_selection,
@@ -785,6 +796,16 @@ impl App {
                     None
                 }
             });
+            let dock_grid = drag_state.and_then(|state| {
+                if state.source_window == window_id {
+                    let layout = core.ui.layout();
+                    Some(DockGrid {
+                        rects: dock_grid_rects(layout, viewport.logical_size()),
+                    })
+                } else {
+                    None
+                }
+            });
             let element = core.ui.view_detached_docked(
                 detached.window.id(),
                 &detached.dock_layout,
@@ -795,6 +816,7 @@ impl App {
                 detached.drop_target,
                 drag_preview,
                 drop_indicator,
+                dock_grid,
                 &window_options,
                 swap_selection,
                 move_menu,
@@ -1442,14 +1464,21 @@ impl App {
                     size.0 as f32 / scale_factor,
                     size.1 as f32 / scale_factor,
                 );
-                if let Some(slot) = slot_for_cursor(layout, logical_size, &main.dock_layout, cursor)
-                {
-                    return Some(DropTarget {
-                        window: window_id,
-                        kind: DropKind::Slot(slot),
-                    });
-                }
                 let dock_rect = dock_area_rect(layout, logical_size);
+                if dock_rect.width <= 1.0 || dock_rect.height <= 1.0 {
+                    return None;
+                }
+                let (col, row, _) = grid_cell_for_rect(layout, dock_rect, cursor);
+                if col == 1 && row == 1 {
+                    if let Some(slot) =
+                        slot_for_cursor(layout, logical_size, &main.dock_layout, cursor)
+                    {
+                        return Some(DropTarget {
+                            window: window_id,
+                            kind: DropKind::Slot(slot),
+                        });
+                    }
+                }
                 let slot = drop_slot_for_rect(layout, dock_rect, cursor);
                 return Some(DropTarget {
                     window: window_id,
@@ -1464,13 +1493,20 @@ impl App {
             detached.size.width as f32 / scale_factor,
             detached.size.height as f32 / scale_factor,
         );
-        if let Some(slot) = slot_for_cursor(layout, logical_size, &detached.dock_layout, cursor) {
-            return Some(DropTarget {
-                window: window_id,
-                kind: DropKind::Slot(slot),
-            });
-        }
         let dock_rect = dock_area_rect(layout, logical_size);
+        if dock_rect.width <= 1.0 || dock_rect.height <= 1.0 {
+            return None;
+        }
+        let (col, row, _) = grid_cell_for_rect(layout, dock_rect, cursor);
+        if col == 1 && row == 1 {
+            if let Some(slot) = slot_for_cursor(layout, logical_size, &detached.dock_layout, cursor)
+            {
+                return Some(DropTarget {
+                    window: window_id,
+                    kind: DropKind::Slot(slot),
+                });
+            }
+        }
         let slot = drop_slot_for_rect(layout, dock_rect, cursor);
         Some(DropTarget {
             window: window_id,
@@ -1948,7 +1984,18 @@ fn default_slot_for_panel(panel: PanelId) -> DockSlot {
 }
 
 fn first_empty_slot(layout: &DockLayout) -> Option<DockSlot> {
-    for slot in [DockSlot::Left, DockSlot::Center, DockSlot::Right, DockSlot::Bottom] {
+    let priority = [
+        DockSlot::Left,
+        DockSlot::Center,
+        DockSlot::Right,
+        DockSlot::Bottom,
+        DockSlot::Top,
+        DockSlot::TopLeft,
+        DockSlot::TopRight,
+        DockSlot::BottomLeft,
+        DockSlot::BottomRight,
+    ];
+    for slot in priority {
         if layout.panel_in(slot).is_none() {
             return Some(slot);
         }
@@ -1999,111 +2046,188 @@ fn dock_area_rect(layout: crate::ui::UiLayout, window_size: Size) -> Rectangle {
     Rectangle::new(Point::new(x, y), Size::new(content_width, height))
 }
 
+struct DockGridLines {
+    xs: [f32; 4],
+    ys: [f32; 4],
+}
+
+fn dock_grid_lines(layout: crate::ui::UiLayout, rect: Rectangle) -> Option<DockGridLines> {
+    if rect.width <= 1.0 || rect.height <= 1.0 {
+        return None;
+    }
+    let max_edge_w = (rect.width / 3.0).max(1.0);
+    let max_edge_h = (rect.height / 3.0).max(1.0);
+    let edge_w = layout.panel_width.min(max_edge_w).max(1.0);
+    let edge_h = layout.inspector_height.min(max_edge_h).max(1.0);
+    let x0 = rect.x;
+    let y0 = rect.y;
+    let x3 = rect.x + rect.width;
+    let y3 = rect.y + rect.height;
+    let x1 = (x0 + edge_w).min(x3);
+    let y1 = (y0 + edge_h).min(y3);
+    let x2 = (x3 - edge_w).max(x1);
+    let y2 = (y3 - edge_h).max(y1);
+    Some(DockGridLines {
+        xs: [x0, x1, x2, x3],
+        ys: [y0, y1, y2, y3],
+    })
+}
+
+fn dock_grid_rects(layout: crate::ui::UiLayout, window_size: Size) -> Vec<Rectangle> {
+    let rect = dock_area_rect(layout, window_size);
+    let Some(lines) = dock_grid_lines(layout, rect) else {
+        return Vec::new();
+    };
+    let mut rects = Vec::with_capacity(9);
+    for row in 0..3 {
+        for col in 0..3 {
+            let x = lines.xs[col];
+            let y = lines.ys[row];
+            let width = (lines.xs[col + 1] - lines.xs[col]).max(0.0);
+            let height = (lines.ys[row + 1] - lines.ys[row]).max(0.0);
+            rects.push(Rectangle::new(Point::new(x, y), Size::new(width, height)));
+        }
+    }
+    rects
+}
+
 fn slot_for_cursor(
     layout: crate::ui::UiLayout,
     window_size: Size,
     dock_layout: &DockLayout,
     cursor: Point,
 ) -> Option<DockSlot> {
-    for slot in [DockSlot::Left, DockSlot::Center, DockSlot::Right, DockSlot::Bottom] {
+    for slot in DockSlot::ALL {
         if dock_layout.stack(slot).is_empty() {
             continue;
         }
-        let rect = layout.slot_rect(window_size, dock_layout, slot);
-        if rect.contains(cursor) {
-            return Some(slot);
+        if let Some(rect) = tab_drop_rect_for_slot(layout, window_size, dock_layout, slot) {
+            if rect.contains(cursor) {
+                return Some(slot);
+            }
         }
     }
     None
 }
 
-fn layout_with_slot_present(layout: &DockLayout, slot: DockSlot, panel: PanelId) -> DockLayout {
-    let mut preview = layout.clone();
-    preview.insert(slot, panel);
-    preview
+fn tab_drop_rect_for_slot(
+    layout: crate::ui::UiLayout,
+    window_size: Size,
+    dock_layout: &DockLayout,
+    slot: DockSlot,
+) -> Option<Rectangle> {
+    if dock_layout.stack(slot).is_empty() {
+        return None;
+    }
+    let rect = layout.slot_rect(window_size, dock_layout, slot);
+    if rect.width <= 1.0 || rect.height <= 1.0 {
+        return None;
+    }
+    let top = rect.y + layout.panel_padding;
+    let max_height = (rect.height - layout.panel_padding * 2.0).max(0.0);
+    let drop_height = (layout.panel_header_height + layout.tab_bar_height)
+        .min(max_height)
+        .max(0.0);
+    if drop_height <= 1.0 {
+        return None;
+    }
+    Some(Rectangle::new(
+        Point::new(rect.x + layout.panel_padding, top),
+        Size::new(
+            (rect.width - layout.panel_padding * 2.0).max(0.0),
+            drop_height,
+        ),
+    ))
 }
 
-fn drop_slot_for_rect(_layout: crate::ui::UiLayout, rect: Rectangle, cursor: Point) -> DockSlot {
+fn drop_slot_for_rect(layout: crate::ui::UiLayout, rect: Rectangle, cursor: Point) -> DockSlot {
     if rect.width <= 1.0 || rect.height <= 1.0 {
         return DockSlot::Center;
     }
-    let (col, row, _cell_rect) = grid_cell_for_rect(rect, cursor);
-    if row == 2 {
-        DockSlot::Bottom
-    } else if col == 0 {
-        DockSlot::Left
-    } else if col == 2 {
-        DockSlot::Right
-    } else {
-        DockSlot::Center
+    let (col, row, _cell_rect) = grid_cell_for_rect(layout, rect, cursor);
+    match (row, col) {
+        (0, 0) => DockSlot::TopLeft,
+        (0, 1) => DockSlot::Top,
+        (0, 2) => DockSlot::TopRight,
+        (1, 0) => DockSlot::Left,
+        (1, 1) => DockSlot::Center,
+        (1, 2) => DockSlot::Right,
+        (2, 0) => DockSlot::BottomLeft,
+        (2, 1) => DockSlot::Bottom,
+        (2, _) => DockSlot::BottomRight,
+        _ => DockSlot::Center,
     }
 }
 
-fn grid_cell_for_rect(rect: Rectangle, cursor: Point) -> (i32, i32, Rectangle) {
-    let cell_w = (rect.width / 3.0).max(1.0);
-    let cell_h = (rect.height / 3.0).max(1.0);
-    let mut col = ((cursor.x - rect.x) / cell_w).floor() as i32;
-    let mut row = ((cursor.y - rect.y) / cell_h).floor() as i32;
-    col = col.clamp(0, 2);
-    row = row.clamp(0, 2);
-    let x = rect.x + col as f32 * cell_w;
-    let y = rect.y + row as f32 * cell_h;
-    let width = if col == 2 {
-        (rect.x + rect.width - x).max(0.0)
-    } else {
-        cell_w
+fn grid_cell_for_rect(
+    layout: crate::ui::UiLayout,
+    rect: Rectangle,
+    cursor: Point,
+) -> (i32, i32, Rectangle) {
+    let Some(lines) = dock_grid_lines(layout, rect) else {
+        return (1, 1, Rectangle::new(Point::new(0.0, 0.0), Size::new(0.0, 0.0)));
     };
-    let height = if row == 2 {
-        (rect.y + rect.height - y).max(0.0)
+    let col = if cursor.x < lines.xs[1] {
+        0
+    } else if cursor.x < lines.xs[2] {
+        1
     } else {
-        cell_h
+        2
     };
-    (col, row, Rectangle::new(Point::new(x, y), Size::new(width, height)))
+    let row = if cursor.y < lines.ys[1] {
+        0
+    } else if cursor.y < lines.ys[2] {
+        1
+    } else {
+        2
+    };
+    let col_usize = col as usize;
+    let row_usize = row as usize;
+    let x = lines.xs[col_usize];
+    let y = lines.ys[row_usize];
+    let width = (lines.xs[col_usize + 1] - lines.xs[col_usize]).max(0.0);
+    let height = (lines.ys[row_usize + 1] - lines.ys[row_usize]).max(0.0);
+    (
+        col,
+        row,
+        Rectangle::new(Point::new(x, y), Size::new(width, height)),
+    )
 }
 
-fn drop_indicator_rect_for_slot(
+fn drop_zone_rect_for_slot(
+    layout: crate::ui::UiLayout,
     grid_rect: Rectangle,
-    slot_rect: Rectangle,
     slot: DockSlot,
-    cursor: Point,
 ) -> Rectangle {
-    let (col, row, cell_rect) = grid_cell_for_rect(grid_rect, cursor);
+    let Some(lines) = dock_grid_lines(layout, grid_rect) else {
+        return Rectangle::new(Point::new(0.0, 0.0), Size::new(0.0, 0.0));
+    };
+    let x0 = lines.xs[0];
+    let x1 = lines.xs[1];
+    let x2 = lines.xs[2];
+    let x3 = lines.xs[3];
+    let y0 = lines.ys[0];
+    let y1 = lines.ys[1];
+    let y2 = lines.ys[2];
+    let y3 = lines.ys[3];
+
     match slot {
-        DockSlot::Left => {
-            if row == 1 {
-                slot_rect
-            } else {
-                cell_rect
-            }
-        }
-        DockSlot::Right => {
-            if row == 1 {
-                slot_rect
-            } else {
-                cell_rect
-            }
-        }
-        DockSlot::Bottom => {
-            if col == 1 {
-                slot_rect
-            } else {
-                cell_rect
-            }
-        }
-        DockSlot::Center => {
-            if col == 1 && row == 1 {
-                slot_rect
-            } else {
-                cell_rect
-            }
-        }
+        DockSlot::TopLeft => Rectangle::new(Point::new(x0, y0), Size::new(x1 - x0, y1 - y0)),
+        DockSlot::Top => Rectangle::new(Point::new(x0, y0), Size::new(x3 - x0, y1 - y0)),
+        DockSlot::TopRight => Rectangle::new(Point::new(x2, y0), Size::new(x3 - x2, y1 - y0)),
+        DockSlot::Left => Rectangle::new(Point::new(x0, y0), Size::new(x1 - x0, y3 - y0)),
+        DockSlot::Center => Rectangle::new(Point::new(x1, y1), Size::new(x2 - x1, y2 - y1)),
+        DockSlot::Right => Rectangle::new(Point::new(x2, y0), Size::new(x3 - x2, y3 - y0)),
+        DockSlot::BottomLeft => Rectangle::new(Point::new(x0, y2), Size::new(x1 - x0, y3 - y2)),
+        DockSlot::Bottom => Rectangle::new(Point::new(x0, y2), Size::new(x3 - x0, y3 - y2)),
+        DockSlot::BottomRight => Rectangle::new(Point::new(x2, y2), Size::new(x3 - x2, y3 - y2)),
     }
 }
 
 fn drop_indicator_for_main_target(
     core: &AppCore,
     main: &MainWindow,
-    panel: PanelId,
+    _panel: PanelId,
     kind: DropKind,
     cursor: Point,
 ) -> Option<DropIndicator> {
@@ -2116,23 +2240,32 @@ fn drop_indicator_for_main_target(
         size.1 as f32 / scale_factor,
     );
     let slot_rect_current = layout.slot_rect(logical_size, &main.dock_layout, slot);
-    let slot_has_panels = !main.dock_layout.stack(slot).is_empty();
-    if slot_has_panels && slot_rect_current.contains(cursor) {
-        return Some(DropIndicator {
-            rect: slot_rect_current,
-        });
-    }
-    let preview = layout_with_slot_present(&main.dock_layout, slot, panel);
-    let slot_rect = layout.slot_rect(logical_size, &preview, slot);
     let dock_rect = dock_area_rect(layout, logical_size);
-    let rect = drop_indicator_rect_for_slot(dock_rect, slot_rect, slot, cursor);
+    if dock_rect.width <= 1.0 || dock_rect.height <= 1.0 {
+        return None;
+    }
+    let (col, row, _) = grid_cell_for_rect(layout, dock_rect, cursor);
+    if col == 1 && row == 1 {
+        if let Some(tab_rect) = tab_drop_rect_for_slot(layout, logical_size, &main.dock_layout, slot)
+        {
+            if tab_rect.contains(cursor) {
+                return Some(DropIndicator {
+                    rect: slot_rect_current,
+                });
+            }
+        }
+    }
+    let rect = drop_zone_rect_for_slot(layout, dock_rect, slot);
+    if rect.width <= 1.0 || rect.height <= 1.0 {
+        return None;
+    }
     Some(DropIndicator { rect })
 }
 
 fn drop_indicator_for_detached_target(
     core: &AppCore,
     detached: &DetachedWindow,
-    panel: PanelId,
+    _panel: PanelId,
     kind: DropKind,
     cursor: Point,
 ) -> Option<DropIndicator> {
@@ -2144,16 +2277,26 @@ fn drop_indicator_for_detached_target(
     );
     let DropKind::Slot(slot) = kind;
     let slot_rect_current = layout.slot_rect(logical_size, &detached.dock_layout, slot);
-    let slot_has_panels = !detached.dock_layout.stack(slot).is_empty();
-    if slot_has_panels && slot_rect_current.contains(cursor) {
-        return Some(DropIndicator {
-            rect: slot_rect_current,
-        });
-    }
-    let preview = layout_with_slot_present(&detached.dock_layout, slot, panel);
-    let slot_rect = layout.slot_rect(logical_size, &preview, slot);
     let grid_rect = dock_area_rect(layout, logical_size);
-    let rect = drop_indicator_rect_for_slot(grid_rect, slot_rect, slot, cursor);
+    if grid_rect.width <= 1.0 || grid_rect.height <= 1.0 {
+        return None;
+    }
+    let (col, row, _) = grid_cell_for_rect(layout, grid_rect, cursor);
+    if col == 1 && row == 1 {
+        if let Some(tab_rect) =
+            tab_drop_rect_for_slot(layout, logical_size, &detached.dock_layout, slot)
+        {
+            if tab_rect.contains(cursor) {
+                return Some(DropIndicator {
+                    rect: slot_rect_current,
+                });
+            }
+        }
+    }
+    let rect = drop_zone_rect_for_slot(layout, grid_rect, slot);
+    if rect.width <= 1.0 || rect.height <= 1.0 {
+        return None;
+    }
     Some(DropIndicator { rect })
 }
 
@@ -3235,11 +3378,15 @@ mod tests {
         let rect = Rectangle::new(Point::new(0.0, 0.0), Size::new(1000.0, 800.0));
 
         assert_eq!(
-            drop_slot_for_rect(layout, rect, Point::new(5.0, 100.0)),
+            drop_slot_for_rect(layout, rect, Point::new(5.0, 5.0)),
+            DockSlot::TopLeft
+        );
+        assert_eq!(
+            drop_slot_for_rect(layout, rect, Point::new(5.0, 300.0)),
             DockSlot::Left
         );
         assert_eq!(
-            drop_slot_for_rect(layout, rect, Point::new(995.0, 100.0)),
+            drop_slot_for_rect(layout, rect, Point::new(995.0, 300.0)),
             DockSlot::Right
         );
         assert_eq!(
