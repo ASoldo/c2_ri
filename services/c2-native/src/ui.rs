@@ -29,6 +29,11 @@ const PANEL_PADDING: f32 = 12.0;
 const PANEL_HEADER_HEIGHT: f32 = 28.0;
 const TAB_ICON_SIZE: f32 = 16.0;
 const TAB_BUTTON_SIZE: f32 = 26.0;
+const HEADER_TOGGLE_SIZE: f32 = 28.0;
+const HEADER_TOGGLE_ICON: f32 = 16.0;
+const EDGE_COMPASS_SIZE: f32 = 58.0;
+const EDGE_COMPASS_ICON_SIZE: f32 = 18.0;
+const EDGE_COMPASS_TEXT_SIZE: f32 = 9.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PanelId {
@@ -322,6 +327,16 @@ pub struct UiLayout {
     pub panel_header_height: f32,
 }
 
+#[derive(Clone, Copy)]
+struct RowHeights {
+    top_height: f32,
+    middle_height: f32,
+    bottom_height: f32,
+    top_y: f32,
+    middle_y: f32,
+    bottom_y: f32,
+}
+
 impl UiLayout {
     pub fn new() -> Self {
         Self {
@@ -335,6 +350,49 @@ impl UiLayout {
             inspector_height: INSPECTOR_HEIGHT,
             panel_padding: PANEL_PADDING,
             panel_header_height: PANEL_HEADER_HEIGHT,
+        }
+    }
+
+    fn row_heights(
+        &self,
+        window_size: Size,
+        top_present: bool,
+        bottom_present: bool,
+    ) -> RowHeights {
+        let content_height = (window_size.height - 2.0 * self.outer_padding).max(0.0);
+        let header_height = self.top_bar_height;
+        let top_gap = self.column_spacing;
+        let gap_top_mid = if top_present { self.column_spacing } else { 0.0 };
+        let gap_mid_bottom = if bottom_present { self.column_spacing } else { 0.0 };
+        let available = (content_height - header_height - top_gap - gap_top_mid - gap_mid_bottom)
+            .max(0.0);
+        let row_count = 1 + top_present as u8 + bottom_present as u8;
+        let base_height = if row_count > 0 {
+            available / row_count as f32
+        } else {
+            0.0
+        };
+        let top_height = if top_present {
+            self.inspector_height.min(base_height)
+        } else {
+            0.0
+        };
+        let bottom_height = if bottom_present {
+            self.inspector_height.min(base_height)
+        } else {
+            0.0
+        };
+        let middle_height = (available - top_height - bottom_height).max(0.0);
+        let top_y = self.outer_padding + header_height + top_gap;
+        let middle_y = top_y + top_height + gap_top_mid;
+        let bottom_y = middle_y + middle_height + gap_mid_bottom;
+        RowHeights {
+            top_height,
+            middle_height,
+            bottom_height,
+            top_y,
+            middle_y,
+            bottom_y,
         }
     }
 
@@ -364,7 +422,6 @@ impl UiLayout {
         if content_width <= 1.0 || content_height <= 1.0 {
             return Rectangle::new(Point::new(0.0, 0.0), Size::new(0.0, 0.0));
         }
-        let header_height = self.top_bar_height;
         let row_x = self.outer_padding;
 
         let top_present = !layout.stack(DockSlot::TopLeft).is_empty()
@@ -380,24 +437,13 @@ impl UiLayout {
             || !layout.stack(DockSlot::Right).is_empty()
             || !layout.stack(DockSlot::BottomRight).is_empty();
 
-        let top_height = if top_present { self.inspector_height } else { 0.0 };
-        let bottom_height = if bottom_present { self.inspector_height } else { 0.0 };
-
-        let top_gap = self.column_spacing;
-        let gap_top_mid = if top_present { self.column_spacing } else { 0.0 };
-        let gap_mid_bottom = if bottom_present { self.column_spacing } else { 0.0 };
-        let middle_height = (content_height
-            - header_height
-            - top_gap
-            - top_height
-            - bottom_height
-            - gap_top_mid
-            - gap_mid_bottom)
-            .max(0.0);
-
-        let top_y = self.outer_padding + header_height + top_gap;
-        let middle_y = top_y + top_height + gap_top_mid;
-        let bottom_y = middle_y + middle_height + gap_mid_bottom;
+        let rows = self.row_heights(window_size, top_present, bottom_present);
+        let top_height = rows.top_height;
+        let bottom_height = rows.bottom_height;
+        let middle_height = rows.middle_height;
+        let top_y = rows.top_y;
+        let middle_y = rows.middle_y;
+        let bottom_y = rows.bottom_y;
 
         let left_width = if left_present { self.panel_width } else { 0.0 };
         let right_width = if right_present { self.panel_width } else { 0.0 };
@@ -505,10 +551,10 @@ pub enum UiMessage {
     TileProviderSelected(TileProviderConfig),
     WeatherFieldSelected(&'static str),
     SeaFieldSelected(&'static str),
+    TogglePanelVisibility(PanelId),
     StartDrag { panel: PanelId, window: WindowId },
     SelectTab { panel: PanelId, window: WindowId },
     MinimizePanel { panel: PanelId, window: WindowId },
-    RestorePanel(PanelId),
     DetachPanel { panel: PanelId, window: WindowId },
     DockBack { window: WindowId },
     SwapPanel { panel: PanelId, window: WindowId },
@@ -658,6 +704,9 @@ struct UiIcons {
     panel_operations: SvgHandle,
     panel_entities: SvgHandle,
     panel_inspector: SvgHandle,
+    flight: SvgHandle,
+    ship: SvgHandle,
+    satellite: SvgHandle,
 }
 
 impl UiIcons {
@@ -672,6 +721,9 @@ impl UiIcons {
             panel_operations: icon_handle("radar.svg"),
             panel_entities: icon_handle("users.svg"),
             panel_inspector: icon_handle("clipboard-list.svg"),
+            flight: asset_svg_handle("plane.svg"),
+            ship: asset_svg_handle("ship.svg"),
+            satellite: asset_svg_handle("satellite.svg"),
         }
     }
 
@@ -689,6 +741,13 @@ fn icon_handle(file: &str) -> SvgHandle {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("assets")
         .join("icons")
+        .join(file);
+    SvgHandle::from_path(path)
+}
+
+fn asset_svg_handle(file: &str) -> SvgHandle {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("assets")
         .join(file);
     SvgHandle::from_path(path)
 }
@@ -782,6 +841,7 @@ impl UiState {
     pub fn view_main<'a>(
         &'a self,
         window_id: WindowId,
+        window_size: Size,
         dock_layout: &DockLayout,
         world: &WorldState,
         renderer: &Renderer,
@@ -797,12 +857,9 @@ impl UiState {
         move_menu: Option<(PanelId, WindowId)>,
         move_hover_target: Option<WindowId>,
     ) -> UiElement<'a> {
-        let panel_picker =
-            pick_list(hidden_panels, Option::<PanelId>::None, UiMessage::RestorePanel)
-            .placeholder("Panels")
-            .width(Length::Fixed(160.0));
+        let panel_toggles = panel_toggle_row(hidden_panels, &self.icons);
         let header = container(
-            row![text("C2 Walaris").size(16), space().width(Length::Fill), panel_picker]
+            row![text("C2 Walaris").size(16), space().width(Length::Fill), panel_toggles]
                 .align_y(Alignment::Center)
                 .spacing(8),
         )
@@ -816,6 +873,9 @@ impl UiState {
         let bottom_left_present = !dock_layout.stack(DockSlot::BottomLeft).is_empty();
         let bottom_present = !dock_layout.stack(DockSlot::Bottom).is_empty();
         let bottom_right_present = !dock_layout.stack(DockSlot::BottomRight).is_empty();
+        let top_row_present = top_present || top_left_present || top_right_present;
+        let bottom_row_present = bottom_present || bottom_left_present || bottom_right_present;
+        let rows = self.layout.row_heights(window_size, top_row_present, bottom_row_present);
 
         let left_present = top_left_present
             || !dock_layout.stack(DockSlot::Left).is_empty()
@@ -850,8 +910,8 @@ impl UiState {
             })
         };
 
-        let top_row: Option<UiElement> = (top_present || top_left_present || top_right_present).then(|| {
-            let row_height = Length::Fixed(self.layout.inspector_height);
+        let top_row: Option<UiElement> = top_row_present.then(|| {
+            let row_height = Length::Fixed(rows.top_height);
             if top_full {
                 panel_for_slot(DockSlot::Top, Length::Fill, row_height)
                     .unwrap_or_else(|| space().width(Length::Fill).into())
@@ -885,7 +945,8 @@ impl UiState {
             }
         });
 
-        let mut middle_row = row![].spacing(self.layout.row_spacing).height(Length::Fill);
+        let mut middle_row =
+            row![].spacing(self.layout.row_spacing).height(Length::Fixed(rows.middle_height));
         if left_present {
             if let Some(panel) =
                 panel_for_slot(DockSlot::Left, Length::Fixed(self.layout.panel_width), Length::Fill)
@@ -910,8 +971,8 @@ impl UiState {
             }
         }
 
-        let bottom_row: Option<UiElement> = (bottom_present || bottom_left_present || bottom_right_present).then(|| {
-            let row_height = Length::Fixed(self.layout.inspector_height);
+        let bottom_row: Option<UiElement> = bottom_row_present.then(|| {
+            let row_height = Length::Fixed(rows.bottom_height);
             if bottom_full {
                 panel_for_slot(DockSlot::Bottom, Length::Fill, row_height)
                     .unwrap_or_else(|| space().width(Length::Fill).into())
@@ -987,6 +1048,7 @@ impl UiState {
     pub fn view_detached_docked<'a>(
         &'a self,
         window_id: WindowId,
+        window_size: Size,
         dock_layout: &DockLayout,
         world: &WorldState,
         renderer: &Renderer,
@@ -1020,6 +1082,9 @@ impl UiState {
         let bottom_left_present = !dock_layout.stack(DockSlot::BottomLeft).is_empty();
         let bottom_present = !dock_layout.stack(DockSlot::Bottom).is_empty();
         let bottom_right_present = !dock_layout.stack(DockSlot::BottomRight).is_empty();
+        let top_row_present = top_present || top_left_present || top_right_present;
+        let bottom_row_present = bottom_present || bottom_left_present || bottom_right_present;
+        let rows = self.layout.row_heights(window_size, top_row_present, bottom_row_present);
 
         let left_present = top_left_present
             || !dock_layout.stack(DockSlot::Left).is_empty()
@@ -1054,8 +1119,8 @@ impl UiState {
             })
         };
 
-        let top_row: Option<UiElement> = (top_present || top_left_present || top_right_present).then(|| {
-            let row_height = Length::Fixed(self.layout.inspector_height);
+        let top_row: Option<UiElement> = top_row_present.then(|| {
+            let row_height = Length::Fixed(rows.top_height);
             if top_full {
                 panel_for_slot(DockSlot::Top, Length::Fill, row_height)
                     .unwrap_or_else(|| space().width(Length::Fill).into())
@@ -1089,7 +1154,8 @@ impl UiState {
             }
         });
 
-        let mut middle_row = row![].spacing(self.layout.row_spacing).height(Length::Fill);
+        let mut middle_row =
+            row![].spacing(self.layout.row_spacing).height(Length::Fixed(rows.middle_height));
         if left_present {
             if let Some(panel) =
                 panel_for_slot(DockSlot::Left, Length::Fixed(self.layout.panel_width), Length::Fill)
@@ -1114,8 +1180,8 @@ impl UiState {
             }
         }
 
-        let bottom_row: Option<UiElement> = (bottom_present || bottom_left_present || bottom_right_present).then(|| {
-            let row_height = Length::Fixed(self.layout.inspector_height);
+        let bottom_row: Option<UiElement> = bottom_row_present.then(|| {
+            let row_height = Length::Fixed(rows.bottom_height);
             if bottom_full {
                 panel_for_slot(DockSlot::Bottom, Length::Fill, row_height)
                     .unwrap_or_else(|| space().width(Length::Fill).into())
@@ -1249,8 +1315,8 @@ fn operations_body<'a>(operations: &'a OperationsState) -> UiElement<'a> {
     scrollable(content).into()
 }
 
-fn globe_body<'a>() -> UiElement<'a> {
-    globe_surface().into()
+fn globe_body<'a>(operations: &'a OperationsState, icons: &UiIcons) -> UiElement<'a> {
+    globe_surface(operations, icons).into()
 }
 
 fn entities_body<'a>(world: &WorldState) -> UiElement<'a> {
@@ -1405,7 +1471,7 @@ fn panel_stack_card_for<'a>(
             .style(tab_bar_style)
     });
     let body = match active_panel {
-        PanelId::Globe => globe_body(),
+        PanelId::Globe => globe_body(operations, icons),
         PanelId::Operations => operations_body(operations),
         PanelId::Entities => entities_body(world),
         PanelId::Inspector => inspector_body(world, renderer, diagnostics, tile_bars),
@@ -1490,6 +1556,36 @@ fn panel_tab(
         })
         .interaction(mouse::Interaction::Grab)
         .into()
+}
+
+fn panel_toggle_row<'a>(hidden_panels: &'a [PanelId], icons: &UiIcons) -> UiElement<'a> {
+    let mut row = row![].spacing(6).align_y(Alignment::Center);
+    for panel in PanelId::ALL {
+        let open = !hidden_panels.contains(&panel);
+        row = row.push(panel_toggle_button(panel, open, icons));
+    }
+    row.into()
+}
+
+fn panel_toggle_button<'a>(panel: PanelId, open: bool, icons: &UiIcons) -> UiElement<'a> {
+    let glyph = svg(icons.panel_icon(panel))
+        .width(Length::Fixed(HEADER_TOGGLE_ICON))
+        .height(Length::Fixed(HEADER_TOGGLE_ICON));
+    let bubble = container(glyph)
+        .width(Length::Fixed(HEADER_TOGGLE_SIZE))
+        .height(Length::Fixed(HEADER_TOGGLE_SIZE))
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center);
+    let button = button(bubble)
+        .style(header_toggle_button_style(open))
+        .on_press(UiMessage::TogglePanelVisibility(panel));
+    let tooltip = iced::widget::tooltip(
+        button,
+        container(text(panel.title()).size(11)).padding([2, 6]),
+        iced::widget::tooltip::Position::Bottom,
+    )
+    .style(tooltip_style);
+    tooltip.into()
 }
 
 fn move_menu_panel<'a>(
@@ -1681,6 +1777,94 @@ fn tab_icon_button_style(active: bool) -> impl Fn(&Theme, button_widget::Status)
     }
 }
 
+fn header_toggle_button_style(active: bool) -> impl Fn(&Theme, button_widget::Status) -> button_widget::Style {
+    move |_theme, status| {
+        let (background, border_color) = match status {
+            button_widget::Status::Active => (
+                if active {
+                    Color::from_rgba8(24, 32, 44, 0.95)
+                } else {
+                    Color::from_rgba8(14, 16, 22, 0.6)
+                },
+                if active {
+                    Color::from_rgba8(90, 170, 230, 0.9)
+                } else {
+                    Color::from_rgba8(52, 60, 76, 0.6)
+                },
+            ),
+            button_widget::Status::Hovered => (
+                if active {
+                    Color::from_rgba8(34, 46, 64, 0.98)
+                } else {
+                    Color::from_rgba8(22, 26, 36, 0.8)
+                },
+                Color::from_rgba8(132, 196, 255, 0.9),
+            ),
+            button_widget::Status::Pressed => (
+                Color::from_rgba8(28, 38, 56, 1.0),
+                Color::from_rgba8(164, 212, 255, 0.95),
+            ),
+            button_widget::Status::Disabled => (
+                Color::from_rgba8(12, 14, 20, 0.4),
+                Color::from_rgba8(40, 46, 60, 0.4),
+            ),
+        };
+        button_widget::Style {
+            background: Some(Background::Color(background)),
+            text_color: Color::from_rgba8(220, 230, 244, 0.95),
+            border: Border {
+                color: border_color,
+                width: if active { 1.6 } else { 1.0 },
+                radius: (HEADER_TOGGLE_SIZE * 0.5).into(),
+            },
+            shadow: Shadow::default(),
+            snap: false,
+        }
+    }
+}
+
+fn edge_compass_button_style(active: bool) -> impl Fn(&Theme, button_widget::Status) -> button_widget::Style {
+    move |_theme, status| {
+        let (background, border_color) = match status {
+            button_widget::Status::Active => (
+                if active {
+                    Color::from_rgba8(22, 30, 42, 0.92)
+                } else {
+                    Color::from_rgba8(12, 16, 24, 0.7)
+                },
+                if active {
+                    Color::from_rgba8(120, 200, 255, 0.9)
+                } else {
+                    Color::from_rgba8(62, 72, 92, 0.6)
+                },
+            ),
+            button_widget::Status::Hovered => (
+                Color::from_rgba8(28, 40, 58, 0.98),
+                Color::from_rgba8(160, 220, 255, 0.95),
+            ),
+            button_widget::Status::Pressed => (
+                Color::from_rgba8(24, 36, 54, 1.0),
+                Color::from_rgba8(190, 232, 255, 0.95),
+            ),
+            button_widget::Status::Disabled => (
+                Color::from_rgba8(10, 12, 18, 0.4),
+                Color::from_rgba8(40, 46, 60, 0.4),
+            ),
+        };
+        button_widget::Style {
+            background: Some(Background::Color(background)),
+            text_color: Color::from_rgba8(226, 236, 248, 0.95),
+            border: Border {
+                color: border_color,
+                width: if active { 1.6 } else { 1.0 },
+                radius: (EDGE_COMPASS_SIZE * 0.5).into(),
+            },
+            shadow: Shadow::default(),
+            snap: false,
+        }
+    }
+}
+
 fn tooltip_style(theme: &Theme) -> iced::widget::container::Style {
     let palette = theme.extended_palette();
     iced::widget::container::Style {
@@ -1824,12 +2008,75 @@ fn progress_style(color: Color) -> iced::widget::progress_bar::Style {
     }
 }
 
-fn globe_surface<'a>() -> UiElement<'a> {
+fn globe_surface<'a>(operations: &'a OperationsState, icons: &UiIcons) -> UiElement<'a> {
     let overlay = canvas::Canvas::new(CompassOverlay)
         .width(Length::Fill)
         .height(Length::Fill);
-    let content = stack([space().into(), overlay.into()]);
+    let controls = edge_compass_controls(operations, icons);
+    let content = stack([space().into(), overlay.into(), controls]);
     content.into()
+}
+
+fn edge_compass_controls<'a>(operations: &'a OperationsState, icons: &UiIcons) -> UiElement<'a> {
+    let flight_icon = svg(icons.flight.clone())
+        .width(Length::Fixed(EDGE_COMPASS_ICON_SIZE))
+        .height(Length::Fixed(EDGE_COMPASS_ICON_SIZE));
+    let ship_icon = svg(icons.ship.clone())
+        .width(Length::Fixed(EDGE_COMPASS_ICON_SIZE))
+        .height(Length::Fixed(EDGE_COMPASS_ICON_SIZE));
+    let satellite_icon = svg(icons.satellite.clone())
+        .width(Length::Fixed(EDGE_COMPASS_ICON_SIZE))
+        .height(Length::Fixed(EDGE_COMPASS_ICON_SIZE));
+
+    let flight = edge_compass_toggle(
+        "Flights",
+        flight_icon.into(),
+        operations.show_flights,
+        UiMessage::ToggleFlights(!operations.show_flights),
+    );
+    let ships = edge_compass_toggle(
+        "Ships",
+        ship_icon.into(),
+        operations.show_ships,
+        UiMessage::ToggleShips(!operations.show_ships),
+    );
+    let satellites = edge_compass_toggle(
+        "Satellites",
+        satellite_icon.into(),
+        operations.show_satellites,
+        UiMessage::ToggleSatellites(!operations.show_satellites),
+    );
+
+    let column = column![flight, ships, satellites]
+        .spacing(10)
+        .align_x(Alignment::Center);
+    container(column)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Alignment::End)
+        .align_y(Alignment::Center)
+        .padding([0.0, 16.0])
+        .into()
+}
+
+fn edge_compass_toggle<'a>(
+    label: &'static str,
+    icon: UiElement<'a>,
+    active: bool,
+    message: UiMessage,
+) -> UiElement<'a> {
+    let content = column![text(label).size(EDGE_COMPASS_TEXT_SIZE), icon]
+        .spacing(4)
+        .align_x(Alignment::Center);
+    let bubble = container(content)
+        .width(Length::Fixed(EDGE_COMPASS_SIZE))
+        .height(Length::Fixed(EDGE_COMPASS_SIZE))
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center);
+    button(bubble)
+        .style(edge_compass_button_style(active))
+        .on_press(message)
+        .into()
 }
 
 fn drop_indicator_layer<'a>(indicator: DropIndicator) -> UiElement<'a> {

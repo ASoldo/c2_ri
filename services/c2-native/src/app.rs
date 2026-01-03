@@ -608,6 +608,7 @@ impl App {
             });
             let element = core.ui.view_main(
                 main.window.id(),
+                viewport.logical_size(),
                 &main.dock_layout,
                 &core.world,
                 &core.renderer,
@@ -808,6 +809,7 @@ impl App {
             });
             let element = core.ui.view_detached_docked(
                 detached.window.id(),
+                viewport.logical_size(),
                 &detached.dock_layout,
                 &core.world,
                 &core.renderer,
@@ -944,9 +946,6 @@ impl App {
                 UiMessage::MinimizePanel { panel, window } => {
                     self.minimize_panel(panel, window);
                 }
-                UiMessage::RestorePanel(panel) => {
-                    self.restore_panel(panel);
-                }
                 UiMessage::DetachPanel { panel, window } => {
                     self.detach_panel(event_loop, panel, window);
                 }
@@ -958,6 +957,9 @@ impl App {
                 }
                 UiMessage::ToggleMoveMenu { panel, window } => {
                     self.toggle_move_menu(panel, window);
+                }
+                UiMessage::TogglePanelVisibility(panel) => {
+                    self.toggle_panel_visibility(panel);
                 }
                 UiMessage::MovePanel {
                     panel,
@@ -1084,6 +1086,30 @@ impl App {
             return;
         };
         self.insert_panel_at(panel, main.window.id(), location);
+    }
+
+    fn toggle_panel_visibility(&mut self, panel: PanelId) {
+        if self.hidden_panels.contains(&panel) {
+            self.restore_panel(panel);
+            return;
+        }
+        if let Some(window_id) = self.window_for_panel(panel) {
+            self.minimize_panel(panel, window_id);
+        }
+    }
+
+    fn window_for_panel(&self, panel: PanelId) -> Option<WindowId> {
+        if let Some(main) = self.main.as_ref() {
+            if main.dock_layout.slot_of(panel).is_some() {
+                return Some(main.window.id());
+            }
+        }
+        for (window_id, detached) in &self.detached {
+            if detached.dock_layout.slot_of(panel).is_some() {
+                return Some(*window_id);
+            }
+        }
+        None
     }
 
     fn apply_drop_target(&mut self, drag_state: DragState, target: DropTarget) {
@@ -1464,20 +1490,17 @@ impl App {
                     size.0 as f32 / scale_factor,
                     size.1 as f32 / scale_factor,
                 );
+                if let Some(slot) =
+                    slot_for_cursor(layout, logical_size, &main.dock_layout, cursor)
+                {
+                    return Some(DropTarget {
+                        window: window_id,
+                        kind: DropKind::Slot(slot),
+                    });
+                }
                 let dock_rect = dock_area_rect(layout, logical_size);
                 if dock_rect.width <= 1.0 || dock_rect.height <= 1.0 {
                     return None;
-                }
-                let (col, row, _) = grid_cell_for_rect(layout, dock_rect, cursor);
-                if col == 1 && row == 1 {
-                    if let Some(slot) =
-                        slot_for_cursor(layout, logical_size, &main.dock_layout, cursor)
-                    {
-                        return Some(DropTarget {
-                            window: window_id,
-                            kind: DropKind::Slot(slot),
-                        });
-                    }
                 }
                 let slot = drop_slot_for_rect(layout, dock_rect, cursor);
                 return Some(DropTarget {
@@ -1493,19 +1516,15 @@ impl App {
             detached.size.width as f32 / scale_factor,
             detached.size.height as f32 / scale_factor,
         );
+        if let Some(slot) = slot_for_cursor(layout, logical_size, &detached.dock_layout, cursor) {
+            return Some(DropTarget {
+                window: window_id,
+                kind: DropKind::Slot(slot),
+            });
+        }
         let dock_rect = dock_area_rect(layout, logical_size);
         if dock_rect.width <= 1.0 || dock_rect.height <= 1.0 {
             return None;
-        }
-        let (col, row, _) = grid_cell_for_rect(layout, dock_rect, cursor);
-        if col == 1 && row == 1 {
-            if let Some(slot) = slot_for_cursor(layout, logical_size, &detached.dock_layout, cursor)
-            {
-                return Some(DropTarget {
-                    window: window_id,
-                    kind: DropKind::Slot(slot),
-                });
-            }
         }
         let slot = drop_slot_for_rect(layout, dock_rect, cursor);
         Some(DropTarget {
@@ -2125,9 +2144,7 @@ fn tab_drop_rect_for_slot(
     }
     let top = rect.y + layout.panel_padding;
     let max_height = (rect.height - layout.panel_padding * 2.0).max(0.0);
-    let drop_height = (layout.panel_header_height + layout.tab_bar_height)
-        .min(max_height)
-        .max(0.0);
+    let drop_height = layout.panel_header_height.min(max_height).max(0.0);
     if drop_height <= 1.0 {
         return None;
     }
@@ -2240,20 +2257,16 @@ fn drop_indicator_for_main_target(
         size.1 as f32 / scale_factor,
     );
     let slot_rect_current = layout.slot_rect(logical_size, &main.dock_layout, slot);
+    if let Some(tab_rect) = tab_drop_rect_for_slot(layout, logical_size, &main.dock_layout, slot) {
+        if tab_rect.contains(cursor) {
+            return Some(DropIndicator {
+                rect: slot_rect_current,
+            });
+        }
+    }
     let dock_rect = dock_area_rect(layout, logical_size);
     if dock_rect.width <= 1.0 || dock_rect.height <= 1.0 {
         return None;
-    }
-    let (col, row, _) = grid_cell_for_rect(layout, dock_rect, cursor);
-    if col == 1 && row == 1 {
-        if let Some(tab_rect) = tab_drop_rect_for_slot(layout, logical_size, &main.dock_layout, slot)
-        {
-            if tab_rect.contains(cursor) {
-                return Some(DropIndicator {
-                    rect: slot_rect_current,
-                });
-            }
-        }
     }
     let rect = drop_zone_rect_for_slot(layout, dock_rect, slot);
     if rect.width <= 1.0 || rect.height <= 1.0 {
@@ -2277,21 +2290,18 @@ fn drop_indicator_for_detached_target(
     );
     let DropKind::Slot(slot) = kind;
     let slot_rect_current = layout.slot_rect(logical_size, &detached.dock_layout, slot);
+    if let Some(tab_rect) =
+        tab_drop_rect_for_slot(layout, logical_size, &detached.dock_layout, slot)
+    {
+        if tab_rect.contains(cursor) {
+            return Some(DropIndicator {
+                rect: slot_rect_current,
+            });
+        }
+    }
     let grid_rect = dock_area_rect(layout, logical_size);
     if grid_rect.width <= 1.0 || grid_rect.height <= 1.0 {
         return None;
-    }
-    let (col, row, _) = grid_cell_for_rect(layout, grid_rect, cursor);
-    if col == 1 && row == 1 {
-        if let Some(tab_rect) =
-            tab_drop_rect_for_slot(layout, logical_size, &detached.dock_layout, slot)
-        {
-            if tab_rect.contains(cursor) {
-                return Some(DropIndicator {
-                    rect: slot_rect_current,
-                });
-            }
-        }
     }
     let rect = drop_zone_rect_for_slot(layout, grid_rect, slot);
     if rect.width <= 1.0 || rect.height <= 1.0 {
