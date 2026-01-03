@@ -63,6 +63,12 @@ impl PanelId {
     }
 }
 
+impl std::fmt::Display for PanelId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.title())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DockSlot {
     Left,
@@ -71,87 +77,172 @@ pub enum DockSlot {
     Bottom,
 }
 
-impl DockSlot {
+#[derive(Debug, Clone, Default)]
+pub struct DockStack {
+    panels: Vec<PanelId>,
+    active: Option<PanelId>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+impl DockStack {
+    pub fn new(panel: PanelId) -> Self {
+        Self {
+            panels: vec![panel],
+            active: Some(panel),
+        }
+    }
+
+    pub fn panels(&self) -> &[PanelId] {
+        &self.panels
+    }
+
+    pub fn active(&self) -> Option<PanelId> {
+        if let Some(active) = self.active {
+            if self.panels.contains(&active) {
+                return Some(active);
+            }
+        }
+        self.panels.first().copied()
+    }
+
+    pub fn contains(&self, panel: PanelId) -> bool {
+        self.panels.contains(&panel)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.panels.is_empty()
+    }
+
+    pub fn set_active(&mut self, panel: PanelId) {
+        if self.panels.contains(&panel) {
+            self.active = Some(panel);
+        }
+    }
+
+    pub fn insert(&mut self, panel: PanelId) {
+        if !self.panels.contains(&panel) {
+            self.panels.push(panel);
+            self.panels.sort_by_key(|panel| panel.order());
+        }
+        self.active = Some(panel);
+    }
+
+    pub fn remove(&mut self, panel: PanelId) {
+        self.panels.retain(|entry| *entry != panel);
+        if self.active == Some(panel) || self.active.is_none() {
+            self.active = self.panels.first().copied();
+        } else if let Some(active) = self.active {
+            if !self.panels.contains(&active) {
+                self.active = self.panels.first().copied();
+            }
+        }
+    }
+
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct DockLayout {
-    pub left: Option<PanelId>,
-    pub center: Option<PanelId>,
-    pub right: Option<PanelId>,
-    pub bottom: Option<PanelId>,
+    left: DockStack,
+    center: DockStack,
+    right: DockStack,
+    bottom: DockStack,
 }
 
 impl DockLayout {
     pub fn main_default() -> Self {
         Self {
-            left: Some(PanelId::Operations),
-            center: Some(PanelId::Globe),
-            right: Some(PanelId::Entities),
-            bottom: Some(PanelId::Inspector),
+            left: DockStack::new(PanelId::Operations),
+            center: DockStack::new(PanelId::Globe),
+            right: DockStack::new(PanelId::Entities),
+            bottom: DockStack::new(PanelId::Inspector),
         }
     }
 
-    pub fn contains(self, panel: PanelId) -> bool {
-        self.left == Some(panel)
-            || self.center == Some(panel)
-            || self.right == Some(panel)
-            || self.bottom == Some(panel)
+    pub fn single(panel: PanelId) -> Self {
+        let mut layout = Self::default();
+        layout.center = DockStack::new(panel);
+        layout
     }
 
-    pub fn slot_of(self, panel: PanelId) -> Option<DockSlot> {
-        if self.left == Some(panel) {
+    pub fn slot_of(&self, panel: PanelId) -> Option<DockSlot> {
+        if self.left.contains(panel) {
             Some(DockSlot::Left)
-        } else if self.center == Some(panel) {
+        } else if self.center.contains(panel) {
             Some(DockSlot::Center)
-        } else if self.right == Some(panel) {
+        } else if self.right.contains(panel) {
             Some(DockSlot::Right)
-        } else if self.bottom == Some(panel) {
+        } else if self.bottom.contains(panel) {
             Some(DockSlot::Bottom)
         } else {
             None
         }
     }
 
-    pub fn panel_in(self, slot: DockSlot) -> Option<PanelId> {
-        match slot {
-            DockSlot::Left => self.left,
-            DockSlot::Center => self.center,
-            DockSlot::Right => self.right,
-            DockSlot::Bottom => self.bottom,
+    pub fn active_slot_of(&self, panel: PanelId) -> Option<DockSlot> {
+        for slot in [DockSlot::Left, DockSlot::Center, DockSlot::Right, DockSlot::Bottom] {
+            if self.panel_in(slot) == Some(panel) {
+                return Some(slot);
+            }
         }
+        None
     }
 
-    pub fn set(&mut self, slot: DockSlot, panel: PanelId) {
+    pub fn panel_in(&self, slot: DockSlot) -> Option<PanelId> {
+        self.stack(slot).active()
+    }
+
+    pub fn panels_in(&self, slot: DockSlot) -> &[PanelId] {
+        self.stack(slot).panels()
+    }
+
+    pub fn set_active(&mut self, slot: DockSlot, panel: PanelId) {
+        self.stack_mut(slot).set_active(panel);
+    }
+
+    pub fn insert(&mut self, slot: DockSlot, panel: PanelId) {
         self.remove(panel);
-        match slot {
-            DockSlot::Left => self.left = Some(panel),
-            DockSlot::Center => self.center = Some(panel),
-            DockSlot::Right => self.right = Some(panel),
-            DockSlot::Bottom => self.bottom = Some(panel),
-        }
+        self.stack_mut(slot).insert(panel);
     }
 
     pub fn remove(&mut self, panel: PanelId) {
-        if self.left == Some(panel) {
-            self.left = None;
+        self.left.remove(panel);
+        self.center.remove(panel);
+        self.right.remove(panel);
+        self.bottom.remove(panel);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.left.is_empty()
+            && self.center.is_empty()
+            && self.right.is_empty()
+            && self.bottom.is_empty()
+    }
+
+    pub fn panels(&self) -> Vec<PanelId> {
+        let mut panels = Vec::new();
+        for slot in [DockSlot::Left, DockSlot::Center, DockSlot::Right, DockSlot::Bottom] {
+            panels.extend(self.panels_in(slot).iter().copied());
         }
-        if self.center == Some(panel) {
-            self.center = None;
-        }
-        if self.right == Some(panel) {
-            self.right = None;
-        }
-        if self.bottom == Some(panel) {
-            self.bottom = None;
+        panels.sort_by_key(|panel| panel.order());
+        panels.dedup();
+        panels
+    }
+
+    pub fn stack(&self, slot: DockSlot) -> &DockStack {
+        match slot {
+            DockSlot::Left => &self.left,
+            DockSlot::Center => &self.center,
+            DockSlot::Right => &self.right,
+            DockSlot::Bottom => &self.bottom,
         }
     }
 
-    pub fn is_empty(self) -> bool {
-        self.left.is_none()
-            && self.center.is_none()
-            && self.right.is_none()
-            && self.bottom.is_none()
+    fn stack_mut(&mut self, slot: DockSlot) -> &mut DockStack {
+        match slot {
+            DockSlot::Left => &mut self.left,
+            DockSlot::Center => &mut self.center,
+            DockSlot::Right => &mut self.right,
+            DockSlot::Bottom => &mut self.bottom,
+        }
     }
 }
 
@@ -183,8 +274,8 @@ impl UiLayout {
         }
     }
 
-    pub fn globe_rect(&self, window_size: Size, layout: DockLayout) -> Rectangle {
-        let Some(slot) = layout.slot_of(PanelId::Globe) else {
+    pub fn globe_rect(&self, window_size: Size, layout: &DockLayout) -> Rectangle {
+        let Some(slot) = layout.active_slot_of(PanelId::Globe) else {
             return Rectangle::new(iced::Point::new(0.0, 0.0), Size::new(0.0, 0.0));
         };
         let outer = self.slot_rect(window_size, layout, slot);
@@ -201,7 +292,7 @@ impl UiLayout {
         )
     }
 
-    pub fn slot_rect(&self, window_size: Size, layout: DockLayout, slot: DockSlot) -> Rectangle {
+    pub fn slot_rect(&self, window_size: Size, layout: &DockLayout, slot: DockSlot) -> Rectangle {
         let width = window_size.width;
         let height = window_size.height;
         let content_width = (width - 2.0 * self.outer_padding).max(0.0);
@@ -210,7 +301,7 @@ impl UiLayout {
             return Rectangle::new(Point::new(0.0, 0.0), Size::new(0.0, 0.0));
         }
         let header_height = self.top_bar_height;
-        let bottom_present = layout.bottom.is_some();
+        let bottom_present = !layout.stack(DockSlot::Bottom).is_empty();
         let bottom_height = if bottom_present {
             self.inspector_height
         } else {
@@ -227,8 +318,8 @@ impl UiLayout {
         let row_y = self.outer_padding + header_height + top_spacing;
         let row_x = self.outer_padding;
 
-        let left_present = layout.left.is_some();
-        let right_present = layout.right.is_some();
+        let left_present = !layout.stack(DockSlot::Left).is_empty();
+        let right_present = !layout.stack(DockSlot::Right).is_empty();
         let left_width = if left_present { self.panel_width } else { 0.0 };
         let right_width = if right_present { self.panel_width } else { 0.0 };
         let left_gap = if left_present { self.row_spacing } else { 0.0 };
@@ -258,28 +349,6 @@ impl UiLayout {
         }
     }
 
-    pub fn detached_globe_rect(&self, window_size: Size, has_tabs: bool) -> Rectangle {
-        let width = window_size.width;
-        let height = window_size.height;
-        let content_width = (width - 2.0 * self.outer_padding).max(0.0);
-        let content_height = (height - 2.0 * self.outer_padding).max(0.0);
-
-        let left = self.outer_padding;
-        let right = self.outer_padding + content_width;
-        let tabs = if has_tabs {
-            self.tab_bar_height + self.column_spacing
-        } else {
-            0.0
-        };
-        let top = self.outer_padding + self.top_bar_height + self.column_spacing + tabs;
-        let bottom = self.outer_padding + content_height;
-        let rect_width = (right - left).max(0.0);
-        let rect_height = (bottom - top).max(0.0);
-        Rectangle::new(
-            iced::Point::new(left, top),
-            Size::new(rect_width, rect_height),
-        )
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -296,6 +365,8 @@ pub enum UiMessage {
     SeaFieldSelected(&'static str),
     StartDrag { panel: PanelId, window: WindowId },
     SelectTab { panel: PanelId, window: WindowId },
+    MinimizePanel { panel: PanelId, window: WindowId },
+    RestorePanel(PanelId),
     DetachPanel { panel: PanelId, window: WindowId },
     DockBack { window: WindowId },
     SwapPanel { panel: PanelId, window: WindowId },
@@ -435,6 +506,7 @@ struct UiIcons {
     dock: SvgHandle,
     swap: SvgHandle,
     r#move: SvgHandle,
+    minimize: SvgHandle,
 }
 
 impl UiIcons {
@@ -444,6 +516,7 @@ impl UiIcons {
             dock: icon_handle("dock.svg"),
             swap: icon_handle("swap.svg"),
             r#move: icon_handle("move.svg"),
+            minimize: icon_handle("minimize.svg"),
         }
     }
 }
@@ -538,18 +611,14 @@ impl UiState {
         self.layout
     }
 
-    pub fn globe_rect(&self, window_size: Size, layout: DockLayout) -> Rectangle {
+    pub fn globe_rect(&self, window_size: Size, layout: &DockLayout) -> Rectangle {
         self.layout.globe_rect(window_size, layout)
-    }
-
-    pub fn detached_globe_rect(&self, window_size: Size, has_tabs: bool) -> Rectangle {
-        self.layout.detached_globe_rect(window_size, has_tabs)
     }
 
     pub fn view_main<'a>(
         &'a self,
         window_id: WindowId,
-        dock_layout: DockLayout,
+        dock_layout: &DockLayout,
         world: &WorldState,
         renderer: &Renderer,
         diagnostics: &Diagnostics,
@@ -557,34 +626,28 @@ impl UiState {
         drop_target: bool,
         drag_preview: Option<DragPreview>,
         drop_indicator: Option<DropIndicator>,
+        hidden_panels: &'a [PanelId],
         window_options: &'a [WindowOption],
         swap_selection: Option<(PanelId, WindowId)>,
         move_menu: Option<(PanelId, WindowId)>,
         move_hover_target: Option<WindowId>,
     ) -> UiElement<'a> {
+        let panel_picker =
+            pick_list(hidden_panels, Option::<PanelId>::None, UiMessage::RestorePanel)
+            .placeholder("Panels")
+            .width(Length::Fixed(160.0));
         let header = container(
-            row![
-                text("C2 Walaris").size(16),
-                space().width(Length::Fixed(12.0)),
-                text(format!("Entities: {}", world.entity_count())).size(12),
-                space().width(Length::Fixed(12.0)),
-                text(format!(
-                    "Viewport: {}x{}",
-                    renderer.size().0,
-                    renderer.size().1
-                ))
-                .size(12)
-            ]
-            .align_y(Alignment::Center)
-            .spacing(8),
+            row![text("C2 Walaris").size(16), space().width(Length::Fill), panel_picker]
+                .align_y(Alignment::Center)
+                .spacing(8),
         )
         .height(Length::Fixed(self.layout.top_bar_height))
         .padding([4, 8])
         .style(top_bar_style);
 
-        let left_panel = dock_layout.left.map(|panel| {
-            panel_card_for(
-                panel,
+        let left_panel = (!dock_layout.stack(DockSlot::Left).is_empty()).then(|| {
+            panel_stack_card_for(
+                dock_layout.stack(DockSlot::Left),
                 window_id,
                 &self.operations,
                 world,
@@ -594,7 +657,7 @@ impl UiState {
                 Length::Fixed(self.layout.panel_width),
                 Length::Fill,
                 true,
-                swap_selection == Some((panel, window_id)),
+                swap_selection,
                 move_menu,
                 window_options,
                 move_hover_target,
@@ -602,9 +665,9 @@ impl UiState {
                 self.layout,
             )
         });
-        let center_panel = dock_layout.center.map(|panel| {
-            panel_card_for(
-                panel,
+        let center_panel = (!dock_layout.stack(DockSlot::Center).is_empty()).then(|| {
+            panel_stack_card_for(
+                dock_layout.stack(DockSlot::Center),
                 window_id,
                 &self.operations,
                 world,
@@ -614,7 +677,7 @@ impl UiState {
                 Length::Fill,
                 Length::Fill,
                 true,
-                swap_selection == Some((panel, window_id)),
+                swap_selection,
                 move_menu,
                 window_options,
                 move_hover_target,
@@ -622,9 +685,9 @@ impl UiState {
                 self.layout,
             )
         });
-        let right_panel = dock_layout.right.map(|panel| {
-            panel_card_for(
-                panel,
+        let right_panel = (!dock_layout.stack(DockSlot::Right).is_empty()).then(|| {
+            panel_stack_card_for(
+                dock_layout.stack(DockSlot::Right),
                 window_id,
                 &self.operations,
                 world,
@@ -634,7 +697,7 @@ impl UiState {
                 Length::Fixed(self.layout.panel_width),
                 Length::Fill,
                 true,
-                swap_selection == Some((panel, window_id)),
+                swap_selection,
                 move_menu,
                 window_options,
                 move_hover_target,
@@ -642,9 +705,9 @@ impl UiState {
                 self.layout,
             )
         });
-        let bottom_panel = dock_layout.bottom.map(|panel| {
-            panel_card_for(
-                panel,
+        let bottom_panel = (!dock_layout.stack(DockSlot::Bottom).is_empty()).then(|| {
+            panel_stack_card_for(
+                dock_layout.stack(DockSlot::Bottom),
                 window_id,
                 &self.operations,
                 world,
@@ -654,7 +717,7 @@ impl UiState {
                 Length::Fill,
                 Length::Fixed(self.layout.inspector_height),
                 true,
-                swap_selection == Some((panel, window_id)),
+                swap_selection,
                 move_menu,
                 window_options,
                 move_hover_target,
@@ -685,131 +748,7 @@ impl UiState {
             layout = layout.push(panel);
         }
 
-        let globe_active = dock_layout.contains(PanelId::Globe);
-        let move_target = move_hover_target == Some(window_id);
-        let root = container(layout)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(root_style(drop_target, globe_active, move_target));
-        let mut layers: Vec<UiElement> = vec![root.into()];
-        if let Some(indicator) = drop_indicator {
-            layers.push(drop_indicator_layer(indicator));
-        }
-        if let Some(preview) = drag_preview {
-            layers.push(drag_preview_layer(preview));
-        }
-        stack(layers)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-    }
-
-    pub fn view_detached<'a>(
-        &'a self,
-        window_id: WindowId,
-        panels: &[PanelId],
-        active: PanelId,
-        world: &WorldState,
-        renderer: &Renderer,
-        diagnostics: &Diagnostics,
-        tile_bars: &'a [TileBar],
-        drop_target: bool,
-        drag_preview: Option<DragPreview>,
-        drop_indicator: Option<DropIndicator>,
-        window_options: &'a [WindowOption],
-        swap_selection: Option<(PanelId, WindowId)>,
-        move_menu: Option<(PanelId, WindowId)>,
-        move_hover_target: Option<WindowId>,
-    ) -> UiElement<'a> {
-        let active_panel = panels
-            .iter()
-            .copied()
-            .find(|panel| *panel == active)
-            .or_else(|| panels.first().copied())
-            .unwrap_or(PanelId::Operations);
-
-        let drag_handle = mouse_area(
-            container(text(active_panel.title()).size(14))
-                .width(Length::Fill)
-                .padding([0, 4]),
-        )
-        .on_press(UiMessage::StartDrag {
-            panel: active_panel,
-            window: window_id,
-        })
-        .interaction(mouse::Interaction::Grab);
-
-        let header = container(
-            row![
-                drag_handle,
-                icon_button(
-                    self.icons.swap.clone(),
-                    UiMessage::SwapPanel {
-                        panel: active_panel,
-                        window: window_id,
-                    }
-                ),
-                icon_button(
-                    self.icons.r#move.clone(),
-                    UiMessage::ToggleMoveMenu {
-                        panel: active_panel,
-                        window: window_id,
-                    }
-                ),
-                icon_button(self.icons.dock.clone(), UiMessage::DockBack { window: window_id })
-            ]
-            .align_y(Alignment::Center)
-            .spacing(8),
-        )
-        .height(Length::Fixed(self.layout.top_bar_height))
-        .padding([4, 8])
-        .style(top_bar_style);
-
-        let tabs = (panels.len() > 1).then(|| {
-            let mut tabs = row![].spacing(6).align_y(Alignment::Center);
-            for panel in panels.iter().copied() {
-                tabs = tabs.push(panel_tab(panel, window_id, panel == active_panel));
-            }
-            container(tabs)
-                .height(Length::Fixed(self.layout.tab_bar_height))
-                .padding([4, 8])
-                .style(tab_bar_style)
-        });
-
-        let body = match active_panel {
-            PanelId::Globe => globe_body(),
-            PanelId::Operations => operations_body(&self.operations),
-            PanelId::Entities => entities_body(world),
-            PanelId::Inspector => inspector_body(renderer, diagnostics, tile_bars),
-        };
-
-        let globe_active = active_panel == PanelId::Globe;
-        let swap_selected = swap_selection == Some((active_panel, window_id));
-        let panel = if globe_active {
-            globe_panel_container(body, self.layout, swap_selected)
-        } else {
-            panel_body_container(body, self.layout, swap_selected)
-        };
-
-        let mut layout = column![header]
-            .spacing(self.layout.column_spacing)
-            .padding(self.layout.outer_padding)
-            .height(Length::Fill)
-            .width(Length::Fill);
-        if let Some(menu) = move_menu_panel(
-            active_panel,
-            window_id,
-            move_menu,
-            window_options,
-            move_hover_target,
-        ) {
-            layout = layout.push(menu);
-        }
-        if let Some(tabs) = tabs {
-            layout = layout.push(tabs);
-        }
-        layout = layout.push(panel);
-
+        let globe_active = dock_layout.active_slot_of(PanelId::Globe).is_some();
         let move_target = move_hover_target == Some(window_id);
         let root = container(layout)
             .width(Length::Fill)
@@ -831,7 +770,7 @@ impl UiState {
     pub fn view_detached_docked<'a>(
         &'a self,
         window_id: WindowId,
-        dock_layout: DockLayout,
+        dock_layout: &DockLayout,
         world: &WorldState,
         renderer: &Renderer,
         diagnostics: &Diagnostics,
@@ -857,9 +796,9 @@ impl UiState {
         .padding([4, 8])
         .style(top_bar_style);
 
-        let left_panel = dock_layout.left.map(|panel| {
-            panel_card_for(
-                panel,
+        let left_panel = (!dock_layout.stack(DockSlot::Left).is_empty()).then(|| {
+            panel_stack_card_for(
+                dock_layout.stack(DockSlot::Left),
                 window_id,
                 &self.operations,
                 world,
@@ -869,7 +808,7 @@ impl UiState {
                 Length::Fixed(self.layout.panel_width),
                 Length::Fill,
                 true,
-                swap_selection == Some((panel, window_id)),
+                swap_selection,
                 move_menu,
                 window_options,
                 move_hover_target,
@@ -877,9 +816,9 @@ impl UiState {
                 self.layout,
             )
         });
-        let center_panel = dock_layout.center.map(|panel| {
-            panel_card_for(
-                panel,
+        let center_panel = (!dock_layout.stack(DockSlot::Center).is_empty()).then(|| {
+            panel_stack_card_for(
+                dock_layout.stack(DockSlot::Center),
                 window_id,
                 &self.operations,
                 world,
@@ -889,7 +828,7 @@ impl UiState {
                 Length::Fill,
                 Length::Fill,
                 true,
-                swap_selection == Some((panel, window_id)),
+                swap_selection,
                 move_menu,
                 window_options,
                 move_hover_target,
@@ -897,9 +836,9 @@ impl UiState {
                 self.layout,
             )
         });
-        let right_panel = dock_layout.right.map(|panel| {
-            panel_card_for(
-                panel,
+        let right_panel = (!dock_layout.stack(DockSlot::Right).is_empty()).then(|| {
+            panel_stack_card_for(
+                dock_layout.stack(DockSlot::Right),
                 window_id,
                 &self.operations,
                 world,
@@ -909,7 +848,7 @@ impl UiState {
                 Length::Fixed(self.layout.panel_width),
                 Length::Fill,
                 true,
-                swap_selection == Some((panel, window_id)),
+                swap_selection,
                 move_menu,
                 window_options,
                 move_hover_target,
@@ -917,9 +856,9 @@ impl UiState {
                 self.layout,
             )
         });
-        let bottom_panel = dock_layout.bottom.map(|panel| {
-            panel_card_for(
-                panel,
+        let bottom_panel = (!dock_layout.stack(DockSlot::Bottom).is_empty()).then(|| {
+            panel_stack_card_for(
+                dock_layout.stack(DockSlot::Bottom),
                 window_id,
                 &self.operations,
                 world,
@@ -929,7 +868,7 @@ impl UiState {
                 Length::Fill,
                 Length::Fixed(self.layout.inspector_height),
                 true,
-                swap_selection == Some((panel, window_id)),
+                swap_selection,
                 move_menu,
                 window_options,
                 move_hover_target,
@@ -960,7 +899,7 @@ impl UiState {
             layout = layout.push(panel);
         }
 
-        let globe_active = dock_layout.contains(PanelId::Globe);
+        let globe_active = dock_layout.active_slot_of(PanelId::Globe).is_some();
         let move_target = move_hover_target == Some(window_id);
         let root = container(layout)
             .width(Length::Fill)
@@ -1056,6 +995,7 @@ fn entities_body<'a>(world: &WorldState) -> UiElement<'a> {
 }
 
 fn inspector_body<'a>(
+    world: &WorldState,
     renderer: &Renderer,
     diagnostics: &Diagnostics,
     tile_bars: &'a [TileBar],
@@ -1063,6 +1003,13 @@ fn inspector_body<'a>(
     let perf = diagnostics.perf;
     let content = column![
         text("Inspector").size(16),
+        text(format!("Entities: {}", world.entity_count())).size(12),
+        text(format!(
+            "Viewport: {}x{}",
+            renderer.size().0,
+            renderer.size().1
+        ))
+        .size(12),
         text(format!(
             "Render targets: {}x{}",
             renderer.size().0,
@@ -1122,6 +1069,13 @@ fn panel_header(
             window: window_id,
         },
     ));
+    header = header.push(icon_button(
+        icons.minimize.clone(),
+        UiMessage::MinimizePanel {
+            panel,
+            window: window_id,
+        },
+    ));
     if allow_detach {
         header = header.push(icon_button(
             icons.detach.clone(),
@@ -1138,8 +1092,8 @@ fn panel_header(
         .into()
 }
 
-fn panel_card_for<'a>(
-    panel: PanelId,
+fn panel_stack_card_for<'a>(
+    stack: &DockStack,
     window_id: WindowId,
     operations: &'a OperationsState,
     world: &WorldState,
@@ -1149,33 +1103,48 @@ fn panel_card_for<'a>(
     width: Length,
     height: Length,
     allow_detach: bool,
-    swap_selected: bool,
+    swap_selected: Option<(PanelId, WindowId)>,
     move_menu: Option<(PanelId, WindowId)>,
     window_options: &'a [WindowOption],
     move_hover_target: Option<WindowId>,
     icons: &UiIcons,
     layout: UiLayout,
 ) -> UiElement<'a> {
-    let header = panel_header(panel, window_id, allow_detach, icons);
+    let active_panel = stack.active().unwrap_or(PanelId::Operations);
+    let header = panel_header(active_panel, window_id, allow_detach, icons);
     let menu = move_menu_panel(
-        panel,
+        active_panel,
         window_id,
         move_menu,
         window_options,
         move_hover_target,
     );
-    let body = match panel {
+    let tabs = (stack.panels().len() > 1).then(|| {
+        let mut tabs = row![].spacing(6).align_y(Alignment::Center);
+        for panel in stack.panels().iter().copied() {
+            tabs = tabs.push(panel_tab(panel, window_id, panel == active_panel));
+        }
+        container(tabs)
+            .height(Length::Fixed(layout.tab_bar_height))
+            .padding([4, 8])
+            .style(tab_bar_style)
+    });
+    let body = match active_panel {
         PanelId::Globe => globe_body(),
         PanelId::Operations => operations_body(operations),
         PanelId::Entities => entities_body(world),
-        PanelId::Inspector => inspector_body(renderer, diagnostics, tile_bars),
+        PanelId::Inspector => inspector_body(world, renderer, diagnostics, tile_bars),
     };
     let mut content = column![header].spacing(PANEL_HEADER_SPACING);
     if let Some(menu) = menu {
         content = content.push(menu);
     }
+    if let Some(tabs) = tabs {
+        content = content.push(tabs);
+    }
     content = content.push(body);
-    if panel == PanelId::Globe {
+    let swap_selected = swap_selected == Some((active_panel, window_id));
+    if active_panel == PanelId::Globe {
         globe_panel_card(content.into(), width, height, layout, swap_selected)
     } else {
         panel_card(content.into(), width, height, layout, swap_selected)
@@ -1208,31 +1177,6 @@ fn globe_panel_card<'a>(
         .width(width)
         .height(height)
         .padding(layout.panel_padding)
-        .style(globe_panel_style(swap_selected))
-        .into()
-}
-
-fn panel_body_container<'a>(
-    body: UiElement<'a>,
-    layout: UiLayout,
-    swap_selected: bool,
-) -> UiElement<'a> {
-    container(body)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(layout.panel_padding)
-        .style(panel_style(swap_selected))
-        .into()
-}
-
-fn globe_panel_container<'a>(
-    body: UiElement<'a>,
-    _layout: UiLayout,
-    swap_selected: bool,
-) -> UiElement<'a> {
-    container(body)
-        .width(Length::Fill)
-        .height(Length::Fill)
         .style(globe_panel_style(swap_selected))
         .into()
 }
@@ -1605,30 +1549,37 @@ impl canvas::Program<UiMessage, Theme, UiRenderer> for CompassOverlay {
     ) -> Vec<canvas::Geometry<UiRenderer>> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         let size = bounds.size();
-        let radius = (size.width.min(size.height) * 0.5 - 12.0).max(0.0);
-        if radius <= 1.0 {
+        let min_side = size.width.min(size.height);
+        let radius = (min_side * 0.18).min(64.0);
+        if radius < 18.0 {
             return vec![frame.into_geometry()];
         }
-        let center = frame.center();
+        let margin = 16.0;
+        let center = iced::Point::new(
+            (size.width - radius - margin).max(radius + margin),
+            (radius + margin)
+                .min(size.height - radius - margin)
+                .max(radius + margin),
+        );
 
         let ring = canvas::Path::circle(center, radius);
         frame.stroke(
             &ring,
             canvas::Stroke::default()
-                .with_width(1.6)
+                .with_width(1.4)
                 .with_color(Color::from_rgba8(120, 198, 255, 0.85)),
         );
 
         let tick_color = Color::from_rgba8(120, 198, 255, 0.95);
         let ticks = [
-            (-std::f32::consts::FRAC_PI_2, 10.0),
-            (0.0, 10.0),
-            (std::f32::consts::FRAC_PI_2, 10.0),
-            (std::f32::consts::PI, 10.0),
-            (-std::f32::consts::FRAC_PI_4, 6.0),
-            (std::f32::consts::FRAC_PI_4, 6.0),
-            (3.0 * std::f32::consts::FRAC_PI_4, 6.0),
-            (-3.0 * std::f32::consts::FRAC_PI_4, 6.0),
+            (-std::f32::consts::FRAC_PI_2, 8.0),
+            (0.0, 8.0),
+            (std::f32::consts::FRAC_PI_2, 8.0),
+            (std::f32::consts::PI, 8.0),
+            (-std::f32::consts::FRAC_PI_4, 5.0),
+            (std::f32::consts::FRAC_PI_4, 5.0),
+            (3.0 * std::f32::consts::FRAC_PI_4, 5.0),
+            (-3.0 * std::f32::consts::FRAC_PI_4, 5.0),
         ];
 
         for (angle, length) in ticks {
@@ -1642,7 +1593,7 @@ impl canvas::Program<UiMessage, Theme, UiRenderer> for CompassOverlay {
             frame.stroke(
                 &tick,
                 canvas::Stroke::default()
-                    .with_width(1.4)
+                    .with_width(1.2)
                     .with_color(tick_color),
             );
         }
@@ -1656,14 +1607,14 @@ impl canvas::Program<UiMessage, Theme, UiRenderer> for CompassOverlay {
         for (label, angle) in labels {
             let (sin, cos) = angle.sin_cos();
             let position = iced::Point::new(
-                center.x + cos * (radius + 10.0),
-                center.y + sin * (radius + 10.0),
+                center.x + cos * (radius + 8.0),
+                center.y + sin * (radius + 8.0),
             );
             frame.fill_text(canvas::Text {
                 content: label.to_string(),
                 position,
                 color: Color::from_rgba8(230, 242, 255, 0.95),
-                size: 13.0.into(),
+                size: 11.0.into(),
                 align_x: alignment::Horizontal::Center.into(),
                 align_y: alignment::Vertical::Center,
                 ..Default::default()

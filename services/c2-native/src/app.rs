@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -65,6 +65,7 @@ struct App {
     swap_selection: Option<(PanelId, WindowId)>,
     move_menu: Option<(PanelId, WindowId)>,
     move_hover_target: Option<WindowId>,
+    hidden_panels: HashSet<PanelId>,
 }
 
 impl ApplicationHandler for App {
@@ -356,11 +357,10 @@ impl App {
             let Some(detached) = self.detached.get_mut(&window_id) else {
                 return;
             };
-            let globe_active = if detached.dock_mode == DockMode::Docked {
-                detached.dock_layout.contains(PanelId::Globe)
-            } else {
-                detached.active_panel == PanelId::Globe
-            };
+            let globe_active = detached
+                .dock_layout
+                .active_slot_of(PanelId::Globe)
+                .is_some();
 
             match &event {
                 WindowEvent::CursorEntered { .. } => {
@@ -468,6 +468,8 @@ impl App {
         let swap_selection = self.swap_selection;
         let move_menu = self.move_menu;
         let move_hover_target = self.move_hover_target;
+        let mut hidden_panels: Vec<PanelId> = self.hidden_panels.iter().copied().collect();
+        hidden_panels.sort_by_key(|panel| panel.order());
         let window_options = self.window_options();
         let drag_cursor = match (drag_state, self.main.as_ref()) {
             (Some(state), Some(main)) if state.source_window == main.window.id() => {
@@ -596,7 +598,7 @@ impl App {
             });
             let element = core.ui.view_main(
                 main.window.id(),
-                main.dock_layout,
+                &main.dock_layout,
                 &core.world,
                 &core.renderer,
                 &core.diagnostics,
@@ -604,6 +606,7 @@ impl App {
                 main.drop_target,
                 drag_preview,
                 drop_indicator,
+                &hidden_panels,
                 &window_options,
                 swap_selection,
                 move_menu,
@@ -749,7 +752,10 @@ impl App {
             let events: Vec<IcedEvent> = detached.ui_events.drain(..).collect();
             let mut messages = Vec::new();
             let tile_bars = core.tile_layers.progress_bars();
-            let globe_active = detached.active_panel == PanelId::Globe;
+            let globe_active = detached
+                .dock_layout
+                .active_slot_of(PanelId::Globe)
+                .is_some();
             let drag_preview = drag_state.and_then(|state| {
                 if state.source_window == window_id {
                     drag_cursor.map(|cursor| DragPreview {
@@ -779,40 +785,21 @@ impl App {
                     None
                 }
             });
-            let element = if detached.dock_mode == DockMode::Docked {
-                core.ui.view_detached_docked(
-                    detached.window.id(),
-                    detached.dock_layout,
-                    &core.world,
-                    &core.renderer,
-                    &core.diagnostics,
-                    &tile_bars,
-                    detached.drop_target,
-                    drag_preview,
-                    drop_indicator,
-                    &window_options,
-                    swap_selection,
-                    move_menu,
-                    move_hover_target,
-                )
-            } else {
-                core.ui.view_detached(
-                    detached.window.id(),
-                    &detached.panels,
-                    detached.active_panel,
-                    &core.world,
-                    &core.renderer,
-                    &core.diagnostics,
-                    &tile_bars,
-                    detached.drop_target,
-                    drag_preview,
-                    drop_indicator,
-                    &window_options,
-                    swap_selection,
-                    move_menu,
-                    move_hover_target,
-                )
-            };
+            let element = core.ui.view_detached_docked(
+                detached.window.id(),
+                &detached.dock_layout,
+                &core.world,
+                &core.renderer,
+                &core.diagnostics,
+                &tile_bars,
+                detached.drop_target,
+                drag_preview,
+                drop_indicator,
+                &window_options,
+                swap_selection,
+                move_menu,
+                move_hover_target,
+            );
             let mut user_interface = UserInterface::build(
                 element,
                 viewport.logical_size(),
@@ -913,12 +900,30 @@ impl App {
                     self.start_drag(panel, window);
                 }
                 UiMessage::SelectTab { panel, window } => {
-                    if let Some(detached) = self.detached.get_mut(&window) {
-                        detached.active_panel = panel;
-                        if panel != PanelId::Globe {
-                            detached.globe_dragging = false;
+                    if let Some(main) = self.main.as_mut() {
+                        if main.window.id() == window {
+                            if let Some(slot) = main.dock_layout.slot_of(panel) {
+                                main.dock_layout.set_active(slot, panel);
+                                if panel != PanelId::Globe {
+                                    main.globe_dragging = false;
+                                }
+                            }
                         }
                     }
+                    if let Some(detached) = self.detached.get_mut(&window) {
+                        if let Some(slot) = detached.dock_layout.slot_of(panel) {
+                            detached.dock_layout.set_active(slot, panel);
+                            if panel != PanelId::Globe {
+                                detached.globe_dragging = false;
+                            }
+                        }
+                    }
+                }
+                UiMessage::MinimizePanel { panel, window } => {
+                    self.minimize_panel(panel, window);
+                }
+                UiMessage::RestorePanel(panel) => {
+                    self.restore_panel(panel);
                 }
                 UiMessage::DetachPanel { panel, window } => {
                     self.detach_panel(event_loop, panel, window);
@@ -959,6 +964,18 @@ impl App {
         self.hovered_window = Some(window);
         self.move_menu = None;
         self.move_hover_target = None;
+        if let Some(main) = self.main.as_mut() {
+            if main.window.id() == window {
+                if let Some(slot) = main.dock_layout.slot_of(panel) {
+                    main.dock_layout.set_active(slot, panel);
+                }
+            }
+        }
+        if let Some(detached) = self.detached.get_mut(&window) {
+            if let Some(slot) = detached.dock_layout.slot_of(panel) {
+                detached.dock_layout.set_active(slot, panel);
+            }
+        }
         self.ensure_window_origin(window);
         self.seed_global_cursor(window);
         self.update_drop_targets();
@@ -982,7 +999,7 @@ impl App {
                 self.cursor_logical_for_window_id(window_id)
                     .map(|cursor| (core, cursor))
             })
-            .and_then(|(core, cursor)| self.compute_drop_target(core, window_id, cursor, drag_state.panel));
+            .and_then(|(core, cursor)| self.compute_drop_target(core, window_id, cursor));
         if let Some(target) = target {
             self.apply_drop_target(drag_state, target);
         }
@@ -1021,112 +1038,45 @@ impl App {
         }
     }
 
+    fn minimize_panel(&mut self, panel: PanelId, window: WindowId) {
+        self.remove_panel_from_window(panel, window);
+        self.hidden_panels.insert(panel);
+        if self.swap_selection == Some((panel, window)) {
+            self.swap_selection = None;
+        }
+        if self.move_menu == Some((panel, window)) {
+            self.move_menu = None;
+            self.move_hover_target = None;
+        }
+        self.cleanup_window(window);
+    }
+
+    fn restore_panel(&mut self, panel: PanelId) {
+        if !self.hidden_panels.remove(&panel) {
+            return;
+        }
+        let Some(main) = self.main.as_ref() else {
+            return;
+        };
+        let Some(location) = self.plan_insert_location(panel, main.window.id()) else {
+            return;
+        };
+        self.insert_panel_at(panel, main.window.id(), location);
+    }
+
     fn apply_drop_target(&mut self, drag_state: DragState, target: DropTarget) {
         if target.window != drag_state.source_window {
             return;
         }
-        match target.kind {
-            DropKind::TabBar => {
-                if let Some(detached) = self.detached.get_mut(&target.window) {
-                    if detached.dock_mode != DockMode::Tabs {
-                        detached.panels = panels_from_layout(detached.dock_layout);
-                        detached.dock_layout = DockLayout::default();
-                        detached.dock_mode = DockMode::Tabs;
-                    }
-                    if !detached.panels.contains(&drag_state.panel) {
-                        detached.panels.push(drag_state.panel);
-                        detached.panels.sort_by_key(|panel| panel.order());
-                    }
-                    detached.active_panel = drag_state.panel;
-                }
+        let DropKind::Slot(slot) = target.kind;
+        if let Some(main) = self.main.as_mut() {
+            if main.window.id() == target.window {
+                main.dock_layout.insert(slot, drag_state.panel);
                 return;
             }
-            DropKind::Slot(slot) => {
-                if let Some(main) = self.main.as_mut() {
-                    if main.window.id() == target.window {
-                        let from_slot = main.dock_layout.slot_of(drag_state.panel);
-                        if target.window == drag_state.source_window {
-                            if let Some(from_slot) = from_slot {
-                                if from_slot != slot {
-                                    let existing = main.dock_layout.panel_in(slot);
-                                    main.dock_layout.set(slot, drag_state.panel);
-                                    if let Some(existing_panel) = existing {
-                                        main.dock_layout.set(from_slot, existing_panel);
-                                    }
-                                }
-                            }
-                            return;
-                        }
-                    }
-                }
-
-                if let Some(main) = self.main.as_ref() {
-                    if main.window.id() == target.window {
-                        let existing = main.dock_layout.panel_in(slot);
-                        self.remove_panel_from_window(drag_state.panel, drag_state.source_window);
-                        if let Some(main) = self.main.as_mut() {
-                            main.dock_layout.set(slot, drag_state.panel);
-                        }
-                        if let Some(existing_panel) = existing {
-                            self.add_panel_to_window(existing_panel, drag_state.source_window);
-                        }
-                        self.cleanup_window(drag_state.source_window);
-                        return;
-                    }
-                }
-
-                let Some(detached_state) = self.detached.get(&target.window) else {
-                    return;
-                };
-                let dock_mode = detached_state.dock_mode;
-                let panels = detached_state.panels.clone();
-                let active_panel = detached_state.active_panel;
-                let dock_layout = detached_state.dock_layout;
-
-                if dock_mode == DockMode::Tabs {
-                    let layout =
-                        build_dock_layout_from_tabs(&panels, active_panel, drag_state.panel, slot);
-                    if drag_state.source_window != target.window {
-                        self.remove_panel_from_window(drag_state.panel, drag_state.source_window);
-                    }
-                    if let Some(detached) = self.detached.get_mut(&target.window) {
-                        detached.dock_layout = layout;
-                        detached.dock_mode = DockMode::Docked;
-                        detached.panels = panels_from_layout(layout);
-                        detached.active_panel = drag_state.panel;
-                    }
-                    self.cleanup_window(drag_state.source_window);
-                    return;
-                }
-
-                if target.window == drag_state.source_window {
-                    if let Some(detached) = self.detached.get_mut(&target.window) {
-                        let from_slot = detached.dock_layout.slot_of(drag_state.panel);
-                        if let Some(from_slot) = from_slot {
-                            if from_slot != slot {
-                                let existing = detached.dock_layout.panel_in(slot);
-                                detached.dock_layout.set(slot, drag_state.panel);
-                                if let Some(existing_panel) = existing {
-                                    detached.dock_layout.set(from_slot, existing_panel);
-                                }
-                                detached.panels = panels_from_layout(detached.dock_layout);
-                            }
-                        }
-                    }
-                    return;
-                }
-
-                let existing = dock_layout.panel_in(slot);
-                self.remove_panel_from_window(drag_state.panel, drag_state.source_window);
-                if let Some(detached) = self.detached.get_mut(&target.window) {
-                    detached.dock_layout.set(slot, drag_state.panel);
-                    detached.panels = panels_from_layout(detached.dock_layout);
-                }
-                if let Some(existing_panel) = existing {
-                    self.add_panel_to_window(existing_panel, drag_state.source_window);
-                }
-                self.cleanup_window(drag_state.source_window);
-            }
+        }
+        if let Some(detached) = self.detached.get_mut(&target.window) {
+            detached.dock_layout.insert(slot, drag_state.panel);
         }
     }
 
@@ -1188,7 +1138,7 @@ impl App {
             return;
         };
         if let Some(main) = self.main.as_mut() {
-            for panel in detached.panels {
+            for panel in detached.dock_layout.panels() {
                 add_panel_to_main(main, panel);
             }
         }
@@ -1214,26 +1164,26 @@ impl App {
     }
 
     fn plan_insert_location(&self, panel: PanelId, window_id: WindowId) -> Option<PanelLocation> {
+        let preferred = default_slot_for_panel(panel);
         if let Some(main) = self.main.as_ref() {
             if main.window.id() == window_id {
-                let slot = default_slot_for_panel(panel);
-                if main.dock_layout.panel_in(slot).is_none() {
+                if main.dock_layout.panel_in(preferred).is_none() {
+                    return Some(PanelLocation::Slot(preferred));
+                }
+                if let Some(slot) = first_empty_slot(&main.dock_layout) {
                     return Some(PanelLocation::Slot(slot));
                 }
-                return first_empty_slot(main.dock_layout).map(PanelLocation::Slot);
+                return Some(PanelLocation::Slot(preferred));
             }
         }
         let detached = self.detached.get(&window_id)?;
-        if detached.dock_mode == DockMode::Docked {
-            let slot = default_slot_for_panel(panel);
-            if detached.dock_layout.panel_in(slot).is_none() {
-                return Some(PanelLocation::Slot(slot));
-            }
-            if let Some(slot) = first_empty_slot(detached.dock_layout) {
-                return Some(PanelLocation::Slot(slot));
-            }
+        if detached.dock_layout.panel_in(preferred).is_none() {
+            return Some(PanelLocation::Slot(preferred));
         }
-        Some(PanelLocation::TabIndex(detached.panels.len()))
+        if let Some(slot) = first_empty_slot(&detached.dock_layout) {
+            return Some(PanelLocation::Slot(slot));
+        }
+        Some(PanelLocation::Slot(preferred))
     }
 
     fn panel_location(&self, panel: PanelId, window_id: WindowId) -> Option<PanelLocation> {
@@ -1243,18 +1193,10 @@ impl App {
             }
         }
         let detached = self.detached.get(&window_id)?;
-        if detached.dock_mode == DockMode::Docked {
-            detached
-                .dock_layout
-                .slot_of(panel)
-                .map(PanelLocation::Slot)
-        } else {
-            detached
-                .panels
-                .iter()
-                .position(|entry| *entry == panel)
-                .map(PanelLocation::TabIndex)
-        }
+        detached
+            .dock_layout
+            .slot_of(panel)
+            .map(PanelLocation::Slot)
     }
 
     fn insert_panel_at(&mut self, panel: PanelId, window_id: WindowId, location: PanelLocation) {
@@ -1262,33 +1204,16 @@ impl App {
             if main.window.id() == window_id {
                 let slot = match location {
                     PanelLocation::Slot(slot) => slot,
-                    PanelLocation::TabIndex(_) => default_slot_for_panel(panel),
                 };
-                main.dock_layout.set(slot, panel);
+                main.dock_layout.insert(slot, panel);
                 return;
             }
         }
         if let Some(detached) = self.detached.get_mut(&window_id) {
-            match location {
-                PanelLocation::Slot(slot) => {
-                    detached.dock_mode = DockMode::Docked;
-                    detached.dock_layout.set(slot, panel);
-                    detached.panels = panels_from_layout(detached.dock_layout);
-                    detached.active_panel = panel;
-                }
-                PanelLocation::TabIndex(index) => {
-                    if detached.dock_mode != DockMode::Tabs {
-                        detached.panels = panels_from_layout(detached.dock_layout);
-                        detached.dock_layout = DockLayout::default();
-                        detached.dock_mode = DockMode::Tabs;
-                    }
-                    if !detached.panels.contains(&panel) {
-                        let insert_at = index.min(detached.panels.len());
-                        detached.panels.insert(insert_at, panel);
-                    }
-                    detached.active_panel = panel;
-                }
-            }
+            let slot = match location {
+                PanelLocation::Slot(slot) => slot,
+            };
+            detached.dock_layout.insert(slot, panel);
         }
     }
 
@@ -1327,23 +1252,11 @@ impl App {
         }
     }
 
-    fn add_panel_to_window(&mut self, panel: PanelId, window_id: WindowId) {
-        if let Some(main) = self.main.as_mut() {
-            if main.window.id() == window_id {
-                add_panel_to_main(main, panel);
-                return;
-            }
-        }
-        if let Some(detached) = self.detached.get_mut(&window_id) {
-            add_panel_to_detached(detached, panel);
-        }
-    }
-
     fn cleanup_window(&mut self, window_id: WindowId) {
         let remove = self
             .detached
             .get(&window_id)
-            .is_some_and(|detached| detached.panels.is_empty());
+            .is_some_and(|detached| detached.dock_layout.is_empty());
         if remove {
             self.detached.remove(&window_id);
             if self.hovered_window == Some(window_id) {
@@ -1519,7 +1432,6 @@ impl App {
         core: &AppCore,
         window_id: WindowId,
         cursor: Point,
-        drag_panel: PanelId,
     ) -> Option<DropTarget> {
         if let Some(main) = self.main.as_ref() {
             if main.window.id() == window_id {
@@ -1530,6 +1442,13 @@ impl App {
                     size.0 as f32 / scale_factor,
                     size.1 as f32 / scale_factor,
                 );
+                if let Some(slot) = slot_for_cursor(layout, logical_size, &main.dock_layout, cursor)
+                {
+                    return Some(DropTarget {
+                        window: window_id,
+                        kind: DropKind::Slot(slot),
+                    });
+                }
                 let dock_rect = dock_area_rect(layout, logical_size);
                 let slot = drop_slot_for_rect(layout, dock_rect, cursor);
                 return Some(DropTarget {
@@ -1545,37 +1464,7 @@ impl App {
             detached.size.width as f32 / scale_factor,
             detached.size.height as f32 / scale_factor,
         );
-        if detached.dock_mode == DockMode::Docked {
-            if let Some(rect) =
-                panel_rect_for_cursor(layout, logical_size, detached.dock_layout, cursor, drag_panel)
-            {
-                if rect.width > 1.0 && rect.height > 1.0 {
-                    return Some(DropTarget {
-                        window: window_id,
-                        kind: DropKind::TabBar,
-                    });
-                }
-            }
-        }
-        if detached.dock_mode == DockMode::Tabs {
-            if detached.panels.len() > 1 {
-                if let Some(tab_rect) = detached_tab_drop_rect(layout, logical_size) {
-                    if tab_rect.contains(cursor) {
-                        return Some(DropTarget {
-                            window: window_id,
-                            kind: DropKind::TabBar,
-                        });
-                    }
-                }
-            }
-            let body_rect = core.ui.detached_globe_rect(logical_size, detached.panels.len() > 1);
-            let slot = drop_slot_for_rect(layout, body_rect, cursor);
-            if slot == DockSlot::Center {
-                return Some(DropTarget {
-                    window: window_id,
-                    kind: DropKind::TabBar,
-                });
-            }
+        if let Some(slot) = slot_for_cursor(layout, logical_size, &detached.dock_layout, cursor) {
             return Some(DropTarget {
                 window: window_id,
                 kind: DropKind::Slot(slot),
@@ -1606,7 +1495,7 @@ impl App {
         };
         if let Some(core) = self.core.as_ref() {
             self.active_drop =
-                self.compute_drop_target(core, drag_state.source_window, cursor, drag_state.panel);
+                self.compute_drop_target(core, drag_state.source_window, cursor);
         }
         let Some(active_drop) = self.active_drop else {
             return;
@@ -1650,12 +1539,20 @@ impl App {
     fn active_globe_bounds(&self) -> Option<RenderBounds> {
         let core = self.core.as_ref()?;
         if let Some(main) = self.main.as_ref() {
-            if main.dock_layout.contains(PanelId::Globe) {
+            if main
+                .dock_layout
+                .active_slot_of(PanelId::Globe)
+                .is_some()
+            {
                 return globe_bounds_for_main(core, main);
             }
         }
         for detached in self.detached.values() {
-            if detached.active_panel == PanelId::Globe {
+            if detached
+                .dock_layout
+                .active_slot_of(PanelId::Globe)
+                .is_some()
+            {
                 if let Some(bounds) = globe_bounds_for_detached(core, detached) {
                     return Some(bounds);
                 }
@@ -1805,10 +1702,7 @@ struct DetachedWindow {
     last_cursor_physical: Option<PhysicalPosition<f64>>,
     virtual_origin: Option<PhysicalPosition<f64>>,
     globe_dragging: bool,
-    panels: Vec<PanelId>,
-    active_panel: PanelId,
     dock_layout: DockLayout,
-    dock_mode: DockMode,
     drop_target: bool,
 }
 
@@ -1818,7 +1712,10 @@ impl DetachedWindow {
             panels.push(PanelId::Operations);
         }
         panels.sort_by_key(|panel| panel.order());
-        let active_panel = panels[0];
+        let mut dock_layout = DockLayout::single(panels[0]);
+        for panel in panels.iter().copied().skip(1) {
+            dock_layout.insert(DockSlot::Center, panel);
+        }
         let size = window.inner_size();
         let surface = core.renderer.create_surface(window.as_ref())?;
         let caps = surface.get_capabilities(core.renderer.adapter());
@@ -1857,10 +1754,7 @@ impl DetachedWindow {
             last_cursor_physical: None,
             virtual_origin: None,
             globe_dragging: false,
-            panels,
-            active_panel,
-            dock_layout: DockLayout::default(),
-            dock_mode: DockMode::Tabs,
+            dock_layout,
             drop_target: false,
         })
     }
@@ -1873,15 +1767,8 @@ struct DragState {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum DockMode {
-    Tabs,
-    Docked,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
 enum DropKind {
     Slot(DockSlot),
-    TabBar,
 }
 
 #[derive(Clone, Copy)]
@@ -1893,7 +1780,6 @@ struct DropTarget {
 #[derive(Clone, Copy)]
 enum PanelLocation {
     Slot(DockSlot),
-    TabIndex(usize),
 }
 
 fn build_ui_renderer(renderer: &Renderer, format: wgpu::TextureFormat) -> iced_wgpu::Renderer {
@@ -1909,7 +1795,11 @@ fn build_ui_renderer(renderer: &Renderer, format: wgpu::TextureFormat) -> iced_w
 }
 
 fn cursor_in_globe(core: &AppCore, main: &MainWindow) -> bool {
-    if !main.dock_layout.contains(PanelId::Globe) {
+    if main
+        .dock_layout
+        .active_slot_of(PanelId::Globe)
+        .is_none()
+    {
         return false;
     }
     let Some(cursor) = main.cursor_logical else {
@@ -1921,7 +1811,7 @@ fn cursor_in_globe(core: &AppCore, main: &MainWindow) -> bool {
         size.0 as f32 / scale_factor,
         size.1 as f32 / scale_factor,
     );
-    let globe_rect = core.ui.globe_rect(logical_size, main.dock_layout);
+    let globe_rect = core.ui.globe_rect(logical_size, &main.dock_layout);
     globe_rect.contains(cursor)
 }
 
@@ -1934,23 +1824,23 @@ fn cursor_in_detached_globe(core: &AppCore, detached: &DetachedWindow) -> bool {
         detached.size.width as f32 / scale_factor,
         detached.size.height as f32 / scale_factor,
     );
-    let globe_rect = if detached.dock_mode == DockMode::Docked {
-        if !detached.dock_layout.contains(PanelId::Globe) {
-            return false;
-        }
-        core.ui.globe_rect(logical_size, detached.dock_layout)
-    } else {
-        if detached.active_panel != PanelId::Globe {
-            return false;
-        }
-        let has_tabs = detached.panels.len() > 1;
-        core.ui.detached_globe_rect(logical_size, has_tabs)
-    };
+    if detached
+        .dock_layout
+        .active_slot_of(PanelId::Globe)
+        .is_none()
+    {
+        return false;
+    }
+    let globe_rect = core.ui.globe_rect(logical_size, &detached.dock_layout);
     globe_rect.contains(cursor)
 }
 
 fn globe_bounds_for_main(core: &AppCore, main: &MainWindow) -> Option<RenderBounds> {
-    if !main.dock_layout.contains(PanelId::Globe) {
+    if main
+        .dock_layout
+        .active_slot_of(PanelId::Globe)
+        .is_none()
+    {
         return None;
     }
     let scale_factor = main.window.scale_factor() as f32;
@@ -1959,7 +1849,7 @@ fn globe_bounds_for_main(core: &AppCore, main: &MainWindow) -> Option<RenderBoun
         size.0 as f32 / scale_factor,
         size.1 as f32 / scale_factor,
     );
-    let rect = core.ui.globe_rect(logical_size, main.dock_layout);
+    let rect = core.ui.globe_rect(logical_size, &main.dock_layout);
     render_bounds_from_rect(rect, scale_factor, size)
 }
 
@@ -1969,18 +1859,14 @@ fn globe_bounds_for_detached(core: &AppCore, detached: &DetachedWindow) -> Optio
         detached.size.width as f32 / scale_factor,
         detached.size.height as f32 / scale_factor,
     );
-    let rect = if detached.dock_mode == DockMode::Docked {
-        if !detached.dock_layout.contains(PanelId::Globe) {
-            return None;
-        }
-        core.ui.globe_rect(logical_size, detached.dock_layout)
-    } else {
-        if detached.active_panel != PanelId::Globe {
-            return None;
-        }
-        let has_tabs = detached.panels.len() > 1;
-        core.ui.detached_globe_rect(logical_size, has_tabs)
-    };
+    if detached
+        .dock_layout
+        .active_slot_of(PanelId::Globe)
+        .is_none()
+    {
+        return None;
+    }
+    let rect = core.ui.globe_rect(logical_size, &detached.dock_layout);
     render_bounds_from_rect(rect, scale_factor, (detached.size.width, detached.size.height))
 }
 
@@ -2045,7 +1931,7 @@ fn resize_detached_window(core: &AppCore, detached: &mut DetachedWindow, size: P
 
 fn add_panel_to_main(main: &mut MainWindow, panel: PanelId) {
     let slot = default_slot_for_panel(panel);
-    main.dock_layout.set(slot, panel);
+    main.dock_layout.insert(slot, panel);
 }
 
 fn remove_panel_from_main(main: &mut MainWindow, panel: PanelId) {
@@ -2061,7 +1947,7 @@ fn default_slot_for_panel(panel: PanelId) -> DockSlot {
     }
 }
 
-fn first_empty_slot(layout: DockLayout) -> Option<DockSlot> {
+fn first_empty_slot(layout: &DockLayout) -> Option<DockSlot> {
     for slot in [DockSlot::Left, DockSlot::Center, DockSlot::Right, DockSlot::Bottom] {
         if layout.panel_in(slot).is_none() {
             return Some(slot);
@@ -2070,90 +1956,8 @@ fn first_empty_slot(layout: DockLayout) -> Option<DockSlot> {
     None
 }
 
-fn add_panel_to_detached(detached: &mut DetachedWindow, panel: PanelId) {
-    if detached.dock_mode == DockMode::Docked {
-        let slot = default_slot_for_panel(panel);
-        detached.dock_layout.set(slot, panel);
-        detached.panels = panels_from_layout(detached.dock_layout);
-        if detached.active_panel == PanelId::Operations && !detached.panels.contains(&panel) {
-            detached.active_panel = panel;
-        }
-        return;
-    }
-    if !detached.panels.contains(&panel) {
-        detached.panels.push(panel);
-        detached.panels.sort_by_key(|panel| panel.order());
-    }
-    detached.active_panel = panel;
-}
-
 fn remove_panel_from_detached(detached: &mut DetachedWindow, panel: PanelId) {
-    if detached.dock_mode == DockMode::Docked {
-        detached.dock_layout.remove(panel);
-        detached.panels = panels_from_layout(detached.dock_layout);
-        if detached.dock_layout.is_empty() {
-            detached.dock_mode = DockMode::Tabs;
-            detached.active_panel = PanelId::Operations;
-        } else if detached.active_panel == panel {
-            detached.active_panel = detached
-                .panels
-                .first()
-                .copied()
-                .unwrap_or(PanelId::Operations);
-        }
-        return;
-    }
-    detached.panels.retain(|entry| *entry != panel);
-    if detached.active_panel == panel {
-        detached.active_panel = detached
-            .panels
-            .first()
-            .copied()
-            .unwrap_or(PanelId::Operations);
-    }
-}
-
-fn panels_from_layout(layout: DockLayout) -> Vec<PanelId> {
-    let mut panels = Vec::new();
-    for slot in [DockSlot::Left, DockSlot::Center, DockSlot::Right, DockSlot::Bottom] {
-        if let Some(panel) = layout.panel_in(slot) {
-            if !panels.contains(&panel) {
-                panels.push(panel);
-            }
-        }
-    }
-    panels.sort_by_key(|panel| panel.order());
-    panels
-}
-
-fn build_dock_layout_from_tabs(
-    panels: &[PanelId],
-    active: PanelId,
-    dropped: PanelId,
-    drop_slot: DockSlot,
-) -> DockLayout {
-    let mut layout = DockLayout::default();
-    let mut used = Vec::new();
-    layout.set(drop_slot, dropped);
-    used.push(dropped);
-    if drop_slot != DockSlot::Center && active != dropped {
-        layout.set(DockSlot::Center, active);
-        used.push(active);
-    }
-    let fill_slots = [DockSlot::Left, DockSlot::Right, DockSlot::Bottom, DockSlot::Center];
-    for panel in panels.iter().copied() {
-        if used.contains(&panel) {
-            continue;
-        }
-        for slot in fill_slots {
-            if layout.panel_in(slot).is_none() {
-                layout.set(slot, panel);
-                used.push(panel);
-                break;
-            }
-        }
-    }
-    layout
+    detached.dock_layout.remove(panel);
 }
 
 #[cfg(test)]
@@ -2183,20 +1987,6 @@ fn window_inner_origin(window: &Window) -> Option<PhysicalPosition<f64>> {
         })
 }
 
-fn detached_tab_drop_rect(layout: crate::ui::UiLayout, window_size: Size) -> Option<Rectangle> {
-    let content_width = (window_size.width - 2.0 * layout.outer_padding).max(0.0);
-    let content_height = (window_size.height - 2.0 * layout.outer_padding).max(0.0);
-    if content_width <= 1.0 || content_height <= 1.0 {
-        return None;
-    }
-    let x = layout.outer_padding;
-    let y = layout.outer_padding + layout.top_bar_height + layout.column_spacing;
-    Some(Rectangle::new(
-        Point::new(x, y),
-        Size::new(content_width, layout.tab_bar_height),
-    ))
-}
-
 fn dock_area_rect(layout: crate::ui::UiLayout, window_size: Size) -> Rectangle {
     let content_width = (window_size.width - 2.0 * layout.outer_padding).max(0.0);
     let content_height = (window_size.height - 2.0 * layout.outer_padding).max(0.0);
@@ -2209,14 +1999,28 @@ fn dock_area_rect(layout: crate::ui::UiLayout, window_size: Size) -> Rectangle {
     Rectangle::new(Point::new(x, y), Size::new(content_width, height))
 }
 
-fn layout_with_slot_present(mut layout: DockLayout, slot: DockSlot, panel: PanelId) -> DockLayout {
-    match slot {
-        DockSlot::Left => layout.left = Some(panel),
-        DockSlot::Center => layout.center = Some(panel),
-        DockSlot::Right => layout.right = Some(panel),
-        DockSlot::Bottom => layout.bottom = Some(panel),
+fn slot_for_cursor(
+    layout: crate::ui::UiLayout,
+    window_size: Size,
+    dock_layout: &DockLayout,
+    cursor: Point,
+) -> Option<DockSlot> {
+    for slot in [DockSlot::Left, DockSlot::Center, DockSlot::Right, DockSlot::Bottom] {
+        if dock_layout.stack(slot).is_empty() {
+            continue;
+        }
+        let rect = layout.slot_rect(window_size, dock_layout, slot);
+        if rect.contains(cursor) {
+            return Some(slot);
+        }
     }
-    layout
+    None
+}
+
+fn layout_with_slot_present(layout: &DockLayout, slot: DockSlot, panel: PanelId) -> DockLayout {
+    let mut preview = layout.clone();
+    preview.insert(slot, panel);
+    preview
 }
 
 fn drop_slot_for_rect(_layout: crate::ui::UiLayout, rect: Rectangle, cursor: Point) -> DockSlot {
@@ -2303,9 +2107,7 @@ fn drop_indicator_for_main_target(
     kind: DropKind,
     cursor: Point,
 ) -> Option<DropIndicator> {
-    let DropKind::Slot(slot) = kind else {
-        return None;
-    };
+    let DropKind::Slot(slot) = kind;
     let layout = core.ui.layout();
     let scale_factor = main.window.scale_factor() as f32;
     let size = core.renderer.size();
@@ -2313,8 +2115,15 @@ fn drop_indicator_for_main_target(
         size.0 as f32 / scale_factor,
         size.1 as f32 / scale_factor,
     );
-    let preview = layout_with_slot_present(main.dock_layout, slot, panel);
-    let slot_rect = layout.slot_rect(logical_size, preview, slot);
+    let slot_rect_current = layout.slot_rect(logical_size, &main.dock_layout, slot);
+    let slot_has_panels = !main.dock_layout.stack(slot).is_empty();
+    if slot_has_panels && slot_rect_current.contains(cursor) {
+        return Some(DropIndicator {
+            rect: slot_rect_current,
+        });
+    }
+    let preview = layout_with_slot_present(&main.dock_layout, slot, panel);
+    let slot_rect = layout.slot_rect(logical_size, &preview, slot);
     let dock_rect = dock_area_rect(layout, logical_size);
     let rect = drop_indicator_rect_for_slot(dock_rect, slot_rect, slot, cursor);
     Some(DropIndicator { rect })
@@ -2333,54 +2142,19 @@ fn drop_indicator_for_detached_target(
         detached.size.width as f32 / scale_factor,
         detached.size.height as f32 / scale_factor,
     );
-    match kind {
-        DropKind::TabBar => {
-            if detached.dock_mode == DockMode::Docked {
-                let rect =
-                    panel_rect_for_cursor(layout, logical_size, detached.dock_layout, cursor, panel)?;
-                Some(DropIndicator { rect })
-            } else {
-                let rect = detached_tab_drop_rect(layout, logical_size)?;
-                Some(DropIndicator { rect })
-            }
-        }
-        DropKind::Slot(slot) => {
-            let preview = if detached.dock_mode == DockMode::Docked {
-                layout_with_slot_present(detached.dock_layout, slot, panel)
-            } else {
-                build_dock_layout_from_tabs(&detached.panels, detached.active_panel, panel, slot)
-            };
-            let slot_rect = layout.slot_rect(logical_size, preview, slot);
-            let grid_rect = if detached.dock_mode == DockMode::Docked {
-                dock_area_rect(layout, logical_size)
-            } else {
-                core.ui.detached_globe_rect(logical_size, detached.panels.len() > 1)
-            };
-            let rect = drop_indicator_rect_for_slot(grid_rect, slot_rect, slot, cursor);
-            Some(DropIndicator { rect })
-        }
+    let DropKind::Slot(slot) = kind;
+    let slot_rect_current = layout.slot_rect(logical_size, &detached.dock_layout, slot);
+    let slot_has_panels = !detached.dock_layout.stack(slot).is_empty();
+    if slot_has_panels && slot_rect_current.contains(cursor) {
+        return Some(DropIndicator {
+            rect: slot_rect_current,
+        });
     }
-}
-
-fn panel_rect_for_cursor(
-    layout: crate::ui::UiLayout,
-    window_size: Size,
-    dock_layout: DockLayout,
-    cursor: Point,
-    drag_panel: PanelId,
-) -> Option<Rectangle> {
-    for slot in [DockSlot::Left, DockSlot::Center, DockSlot::Right, DockSlot::Bottom] {
-        if let Some(panel) = dock_layout.panel_in(slot) {
-            if panel == drag_panel {
-                continue;
-            }
-            let rect = layout.slot_rect(window_size, dock_layout, slot);
-            if rect.contains(cursor) {
-                return Some(rect);
-            }
-        }
-    }
-    None
+    let preview = layout_with_slot_present(&detached.dock_layout, slot, panel);
+    let slot_rect = layout.slot_rect(logical_size, &preview, slot);
+    let grid_rect = dock_area_rect(layout, logical_size);
+    let rect = drop_indicator_rect_for_slot(grid_rect, slot_rect, slot, cursor);
+    Some(DropIndicator { rect })
 }
 
 fn detached_window_size(layout: crate::ui::UiLayout, panel: PanelId) -> winit::dpi::LogicalSize<f64> {
